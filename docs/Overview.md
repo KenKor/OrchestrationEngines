@@ -201,6 +201,9 @@ It specifies:
 Descriptors define _topology_, not behavior.  
 They are collected before startup and remain fixed for the lifetime of a run.
 
+Engine and task names are case-insensitive everywhere: in dependencies, lookups, context refreshes and definition
+diffs. `AsBuilt` and `asbuilt` are the same engine.
+
 ---
 
 ### 2. Engine Context

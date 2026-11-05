@@ -130,10 +130,11 @@ public class KickStartRestartTest
 
   /// <summary>
   /// An engine with a required load and a background watcher that keeps running until its run is cancelled, counting
-  /// how many watcher runs are active at the same time.
+  /// how many watcher runs are active at the same time. The load waits until a watcher runs.
   /// </summary>
   private sealed class WatchedEngine(Func<int, Task> loadAsync) : BaseEngine(NullLogger.Instance)
   {
+    private readonly TaskCompletionSource<bool> _watcherRunning = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _loads;
     private int _activeWatchers;
     private int _watcherStarts;
@@ -148,6 +149,7 @@ public class KickStartRestartTest
       {
         Interlocked.Increment(ref _watcherStarts);
         Interlocked.Increment(ref _activeWatchers);
+        _watcherRunning.TrySetResult(true);
         try
         {
           await Task.Delay(Timeout.InfiniteTimeSpan, token);
@@ -157,7 +159,13 @@ public class KickStartRestartTest
           Interlocked.Decrement(ref _activeWatchers);
         }
       }, requiredForRunning: false);
-      CreateTask("Load", _ => loadAsync(Interlocked.Increment(ref _loads)));
+      // Fix (KickStartRestartTest): on a busy machine the first load could fail before the first watcher ran, so there
+      // was no old watcher to end and the test waited for a second watcher start that never came.
+      CreateTask("Load", async _ =>
+      {
+        await _watcherRunning.Task.WaitAsync(MustComplete);
+        await loadAsync(Interlocked.Increment(ref _loads));
+      });
     }
   }
 
