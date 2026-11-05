@@ -13,7 +13,18 @@
   <PropertyGroup>
     <Authors>OrchestrationEngines contributors</Authors>
     <Product>OrchestrationEngines</Product>
-    <!-- TODO: set Copyright, PackageLicenseExpression and RepositoryUrl once the licence is chosen. -->
+  </PropertyGroup>
+
+  <!--
+    Packaging decisions that are still open (see docs/Releasing.md). Packing fails until each one is set; the check is in
+    Directory.Build.targets.
+  -->
+  <PropertyGroup>
+    <!-- SPDX licence expression, for example MIT or Apache-2.0. -->
+    <PackageLicenseExpression></PackageLicenseExpression>
+    <Copyright></Copyright>
+    <!-- The repository's final home; the package links to it and SourceLink points debuggers at it. -->
+    <RepositoryUrl></RepositoryUrl>
   </PropertyGroup>
 
   <!-- Builds on a CI server are reproducible (normalised paths for SourceLink and symbols). -->

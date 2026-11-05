@@ -1,0 +1,23 @@
+<Project>
+  <!--
+    Remember at evaluation time whether the repository URL was set by hand. SourceLink fills RepositoryUrl from the git
+    remote while packing, so checking it in the target below would always pass.
+  -->
+  <PropertyGroup>
+    <_RepositoryUrlSetByHand Condition="'$(RepositoryUrl)' != ''">true</_RepositoryUrlSetByHand>
+  </PropertyGroup>
+
+  <!--
+    Stops packing until the open packaging decisions are made (see docs/Releasing.md). Building and testing are not
+    affected. Remove this target once all decisions in docs/Releasing.md are done.
+  -->
+  <Target Name="CheckPackagingDecisions" BeforeTargets="GenerateNuspec" Condition="'$(IsPackable)' == 'true'">
+    <ItemGroup>
+      <_MissingPackagingSetting Include="PackageLicenseExpression" Condition="'$(PackageLicenseExpression)' == ''" />
+      <_MissingPackagingSetting Include="Copyright" Condition="'$(Copyright)' == ''" />
+      <_MissingPackagingSetting Include="RepositoryUrl" Condition="'$(_RepositoryUrlSetByHand)' != 'true'" />
+    </ItemGroup>
+    <Error Condition="'@(_MissingPackagingSetting)' != ''"
+           Text="Packaging is not set up yet. Set @(_MissingPackagingSetting, ', ') in Directory.Build.props (see docs/Releasing.md)." />
+  </Target>
+</Project>

@@ -21,6 +21,8 @@ dotnet test
 
 The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
+Packing is blocked until the licence and other packaging details are decided. See `docs/Releasing.md`.
+
 ## Code coverage
 
 ```bash

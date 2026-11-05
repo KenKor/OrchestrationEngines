@@ -1,0 +1,73 @@
+# Builds, tests and packs the library on every push and pull request, and publishes it on a version tag.
+#
+# Not finished on purpose: packing and publishing fail until the open decisions in docs/Releasing.md are made. Building
+# and testing already work.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Windows, because the tests also run on .NET Framework 4.8.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history and tags, for versioning from git tags (see docs/Releasing.md).
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        run: >-
+          dotnet test --no-build --configuration Release
+          --coverage --coverage-output-format cobertura --coverage-settings tests/CodeCoverage.settings.xml
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults/
+          if-no-files-found: ignore
+
+      # Fails until the packaging decisions are made (see Directory.Build.targets).
+      - name: Pack
+        run: >-
+          dotnet pack src/OrchestrationEngines/OrchestrationEngines.csproj --no-build --configuration Release
+          --output artifacts/packages
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: artifacts/packages/
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # TODO: when publishing is set up, add a protected environment and, for nuget.org Trusted Publishing,
+    # "permissions: id-token: write" (see docs/Releasing.md).
+    steps:
+      - name: Publishing is not set up yet
+        run: |
+          echo "::error::Publishing is not set up yet. Decide the open points in docs/Releasing.md first."
+          exit 1
