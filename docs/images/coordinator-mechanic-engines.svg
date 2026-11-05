@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -12 956 684" width="956" height="684" role="img" aria-labelledby="title desc">
+  <title id="title">Coordinator, mechanic and engines</title>
+  <desc id="desc">The host holds the current coordinator and replaces it on a generation switch. The coordinator creates one mechanic, and follows only the mechanic's state. The mechanic creates and starts each engine through its creation, context and kick-start tasks, and follows each engine's state.</desc>
+  <defs>
+    <marker id="arrow-solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="#888780" stroke-width="1.6"/>
+    </marker>
+    <marker id="arrow-state" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="#D85A30" stroke-width="1.6"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif; }
+      .title { font-size: 20px; font-weight: 600; text-anchor: middle; }
+      .sub { font-size: 16px; text-anchor: middle; }
+      .label { font-size: 16px; fill: #5F5E5A; }
+      .solid { stroke: #888780; stroke-width: 2; fill: none; marker-end: url(#arrow-solid); }
+      .state { stroke: #D85A30; stroke-width: 2; stroke-dasharray: 6 4; fill: none; marker-end: url(#arrow-state); }
+      /* Transparent background: the text outside the boxes follows the viewer's light or dark scheme. */
+      @media (prefers-color-scheme: dark) {
+        .label { fill: #C2C0B6; }
+        .legend-solid { stroke: #C2C0B6; }
+      }
+    </style>
+  </defs>
+
+  <!-- Host -->
+  <rect x="258" y="2" width="416" height="88" rx="6" fill="#F1EFE8" stroke="#B4B2A9"/>
+  <text class="title" x="466" y="41" fill="#2C2C2A">Host application</text>
+  <text class="sub" x="466" y="69" fill="#5F5E5A">holds the current coordinator</text>
+
+  <line class="solid" x1="466" y1="92" x2="466" y2="150"/>
+  <text class="label" x="482" y="128">replaces it on a generation switch</text>
+
+  <!-- Coordinator -->
+  <rect x="258" y="155" width="416" height="88" rx="6" fill="#EEEDFE" stroke="#7F77DD"/>
+  <text class="title" x="466" y="194" fill="#3C3489">EngineCoordinator</text>
+  <text class="sub" x="466" y="222" fill="#534AB7">overall state of the required engines</text>
+
+  <line class="solid" x1="402" y1="245" x2="402" y2="302"/>
+  <text class="label" x="388" y="282" text-anchor="end">creates</text>
+  <line class="state" x1="530" y1="305" x2="530" y2="249"/>
+  <text class="label" x="544" y="282">mechanic state only</text>
+
+  <!-- Mechanic -->
+  <rect x="2" y="308" width="928" height="90" rx="6" fill="#EEEDFE" stroke="#7F77DD"/>
+  <text class="title" x="466" y="348" fill="#3C3489">MechanicEngine (one per coordinator)</text>
+  <text class="sub" x="466" y="377" fill="#534AB7">per engine: creation, context and kick-start tasks</text>
+
+  <!-- Mechanic to engines, and the state each engine reports back -->
+  <line class="solid" x1="146" y1="400" x2="146" y2="489"/>
+  <line class="state" x1="242" y1="492" x2="242" y2="404"/>
+  <line class="solid" x1="466" y1="400" x2="466" y2="489"/>
+  <line class="state" x1="562" y1="492" x2="562" y2="404"/>
+  <line class="solid" x1="786" y1="400" x2="786" y2="489"/>
+  <line class="state" x1="882" y1="492" x2="882" y2="404"/>
+
+  <!-- Engines -->
+  <rect x="2" y="494" width="288" height="90" rx="6" fill="#E1F5EE" stroke="#1D9E75"/>
+  <text class="title" x="146" y="535" fill="#085041">Engine A</text>
+  <text class="sub" x="146" y="563" fill="#0F6E56">one task</text>
+
+  <rect x="322" y="494" width="288" height="90" rx="6" fill="#E1F5EE" stroke="#1D9E75"/>
+  <text class="title" x="466" y="535" fill="#085041">Engine B</text>
+  <text class="sub" x="466" y="563" fill="#0F6E56">load tasks and a monitor</text>
+
+  <rect x="642" y="494" width="288" height="90" rx="6" fill="#E1F5EE" stroke="#1D9E75"/>
+  <text class="title" x="786" y="535" fill="#085041">Engine C</text>
+  <text class="sub" x="786" y="563" fill="#0F6E56">depends on engine B</text>
+
+  <!-- Legend -->
+  <line class="legend-solid" x1="2" y1="643" x2="48" y2="643" stroke="#5F5E5A" stroke-width="2"/>
+  <text class="label" x="62" y="649">creates or starts</text>
+  <line x1="338" y1="643" x2="384" y2="643" stroke="#D85A30" stroke-width="2" stroke-dasharray="6 4"/>
+  <text class="label" x="398" y="649">state the receiver follows</text>
+</svg>
