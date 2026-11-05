@@ -885,10 +885,14 @@ public partial class EngineCoordinator : IDisposable
     {
       await DispatchAsync(ShutdownAsyncInt, token).ConfigureAwait(false);
     }
-    catch (OperationCanceledException) when (!token.IsCancellationRequested && State >= EngineCoordinatorState.Stopping)
+    catch (OperationCanceledException) when (!token.IsCancellationRequested && _linkedCts.IsCancellationRequested)
     {
       // Fix (GenerationSwitchEdgeCaseTest): a second shutdown with the dispatcher on waited forever for the stopped
-      // dispatcher. Already shut down (or shutting down): nothing is left to do, as without a dispatcher.
+      // dispatcher. The dispatcher no longer runs, so shut down here, as without a dispatcher. ShutdownAsyncInt is
+      // safe to run next to a shutdown in progress: it cancels and changes state under the lock, and returns once the
+      // coordinator is stopping. Checking the state instead of the token was not enough: a shutdown running at the same
+      // time cancels the token just before it changes the state.
+      await ShutdownAsyncInt().ConfigureAwait(false);
     }
 
     // Fix (GenerationSwitchEdgeCaseTest): a host that shut down the coordinator it started with left the current
