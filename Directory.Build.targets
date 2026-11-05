@@ -5,6 +5,11 @@
   -->
   <PropertyGroup>
     <_RepositoryUrlSetByHand Condition="'$(RepositoryUrl)' != ''">true</_RepositoryUrlSetByHand>
+    <!--
+      Whether a missing packaging setting stops the pack. True by default (local packs and release builds); the CI build
+      of a pull request or of main sets it to false, so that it warns and the check can still pass.
+    -->
+    <RequirePackagingDecisions Condition="'$(RequirePackagingDecisions)' == ''">true</RequirePackagingDecisions>
   </PropertyGroup>
 
   <!--
@@ -17,7 +22,9 @@
       <_MissingPackagingSetting Include="Copyright" Condition="'$(Copyright)' == ''" />
       <_MissingPackagingSetting Include="RepositoryUrl" Condition="'$(_RepositoryUrlSetByHand)' != 'true'" />
     </ItemGroup>
-    <Error Condition="'@(_MissingPackagingSetting)' != ''"
+    <Error Condition="'@(_MissingPackagingSetting)' != '' And '$(RequirePackagingDecisions)' == 'true'" Code="OEPACK001"
            Text="Packaging is not set up yet. Set @(_MissingPackagingSetting, ', ') in Directory.Build.props (see docs/Releasing.md)." />
+    <Warning Condition="'@(_MissingPackagingSetting)' != '' And '$(RequirePackagingDecisions)' != 'true'" Code="OEPACK001"
+             Text="Packaging is not set up yet. Set @(_MissingPackagingSetting, ', ') in Directory.Build.props (see docs/Releasing.md). This package is for checking only and must not be published." />
   </Target>
 </Project>

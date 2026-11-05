@@ -13,11 +13,14 @@ every pull request and every `v*` tag:
 | --- | --- |
 | Build and test (net10.0 and net48, on Windows) | Works |
 | Coverage report as a build artifact | Works |
-| Pack | Fails until the licence, copyright and repository URL are set |
+| Pack on a pull request or a push to `main` | Warns until the licence, copyright and repository URL are set |
+| Pack on a `v*` tag | Fails until the licence, copyright and repository URL are set |
 | Publish (only on a `v*` tag) | Fails until publishing is set up |
 
-Packing also fails locally, with a message that names what is missing. The check is the `CheckPackagingDecisions`
-target in `Directory.Build.targets`.
+The warning on pull requests lets their checks pass. The package those builds produce is for checking only and must not
+be published. Packing locally fails, like on a tag, with a message that names what is missing. The check is the
+`CheckPackagingDecisions` target in `Directory.Build.targets`; `RequirePackagingDecisions=false` turns the error into the
+warning.
 
 ## Open decisions
 
