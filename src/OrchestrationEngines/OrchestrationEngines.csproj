@@ -12,6 +12,13 @@
     <PackageId>OrchestrationEngines</PackageId>
     <Description>Dependency-aware orchestration of interdependent runtime engines: ordered startup, health propagation and controlled restarts.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- Symbols go to a separate .snupkg; SourceLink (part of the SDK) lets debuggers fetch the matching source. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <!-- Checks that both target frameworks expose the same public API. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
 
   <ItemGroup>
