@@ -43,6 +43,10 @@ public partial class EngineCoordinator : IDisposable
   // Invariant: no awaits occur while holding this lock.
   private readonly Lock _sync = new();
 
+  // The engines a running generation switch stopped early, as it rebuilds them from scratch, with the next generation
+  // once it has started (null if it did not start); null when no such switch runs. See GetEngineWhenReadyAsync.
+  private RebuildingSwitch _rebuildingSwitch;
+
   // Declarative configuration describing all engines and their dependencies.
   private readonly MechanicContext _context = new();
 
@@ -422,7 +426,10 @@ public partial class EngineCoordinator : IDisposable
   /// <para>
   /// Generation-switch policy:
   /// <list type="bullet">
-  /// <item>all existing engines are recreated from previous generation input,</item>
+  /// <item>
+  /// existing engines with a restart factory are recreated from previous generation input; those without one are
+  /// stopped before the next generation starts, and rebuilt from their regular factory,
+  /// </item>
   /// <item>
   /// restart metadata (definition-changed / dependency-changed / nothing-changed) is passed via
   /// <see cref="EngineRestartInput"/>.
@@ -461,6 +468,7 @@ public partial class EngineCoordinator : IDisposable
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
     var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
     var handovers = new List<(string Name, Handover Handover)>();
+    var rebuiltFromScratch = new List<(string Name, IEngine Engine)>();
 
     foreach (var candidate in candidateList)
     {
@@ -469,9 +477,15 @@ public partial class EngineCoordinator : IDisposable
       currentDescriptorByName.TryGetValue(name, out var previousDescriptor);
 
       EngineDescriptor runtimeDescriptor;
-      if (previousEngine == null)
+      // Fix (RebuiltEngineSwitchTest): without a restart factory the next engine is built from scratch and cannot take
+      // over anything, yet the previous engine was handed over and kept running until the next generation had started,
+      // so two copies of its data could be loaded at the same time. It is now not handed over, and stopped before the
+      // next generation starts (as in the .NET Framework version).
+      if (previousEngine == null || candidate.RestartFromPrevious == null)
       {
         runtimeDescriptor = CloneDescriptor(candidate);
+        if (previousEngine != null)
+          rebuiltFromScratch.Add((name, previousEngine));
       }
       else
       {
@@ -498,7 +512,29 @@ public partial class EngineCoordinator : IDisposable
     currentEngineByName = null;
     currentDescriptorByName = null;
 
-    await nextCoordinator.StartAsync().ConfigureAwait(false);
+    // Fix (RebuiltEngineSwitchTest): stop the engines that are rebuilt from scratch first, so that their data is
+    // released before their replacements load it again. Whatever their state, as the shutdown below does: a Faulted
+    // engine's kick-start would otherwise go on recovering it. A lookup that sees one of them stop waits for the next
+    // generation to start and asks it (see GetEngineWhenReadyAsync), as the lookups do once the switch hands over.
+    RebuildingSwitch rebuilding = null;
+    try
+    {
+      if (rebuiltFromScratch.Count > 0)
+      {
+        rebuilding = new RebuildingSwitch(rebuiltFromScratch.Select(r => r.Name));
+        Volatile.Write(ref _rebuildingSwitch, rebuilding);
+        await Task.WhenAll(rebuiltFromScratch.Select(r => r.Engine.StopAsync())).ConfigureAwait(false);
+      }
+      rebuiltFromScratch = null;
+
+      await nextCoordinator.StartAsync().ConfigureAwait(false);
+      rebuilding?.Next.TrySetResult(nextCoordinator);
+    }
+    finally
+    {
+      // The next generation did not start: the waiting lookups give null.
+      rebuilding?.Next.TrySetResult(null);
+    }
     // Not awaited: it ends when the next generation's engines have started or given up, long after a switch that does not
     // wait until they are ready.
     _ = nextCoordinator.ReleaseHandoversWhenSettledAsync(handovers);
@@ -514,6 +550,18 @@ public partial class EngineCoordinator : IDisposable
     await ShutdownAsyncInt().ConfigureAwait(false);
 
     return nextCoordinator;
+  }
+
+  /// <summary>
+  /// The engines a generation switch stopped before the next generation started, as it rebuilds them from scratch, and
+  /// that next generation once it has started (null if it did not start).
+  /// </summary>
+  private sealed class RebuildingSwitch(IEnumerable<string> names)
+  {
+    public HashSet<string> Names { get; } = new(names, StringComparer.OrdinalIgnoreCase);
+
+    public TaskCompletionSource<EngineCoordinator> Next { get; } =
+      new(TaskCreationOptions.RunContinuationsAsynchronously);
   }
 
   /// <summary>
@@ -1111,6 +1159,15 @@ public partial class EngineCoordinator : IDisposable
       // The switch shut this generation down (its dispatcher or mechanic was cancelled) while the call was queued or
       // waiting; the caller did not cancel.
       engine = null;
+    }
+
+    // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
+    // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
+    if (engine == null && Successor == null && Volatile.Read(ref _rebuildingSwitch) is { } rebuilding &&
+        rebuilding.Names.Contains(name))
+    {
+      var next = await rebuilding.Next.Task.WaitAsync(token).ConfigureAwait(false);
+      return next == null ? null : await next.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
     }
 
     // Replaced by a generation switch while waiting: this generation stopped its engines, ask the next one. An engine
