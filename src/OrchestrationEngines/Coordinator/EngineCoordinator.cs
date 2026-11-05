@@ -91,7 +91,9 @@ public partial class EngineCoordinator : IDisposable
   /// <summary>
   /// Registry of instantiated engines, keyed by engine name.
   /// </summary>
-  public IReadOnlyDictionary<string, IEngine> Engines => _mechanic?.Engines ?? new Dictionary<string, IEngine>();
+  // Fix (NameCaseTest): the empty registry before start ignores case, like the mechanic's.
+  public IReadOnlyDictionary<string, IEngine> Engines =>
+    _mechanic?.Engines ?? new Dictionary<string, IEngine>(StringComparer.OrdinalIgnoreCase);
 
   /// <summary>
   /// The application token this coordinator is linked to; the coordinator of a generation switch is linked to it too.

@@ -230,9 +230,11 @@ public partial class MechanicEngine : BaseEngine
     if (Context is not MechanicContext mc)
       throw new InvalidCastException("Mechanic's context must be of type MechanicContext");
 
-    var creationTasks = new Dictionary<string, EngineCreationTask>();
-    var contextTasks = new Dictionary<string, EngineContextTask>();
-    var kickStartTasks = new Dictionary<string, EngineKickStartTask>();
+    // Fix (NameCaseTest): a dependency named in another case than its engine failed the set-up with a
+    // KeyNotFoundException, as these were keyed case-sensitively.
+    var creationTasks = new Dictionary<string, EngineCreationTask>(StringComparer.OrdinalIgnoreCase);
+    var contextTasks = new Dictionary<string, EngineContextTask>(StringComparer.OrdinalIgnoreCase);
+    var kickStartTasks = new Dictionary<string, EngineKickStartTask>(StringComparer.OrdinalIgnoreCase);
 
     // Per-engine lifecycle tasks
     foreach (var engineDescriptor in mc.EngineDescriptors)

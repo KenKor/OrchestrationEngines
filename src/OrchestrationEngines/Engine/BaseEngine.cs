@@ -65,7 +65,9 @@ public abstract partial class BaseEngine : IEngine
   /// </remarks>
   protected IReadOnlyDictionary<string, EngineTask> _tasks => Volatile.Read(ref _taskSet);
 
-  private Dictionary<string, EngineTask> _taskSet = [];
+  // Fix (NameCaseTest): task names were compared case-sensitively, so a lookup in another case did not find the task.
+  // Every task set (this one, the one a set-up builds and the copy AddTask makes) now ignores case.
+  private Dictionary<string, EngineTask> _taskSet = new(StringComparer.OrdinalIgnoreCase);
 
   /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
@@ -494,7 +496,7 @@ public abstract partial class BaseEngine : IEngine
       var replacedWork = Task.WhenAll(_tasks.Values.Select(t => t.LatestRunEnded).Append(inheritedWork));
       lock (_taskSetChange)
       {
-        _buildingTaskSet = [];
+        _buildingTaskSet = new(StringComparer.OrdinalIgnoreCase);
       }
       try
       {
@@ -650,7 +652,8 @@ public abstract partial class BaseEngine : IEngine
     await WaitForRestartAsync().ConfigureAwait(false);
     // Check if tasks have been fired to start, otherwise do it now.
     await TriggerStartAsync().ConfigureAwait(false);
-    var namesHash = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
+    // Fix (NameCaseTest): ordinal like every other name comparison, instead of culture-aware.
+    var namesHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     foreach (string taskName in taskNames)
     {
       namesHash.Add(taskName);
@@ -897,7 +900,7 @@ public abstract partial class BaseEngine : IEngine
       else
       {
         // Outside a set-up the published set is not changed: copy it.
-        Volatile.Write(ref _taskSet, new Dictionary<string, EngineTask>(_taskSet) { [name] = task });
+        Volatile.Write(ref _taskSet, new Dictionary<string, EngineTask>(_taskSet, StringComparer.OrdinalIgnoreCase) { [name] = task });
       }
     }
     if (task.RequiredForRunning)
