@@ -480,3 +480,35 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+##
+## Repository-specific additions: user settings and machine-specific paths.
+## Kept at the end so they override the template above (last match wins).
+##
+
+# Debug launch profiles (contain local paths, arguments and environment variables)
+**/Properties/launchSettings.json
+
+# VS Code: the template keeps these tracked; here they are personal
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+
+# Claude Code personal settings (shared .claude/settings.json stays tracked)
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Local overrides that must not be shared
+*.local.json
+*.local.props
+*.local.targets
+.env.*
+
+# Code coverage output
+coverage/
+*.cobertura.xml
+coverage.*.xml
+coverage.json
+
+# Windows folder settings
+desktop.ini

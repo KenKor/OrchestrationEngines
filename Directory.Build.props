@@ -1,0 +1,23 @@
+<Project>
+  <!-- Settings shared by every project in this repository. -->
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NeutralLanguage>en</NeutralLanguage>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Authors>OrchestrationEngines contributors</Authors>
+    <Product>OrchestrationEngines</Product>
+    <!-- TODO: set Copyright, PackageLicenseExpression and RepositoryUrl once the licence is chosen. -->
+  </PropertyGroup>
+
+  <!-- Builds on a CI server are reproducible (normalised paths for SourceLink and symbols). -->
+  <PropertyGroup Condition="'$(TF_BUILD)' == 'true' Or '$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>
