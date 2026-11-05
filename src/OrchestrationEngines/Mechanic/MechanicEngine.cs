@@ -135,9 +135,11 @@ public partial class MechanicEngine : BaseEngine
     // If this engine has dependencies, enrich the context with dependent engines
     if (Context is MechanicContext mc)
     {
-      // Retrieve dep
+      // The engine's dependencies, from its descriptor. Fix (ContextFanOutTest): the name was compared case-sensitively,
+      // so a refresh with the name in another case lost the engine's underlying engines.
       context = ResolveContext(context, mc.EngineDescriptors
-          .FirstOrDefault(ed => ed.Name.Equals(engineName))?.DependsOn ?? Enumerable.Empty<string>());
+          .FirstOrDefault(ed => String.Equals(ed.Name, engineName, StringComparison.OrdinalIgnoreCase))?.DependsOn
+          ?? Enumerable.Empty<string>());
     }
     // We can start the engine now with a context.
     engine.Context = context;

@@ -338,7 +338,10 @@ public class EngineTaskTest
     task.StateMessage = "Loading.";
 
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => task.State == EngineTaskState.Recovering, "the failure must start the recovery");
+    // Stateless sets the state before it runs the entry action that sets the message: wait for both, or under load the
+    // message is read in between.
+    await WaitUntilAsync(() => task.State == EngineTaskState.Recovering && task.StateMessage != "Loading.",
+      "the failure must start the recovery");
 
     task.StateMessage.Should().Be("Recovering after an error: The database is not reachable.");
     task.IsFailed.Should().BeFalse();

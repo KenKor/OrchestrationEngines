@@ -111,12 +111,32 @@ internal sealed partial class MechanicDispatcher : IDisposable
   public Task<T> InvokeAsync<T>(Func<Task<T>> action, CancellationToken token = default)
   {
     ArgumentNullException.ThrowIfNull(action);
+
+    // Fix (MechanicDispatcherTest): the worker loop ends once the engine token is cancelled; an item queued after that
+    // never ran nor was cancelled, and its caller waited forever.
+    if (_engineToken.IsCancellationRequested)
+      return Task.FromCanceled<T>(_engineToken);
+
     Start();
 
     var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
     _queue.Enqueue(new WorkItem<T>(action, tcs, token));
     _signal.Set();
+
+    // Cancelled while this item was being queued: the worker loop may already have drained the queue for the last time.
+    if (_engineToken.IsCancellationRequested)
+      CancelQueuedItems();
+
     return tcs.Task;
+  }
+
+  /// <summary>
+  /// Cancels every queued item: with the engine token once that is cancelled, otherwise with the item's caller token.
+  /// </summary>
+  private void CancelQueuedItems()
+  {
+    while (_queue.TryDequeue(out var item))
+      item.Cancel(_engineToken.IsCancellationRequested ? _engineToken : item.CallerToken);
   }
 
   /// <summary>
@@ -179,8 +199,7 @@ internal sealed partial class MechanicDispatcher : IDisposable
     }
     finally
     {
-      while (_queue.TryDequeue(out var item))
-        item.Cancel(_engineToken.IsCancellationRequested ? _engineToken : item.CallerToken);
+      CancelQueuedItems();
     }
   }
 

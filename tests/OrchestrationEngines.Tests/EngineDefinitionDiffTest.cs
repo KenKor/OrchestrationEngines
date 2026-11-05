@@ -77,4 +77,78 @@ public class EngineDefinitionDiffTest
 
     diff.RestartRequiredEngineNames.Should().Equal("Planned");
   }
+
+  /// <summary>
+  /// Verifies that two descriptors with the same name in a different case are rejected: engine names are
+  /// case-insensitive, so the diff could not tell which one is meant.
+  /// </summary>
+  [Fact]
+  public void EngineDefinitionDiff_Create_DuplicateNameInOtherCase_Throws()
+  {
+    var create = () => EngineDefinitionDiff.Create(
+      [Descriptor("North")],
+      [Descriptor("North"), Descriptor("NORTH", version: 2)]);
+
+    create.Should().Throw<System.ArgumentException>().Which.ParamName.Should().Be("candidateDescriptors");
+  }
+
+  /// <summary>
+  /// Verifies that null lists and null entries are taken as no engines.
+  /// </summary>
+  [Fact]
+  public void EngineDefinitionDiff_Create_NullListsAndEntries_AreSkipped()
+  {
+    var diff = EngineDefinitionDiff.Create(null, [null, Descriptor("North")]);
+
+    diff.AddedEngineNames.Should().Equal("North");
+    diff.RemovedEngineNames.Should().BeEmpty();
+    diff.HasVersionChanges.Should().BeFalse();
+    diff.RequiresRestart.Should().BeFalse();
+  }
+
+  /// <summary>
+  /// Verifies added and removed engines, and that a name in another case is the same engine.
+  /// </summary>
+  [Fact]
+  public void EngineDefinitionDiff_Create_AddedAndRemoved_IgnoreCase()
+  {
+    var diff = EngineDefinitionDiff.Create(
+      [Descriptor("North"), Descriptor("Old")],
+      [Descriptor("NORTH"), Descriptor("New")]);
+
+    diff.AddedEngineNames.Should().Equal("New");
+    diff.RemovedEngineNames.Should().Equal("Old");
+    diff.RequiresRestart.Should().BeFalse();
+  }
+
+  /// <summary>
+  /// Verifies that an engine reached through two paths (a patch on two patches of one base) is restarted once.
+  /// </summary>
+  [Fact]
+  public void EngineDefinitionDiff_Create_Diamond_RestartsTheBottomOnce()
+  {
+    var bottom = Descriptor("Merged", dependsOn: "Planned").AddDependsOn("Repair");
+    var diff = EngineDefinitionDiff.Create(
+      [Descriptor("AsBuilt"), Descriptor("Planned", dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt"),
+        Descriptor("Merged", dependsOn: "Planned").AddDependsOn("Repair")],
+      [Descriptor("AsBuilt", version: 2), Descriptor("Planned", dependsOn: "AsBuilt"),
+        Descriptor("Repair", dependsOn: "AsBuilt"), bottom]);
+
+    diff.RestartRequiredEngineNames.Should().Equal("AsBuilt", "Merged", "Planned", "Repair");
+  }
+
+  /// <summary>
+  /// Verifies that a dependency on an engine that is not among the candidates is ignored, also when it has the same
+  /// name as a removed engine.
+  /// </summary>
+  [Fact]
+  public void EngineDefinitionDiff_Create_DependencyNotAmongTheCandidates_IsIgnored()
+  {
+    var diff = EngineDefinitionDiff.Create(
+      [Descriptor("Gone"), Descriptor("North")],
+      [Descriptor("North", version: 2, dependsOn: "Gone"), Descriptor("South", dependsOn: "Elsewhere")]);
+
+    diff.RestartRequiredEngineNames.Should().Equal("North");
+    diff.RemovedEngineNames.Should().Equal("Gone");
+  }
 }

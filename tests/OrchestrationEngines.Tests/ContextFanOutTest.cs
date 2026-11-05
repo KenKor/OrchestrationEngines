@@ -150,6 +150,22 @@ public class ContextFanOutTest
   }
 
   /// <summary>
+  /// Verifies that a context refresh for an engine named in a different case still gives the engine its underlying
+  /// engines: engine names are case-insensitive everywhere, also where the refresh looks up the engine's dependencies.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_RefreshEngineContextAsync_NameInOtherCase_KeepsTheUnderlyingEngines()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var (coordinator, session, kernel, _, _) = await StartHostAsync(() => new ValueContext("workspace-A"));
+
+    await coordinator.RefreshEngineContextAsync("KERNEL", new ValueContext("kernel-B"), ct).WaitAsync(MustComplete, ct);
+
+    kernel.Context.Inner.Should().BeOfType<ValueContext>().Which.Value.Should().Be("kernel-B");
+    kernel.Context.GetUnderlyingEngine("Session").Should().BeSameAs(session);
+  }
+
+  /// <summary>
   /// Verifies that invalidating one dependent reloads only that dependent: the session, its other dependent and
   /// the independent engine keep their loads.
   /// </summary>

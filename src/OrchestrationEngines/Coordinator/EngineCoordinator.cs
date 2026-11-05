@@ -875,8 +875,27 @@ public partial class EngineCoordinator : IDisposable
   /// <summary>
   /// Initiates application shutdown and waits for completion.
   /// </summary>
-  public Task ShutdownAsync(CancellationToken token = default)
-    => DispatchAsync(ShutdownAsyncInt, token);
+  /// <remarks>
+  /// On a coordinator replaced by a generation switch this also shuts down the current generation, as lookups on it
+  /// are answered by that generation (see <see cref="Successor"/>).
+  /// </remarks>
+  public async Task ShutdownAsync(CancellationToken token = default)
+  {
+    try
+    {
+      await DispatchAsync(ShutdownAsyncInt, token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (!token.IsCancellationRequested && State >= EngineCoordinatorState.Stopping)
+    {
+      // Fix (GenerationSwitchEdgeCaseTest): a second shutdown with the dispatcher on waited forever for the stopped
+      // dispatcher. Already shut down (or shutting down): nothing is left to do, as without a dispatcher.
+    }
+
+    // Fix (GenerationSwitchEdgeCaseTest): a host that shut down the coordinator it started with left the current
+    // generation running. The switch itself shuts the replaced generation down with ShutdownAsyncInt, not with this.
+    if (Successor is { } current)
+      await current.ShutdownAsync(token).ConfigureAwait(false);
+  }
 
   /// <summary>
   /// Internal implementation of <see cref="ShutdownAsync"/> executed on the dispatcher thread.

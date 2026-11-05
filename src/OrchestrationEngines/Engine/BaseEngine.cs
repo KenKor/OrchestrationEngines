@@ -193,7 +193,9 @@ public abstract partial class BaseEngine : IEngine
     {
       var oldValue = _context;
       _context = value;
-      if (value != oldValue || value != null && !value.Equals(oldValue))
+      // Fix (EngineContextChangedTest): the condition was "value != oldValue || ...", so any other instance counted as
+      // a change and the context's Equals was never asked. Now a context equal to the current one is no change.
+      if (!ReferenceEquals(value, oldValue) && !(value != null && value.Equals(oldValue)))
       {
         ContextChanged(oldValue, value);
       }
@@ -653,11 +655,14 @@ public abstract partial class BaseEngine : IEngine
     {
       namesHash.Add(taskName);
     }
+    // Fix (EngineReadinessApiTest): a task that had already completed was left out before the tasks were counted, so
+    // asking for completed tasks reported them as not found (false). Count every task found, wait for those still running.
+    var foundTasks = _tasks.Values.Where(t => namesHash.Contains(t.Name)).ToArray();
     // Wait for task (CompletedWithSuccess / Failed / Cancelled)
-    var completionTasks = _tasks.Values
-        .Where(t => !t.IsCompleted && namesHash.Contains(t.Name))
+    var completionTasks = foundTasks
+        .Where(t => !t.IsCompleted)
         .Select(t => t.InnerTask).ToArray();
-    if (completionTasks.Length == 0)
+    if (foundTasks.Length == 0)
     {
       if (taskNames.Length == 1)
       {
@@ -673,7 +678,7 @@ public abstract partial class BaseEngine : IEngine
       }
       return false; // None of the tasks were found.
     }
-    if (completionTasks.Length != taskNames.Length)
+    if (foundTasks.Length != namesHash.Count)
     {
       // TODO: some tasks are optional and will not exist (depending on how the host configures the engine)
       // Guarded despite the generated method's own check: joining the names builds a string.

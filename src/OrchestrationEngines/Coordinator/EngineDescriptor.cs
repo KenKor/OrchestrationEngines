@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using OrchestrationEngines.Engine;
@@ -364,7 +365,9 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     if (other is null) return false;
     if (ReferenceEquals(this, other)) return true;
 
-    return Name == other.Name &&
+    // Fix (EngineDescriptorEqualityTest): the name was compared case-sensitively (engine names are not, and the hash
+    // code already was not), and DependsOn by reference, so two descriptors were never equal by their dependencies.
+    return String.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase) &&
            Version == other.Version &&
            EngineFactory.Equals(other.EngineFactory) &&
            (RestartFromPrevious == other.RestartFromPrevious || RestartFromPrevious != null && RestartFromPrevious.Equals(other.RestartFromPrevious)) &&
@@ -375,7 +378,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
              ? Equals(RecoveryPolicy, other.RecoveryPolicy)
              : RecoveryHelper == other.RecoveryHelper || RecoveryHelper != null && Equals(RecoveryHelper, other.RecoveryHelper)) &&
            (RestartPolicy == other.RestartPolicy || RestartPolicy != null && RestartPolicy.Equals(other.RestartPolicy)) &&
-           DependsOn.Equals(other.DependsOn);
+           DependsOn.SetEquals(other.DependsOn);
   }
 
   /// <inheritdoc />
@@ -405,7 +408,9 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     hash.Add((object)RecoveryPolicy ?? RecoveryHelper);
     hash.Add(RequiredForRunning);
     hash.Add(RestartPolicy);
-    hash.Add(DependsOn);
+    // Fix (EngineDescriptorEqualityTest): by content, in a fixed order, as Equals now compares them; it was by reference.
+    foreach (var dependencyName in DependsOn.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+      hash.Add(dependencyName, StringComparer.OrdinalIgnoreCase);
     return hash.ToHashCode();
   }
 }
