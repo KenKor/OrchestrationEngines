@@ -1,0 +1,16 @@
+<Project>
+  <!-- Central Package Management: every package version is set here, not in the .csproj files. -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- Tests -->
+  <ItemGroup>
+    <!-- Apache-2.0 fork of FluentAssertions 7 (FluentAssertions 8+ needs a paid licence for commercial use). -->
+    <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+</Project>
