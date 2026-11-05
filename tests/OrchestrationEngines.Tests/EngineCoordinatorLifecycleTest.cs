@@ -155,7 +155,7 @@ public class EngineCoordinatorLifecycleTest
     ended.Should().BeSameAs(lookup, "the shutdown must end the wait");
     coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
     if (lookup.IsCompletedSuccessfully)
-      lookup.Result.Should().BeNull();
+      (await lookup).Should().BeNull();
   }
 
   /// <summary>

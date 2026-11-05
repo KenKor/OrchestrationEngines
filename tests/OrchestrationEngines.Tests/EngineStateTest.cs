@@ -158,7 +158,7 @@ public class EngineStateTest
     var coordinator = new EngineCoordinator(nameof(EngineStateTest), logger, useDispatcher: false);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
-    await coordinator.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must be running");
     var freshContext = new NoContext();
 
@@ -182,7 +182,7 @@ public class EngineStateTest
     var coordinator = new EngineCoordinator(nameof(EngineStateTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
-    await coordinator.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must be running");
 
     var refresh = () => coordinator.RefreshEngineContextAsync("Unknown", new NoContext(), TestContext.Current.CancellationToken);

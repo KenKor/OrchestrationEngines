@@ -507,7 +507,6 @@ CLAUDE.local.md
 # Code coverage output
 coverage/
 *.cobertura.xml
-coverage.*.xml
 coverage.json
 
 # Windows folder settings
