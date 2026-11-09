@@ -165,6 +165,10 @@ public class EngineStatusErrorTest
 
     await engine.StartAsync();
     await WaitUntilAsync(() => engine.Tasks["Dependent"].State == EngineTaskState.DependencyFailed, "A fails");
+    // Later's run must end on a later tick of the clock (on .NET Framework, about every 15 ms): a tie goes to the set's
+    // order, which puts Later first.
+    await WaitUntilAsync(() => TimeProvider.System.GetUtcNow().UtcDateTime > engine.Tasks["A"].RunEndedAtUtc,
+      "the clock moves past A's end");
     releaseLater.SetResult();
     await WaitUntilAsync(() => engine.Tasks["Later"].State == EngineTaskState.Failed, "Later throws");
     engine.Hold = false;

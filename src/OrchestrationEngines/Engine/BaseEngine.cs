@@ -294,8 +294,8 @@ public abstract partial class BaseEngine : IEngine
   /// an <see cref="EngineTaskNotReadyException"/> for the required task whose failure faulted the engine: its name, the
   /// state it ended in and its <see cref="EngineTask.FailReason"/>, with the exception its work or recovery threw as
   /// the inner exception (none for a time-out). Of several failed required tasks, it is the one whose run ended first
-  /// (for a failed recovery, the run that went into recovery); a task that failed only because a dependency did comes
-  /// after those that failed by themselves.
+  /// (for a failed recovery, the run that went into recovery; runs that ended within one tick of the clock, in the
+  /// set's order); a task that failed only because a dependency did comes after those that failed by themselves.
   /// </para>
   ///
   /// <para>
@@ -315,7 +315,8 @@ public abstract partial class BaseEngine : IEngine
 
   /// <summary>
   /// The error of the change being published (see <see cref="SetStateSynchronized"/>), for
-  /// <see cref="OnEngineStatusChanged"/>. Only the publishing thread reads and writes it.
+  /// <see cref="OnEngineStatusChanged"/>. Only the publishing thread writes it; an override that calls the base method
+  /// from another thread, during a publication, would read that publication's error.
   /// </summary>
   private Exception _publishingError;
 
@@ -528,10 +529,10 @@ public abstract partial class BaseEngine : IEngine
           // Keep looking: a failed task elsewhere makes the engine Faulted, not Stopped.
           anyCancelled = true;
           break;
-        case var failed when FaultsEngine(failed):
+        case EngineTaskState.Resetting:
+          // Between two runs, it counts as Faulted, though it has no cause to report.
           return EngineState.Faulted;
-        default:
-          // Resetting: the task is between two runs.
+        case var failed when FaultsEngine(failed):
           return EngineState.Faulted;
       }
 
