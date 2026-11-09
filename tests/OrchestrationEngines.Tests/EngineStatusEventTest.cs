@@ -26,7 +26,18 @@ public class EngineStatusEventTest
   /// </summary>
   private sealed class LoadEngine(Func<CancellationToken, Task> loadAsync = null) : BaseEngine(NullLogger.Instance)
   {
+    /// <summary>
+    /// The changes the hook was told about, as (old, new).
+    /// </summary>
+    public ConcurrentQueue<(EngineState oldValue, EngineState newValue)> Changes { get; } = new();
+
     protected override void SetUpTasks() => CreateTask("Load", loadAsync ?? (_ => Task.CompletedTask));
+
+    protected override void OnEngineStatusChanged(EngineState oldValue, EngineState value)
+    {
+      Changes.Enqueue((oldValue, value));
+      base.OnEngineStatusChanged(oldValue, value);
+    }
   }
 
   /// <summary>
@@ -176,6 +187,40 @@ public class EngineStatusEventTest
 
     delivered.Should().Equal((EngineState.Starting, 1), (EngineState.Ready, 1));
     engine.State.Should().Be(EngineState.Ready);
+  }
+
+  /// <summary>
+  /// Verifies that setting the state raises EngineStatusChanged once with the new value, and calls the hook once with
+  /// the old and the new value.
+  /// </summary>
+  [Fact]
+  public void BaseEngine_State_Set_RaisesTheEventOnceWithTheOldAndNewValue()
+  {
+    var engine = new LoadEngine();
+    var events = new List<EngineState>();
+    engine.EngineStatusChanged += (_, e) => events.Add(e.State);
+
+    engine.State = EngineState.Starting;
+
+    engine.State.Should().Be(EngineState.Starting);
+    events.Should().Equal(EngineState.Starting);
+    engine.Changes.Should().Equal((EngineState.Created, EngineState.Starting));
+  }
+
+  /// <summary>
+  /// Verifies that setting the state it already has publishes nothing.
+  /// </summary>
+  [Fact]
+  public void BaseEngine_State_SetToTheSameValue_RaisesNothing()
+  {
+    var engine = new LoadEngine();
+    var events = new List<EngineState>();
+    engine.EngineStatusChanged += (_, e) => events.Add(e.State);
+
+    engine.State = EngineState.Created;
+
+    events.Should().BeEmpty();
+    engine.Changes.Should().BeEmpty();
   }
 
   /// <summary>
