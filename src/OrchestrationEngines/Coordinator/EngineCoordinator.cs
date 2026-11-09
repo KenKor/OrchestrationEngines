@@ -929,6 +929,8 @@ public partial class EngineCoordinator : IDisposable
   /// <remarks>
   /// It first waits for the engine to start (its kick-start, which ends once the engine is Ready or has failed), since
   /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
+  /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
+  /// reports it as unknown (<see cref="ArgumentException"/>).
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
@@ -954,8 +956,10 @@ public partial class EngineCoordinator : IDisposable
     try
     {
       await DispatchAsync(StartAsync, token).ConfigureAwait(false);
-      await Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName).WaitAsync(token).ConfigureAwait(false);
+      await Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
     }
+    // The switch check is a cheap pre-check: NextGenerationAsync answers null without a switch, but only after the
+    // catch has been entered.
     catch (Exception ex) when (ex is OperationCanceledException or EngineTaskNotReadyException { State: EngineTaskState.Cancelled }
       && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _rebuildingSwitch) != null))
     {

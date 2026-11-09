@@ -51,6 +51,41 @@ public class EnsureTaskReadyTest
     }
   }
 
+  /// <summary>
+  /// An engine with one required task, "Load", whose first run waits until it is cancelled and whose later runs
+  /// complete. Its set-up can be made to fail, for the next start.
+  /// </summary>
+  private sealed class RerunEngine() : BaseEngine(NullLogger.Instance)
+  {
+    private int _runs;
+
+    public TaskCompletionSource FirstRunStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool FailSetUp { get; set; }
+
+    public int Runs => Volatile.Read(ref _runs);
+
+    protected override void SetUpTasks()
+    {
+      if (FailSetUp)
+        throw new InvalidOperationException("The set-up failed.");
+      CreateTask("Load", token =>
+      {
+        if (Interlocked.Increment(ref _runs) > 1)
+          return Task.CompletedTask;
+        FirstRunStarted.TrySetResult();
+        return Task.Delay(Timeout.Infinite, token);
+      });
+    }
+  }
+
+  private static async Task<RerunEngine> WaitingOnTheFirstRunAsync(CancellationToken ct)
+  {
+    var engine = new RerunEngine { Context = new NoContext() };
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    return engine;
+  }
+
   private static async Task<MixedEngine> StartedEngineAsync(CancellationToken ct)
   {
     var engine = new MixedEngine { Context = new NoContext() };
@@ -125,7 +160,8 @@ public class EnsureTaskReadyTest
   }
 
   /// <summary>
-  /// Verifies that a task whose recovery gives up reports RecoveryFailed with the recovery's exception.
+  /// Verifies that a task whose recovery gives up reports RecoveryFailed with the recovery's exception (the policy's
+  /// limit), not the work's.
   /// </summary>
   [Fact]
   public async Task BaseEngine_EnsureTaskReadyAsync_RecoveryFails_ThrowsWithTheRecoveryException()
@@ -137,8 +173,91 @@ public class EnsureTaskReadyTest
       .Should().ThrowAsync<EngineTaskNotReadyException>();
 
     thrown.Which.State.Should().Be(EngineTaskState.RecoveryFailed);
-    thrown.Which.InnerException.Should().NotBeNull();
+    thrown.Which.InnerException.Should().BeOfType<EngineTaskLimitExceededException>();
     thrown.Which.InnerException.Should().BeSameAs(engine.Tasks["Retried"].FailException);
+  }
+
+  /// <summary>
+  /// Verifies that a wait during which the engine's tasks are reset and the engine started again (a restart, which
+  /// replaces the task) answers with the next run's outcome, not with the Cancelled that ended the first run.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureTaskReadyAsync_RestartDuringTheWait_AnswersWithTheNextRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await WaitingOnTheFirstRunAsync(ct);
+    var wait = engine.EnsureTaskReadyAsync("Load", ct);
+    await engine.FirstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+
+    await wait.WaitAsync(MustComplete, ct);
+    engine.Runs.Should().Be(2);
+  }
+
+  /// <summary>
+  /// Verifies that a wait during which the task is reset in place (and started again) answers with the next run's
+  /// outcome.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureTaskReadyAsync_ResetDuringTheWait_AnswersWithTheNextRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await WaitingOnTheFirstRunAsync(ct);
+    var wait = engine.EnsureTaskReadyAsync("Load", ct);
+    await engine.FirstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    await engine.TriggerResetAsync([engine.Tasks["Load"]]).WaitAsync(MustComplete, ct);
+
+    await wait.WaitAsync(MustComplete, ct);
+    engine.Runs.Should().Be(2);
+  }
+
+  /// <summary>
+  /// Verifies that a wait whose task a restart ended, while the restart's set-up fails (so the task is gone), reports
+  /// how the task it waited for ended, not an unknown name.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureTaskReadyAsync_RestartLosesTheTask_ThrowsForTheEndedTask()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await WaitingOnTheFirstRunAsync(ct);
+    var wait = engine.EnsureTaskReadyAsync("Load", ct);
+    await engine.FirstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    engine.FailSetUp = true;
+    try
+    {
+      await engine.StartAsync().WaitAsync(MustComplete, ct);
+    }
+    catch (InvalidOperationException)
+    {
+      // How a failed set-up surfaces from StartAsync is not what this test is about.
+    }
+
+    var thrown = await wait.Awaiting(w => w.WaitAsync(MustComplete, ct)).Should().ThrowAsync<EngineTaskNotReadyException>();
+    thrown.Which.TaskName.Should().Be("Load");
+    thrown.Which.State.Should().Be(EngineTaskState.Cancelled);
+  }
+
+  /// <summary>
+  /// Verifies that cancelling the token ends the wait, and the task runs on.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureTaskReadyAsync_TokenCancelled_EndsTheWaitOnly()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await WaitingOnTheFirstRunAsync(ct);
+    using var cts = new CancellationTokenSource();
+    var wait = engine.EnsureTaskReadyAsync("Load", cts.Token);
+    await engine.FirstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    cts.Cancel();
+
+    await wait.Awaiting(w => w.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>();
+    engine.Tasks["Load"].State.Should().Be(EngineTaskState.Running);
   }
 
   /// <summary>

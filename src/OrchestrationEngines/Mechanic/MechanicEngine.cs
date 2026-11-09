@@ -303,19 +303,23 @@ public partial class MechanicEngine : BaseEngine
   /// success (see <see cref="IEngine.EnsureTaskReadyAsync"/>), after the engine has started: its tasks are set up when
   /// its kick-start starts it, and the kick-start ends once the engine is Ready, or has failed.
   /// </summary>
+  /// <remarks>
+  /// An engine that was created but never started is recognised as a <see cref="BaseEngine"/> without tasks; another
+  /// <see cref="IEngine"/> answers for itself.
+  /// </remarks>
   /// <exception cref="ArgumentException">No engine of that name is registered, or the engine has no such task.</exception>
   /// <exception cref="EngineTaskNotReadyException">
   /// The task ended without success; or the engine could not be created (reported by its creation task, which bears
   /// the engine's name) or was created but never started (reported by its kick-start task).
   /// </exception>
-  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName)
+  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
   {
     if (!IsRegistered(engineName))
       throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
     EngineTaskNotReadyException notStarted = null;
     try
     {
-      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix).ConfigureAwait(false);
+      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix, token).ConfigureAwait(false);
     }
     catch (EngineTaskNotReadyException ex)
     {
@@ -325,7 +329,7 @@ public partial class MechanicEngine : BaseEngine
     // Not created: the creation task says why.
     if (!_engines.TryGetValue(engineName, out var engine))
     {
-      await EnsureTaskReadyAsync(engineName).ConfigureAwait(false);
+      await EnsureTaskReadyAsync(engineName, token).ConfigureAwait(false);
       throw notStarted ?? new EngineTaskNotReadyException(engineName, EngineTaskState.Failed, "The engine was not created.");
     }
 
@@ -333,7 +337,7 @@ public partial class MechanicEngine : BaseEngine
     // and then faulted has its tasks, and the task (or an unknown name) answers for itself.
     if (notStarted != null && engine is BaseEngine { Tasks.Count: 0 })
       throw notStarted;
-    await engine.EnsureTaskReadyAsync(taskName).ConfigureAwait(false);
+    await engine.EnsureTaskReadyAsync(taskName, token).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -352,9 +356,6 @@ public partial class MechanicEngine : BaseEngine
       else
         return null;
 
-    // The engine is created by its creation task, which may not have run yet on a freshly started mechanic:
-    // StartAsync returns once the tasks have been fired, not once they have run. Its kick-start task exists as
-    // soon as the mechanic's tasks are set up, so that is what decides whether the engine is unknown.
     var kickStartTaskName = name + EngineKickStartTask.PostFix;
 
     if (_engines.TryGetValue(name, out var engine))
@@ -369,6 +370,8 @@ public partial class MechanicEngine : BaseEngine
         return null;
     }
 
+    // The engine is created by its creation task, which may not have run yet on a freshly started mechanic:
+    // StartAsync returns once the tasks have been fired, not once they have run.
     // We must await the engine to be created, get ready, kick-started and all, including for all its dependencies.
     // The kick-start task depends on the creation task, so this also waits for the engine to exist.
     await EnsureReadyAsync(kickStartTaskName).ConfigureAwait(false);
