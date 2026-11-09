@@ -639,11 +639,12 @@ public abstract partial class BaseEngine : IEngine
     // Fire Start on all tasks:
     // Tasks without dependencies will go straight to Running.
     // Tasks with dependencies will go to WaitingForDependencies.
+    // Each task's state is read once: a task that a dependency starts in the meantime (Created to Running) was once
+    // looked at twice, found started the second time, and reset, so its work ran again. A task that leaves Created
+    // between this look and the trigger ignores the Start.
     var startTasks = tasks
-        .Where(t => !t.IsStarted && t.State != EngineTaskState.Cancelled)
-        .Select(t => t.FireAsync(t.State == EngineTaskState.Created
-          ? EngineTaskTrigger.Start
-          : EngineTaskTrigger.Reset))
+        .Where(t => t.State == EngineTaskState.Created)
+        .Select(t => t.FireAsync(EngineTaskTrigger.Start))
         .ToArray();
     LogFiringStartTriggers();
     return Task.WhenAll(startTasks);
