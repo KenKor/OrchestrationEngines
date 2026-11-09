@@ -639,11 +639,12 @@ public abstract partial class BaseEngine : IEngine
     // Fire Start on all tasks:
     // Tasks without dependencies will go straight to Running.
     // Tasks with dependencies will go to WaitingForDependencies.
+    // Fix (StartTriggerTest): each task's state is read once. Read twice, a task that a dependency started in between
+    // (Created to Running) was reset, and its work ran again. A task that leaves Created between this read and the
+    // trigger ignores the Start, in whatever state it has reached.
     var startTasks = tasks
-        .Where(t => !t.IsStarted && t.State != EngineTaskState.Cancelled)
-        .Select(t => t.FireAsync(t.State == EngineTaskState.Created
-          ? EngineTaskTrigger.Start
-          : EngineTaskTrigger.Reset))
+        .Where(t => t.State == EngineTaskState.Created)
+        .Select(t => t.FireAsync(EngineTaskTrigger.Start))
         .ToArray();
     LogFiringStartTriggers();
     return Task.WhenAll(startTasks);
@@ -684,7 +685,7 @@ public abstract partial class BaseEngine : IEngine
     var notStarted = resetTasks.Where(t => t.State == EngineTaskState.Created).ToArray();
     LogFiringResetTriggers();
     await Task.WhenAll(resetTasks.Except(notStarted).Select(t => t.FireAsync(EngineTaskTrigger.Reset))).ConfigureAwait(false);
-    await Task.WhenAll(notStarted.Select(t => t.FireAsync(EngineTaskTrigger.Start))).ConfigureAwait(false);
+    await TriggerStartCoreAsync(notStarted).ConfigureAwait(false);
     if (!startAgain)
       return;
 

@@ -737,6 +737,10 @@ public partial class EngineTask
     // Running
     // ---------------------------
     machine.Configure(EngineTaskState.Running)
+        // A start that found the task Created can fire Start after a dependency has started it (see
+        // BaseEngine.TriggerStartCoreAsync): benign, like a Start on a failed task. Likewise in Recovering and
+        // CompletedWithSuccess. Without these it was logged as an "Unhandled trigger" warning.
+        .Ignore(EngineTaskTrigger.Start)
         .OnEntry(StartCallTimer)
         .OnExit(StopCallTimer)
 
@@ -788,6 +792,7 @@ public partial class EngineTask
     // Recovering
     // ---------------------------
     machine.Configure(EngineTaskState.Recovering)
+        .Ignore(EngineTaskTrigger.Start)
         // Tell why the task recovers: FailReason is only for a task that ended failed, so without this a recovering
         // task shows its last progress message and the error is only in the log.
         .OnEntryFrom(_failTriggerWithReason, reason => StateMessage = $"Recovering after an error: {reason}")
@@ -848,6 +853,7 @@ public partial class EngineTask
     // CompletedWithSuccess (terminal)
     // ---------------------------
     machine.Configure(EngineTaskState.CompletedWithSuccess)
+        .Ignore(EngineTaskTrigger.Start)
         .OnEntry(() =>
         {
 #if DEBUG
