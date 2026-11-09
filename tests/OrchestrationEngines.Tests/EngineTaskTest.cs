@@ -30,8 +30,9 @@ public class EngineTaskTest
 
   private sealed class TestTaskException(EngineTask et) : EngineTaskException(et, "The task cannot go on.");
 
-  private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null) =>
-    new(name, workAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None, clock);
+  private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null,
+    CancellationToken engineToken = default) =>
+    new(name, workAsync, requiredForRunning: true, NullLogger.Instance, engineToken, clock);
 
   private static async Task RunToEndAsync(EngineTask task)
   {
@@ -172,22 +173,43 @@ public class EngineTaskTest
   }
 
   /// <summary>
-  /// Verifies that stopping a task that has a time-out while its synchronous work runs ends it in Cancelled, not in
-  /// TimedOut: the stop cancels the time-out's wait, which is not the time running out.
+  /// Verifies that a task with a time-out whose engine is stopped before the time-out passes ends Cancelled, not
+  /// TimedOut: whether its work ignores the token (and goes on) or honours it.
   /// </summary>
-  [Fact]
-  public async Task EngineTask_StoppedDuringTimedWork_EndsInCancelledNotTimedOut()
+  /// <remarks>
+  /// The stop cancels the time-out's delay too. The work ends only once the test has checked the task, so the cancelled
+  /// delay always finishes the race first, and the guard that tells a stop from a time-out is what decides the state.
+  /// Work that ended first would be reported as cancelled on its own, guard or not.
+  /// </remarks>
+  /// <param name="workHonoursToken">Whether the work observes its token (and ends cancelled), or ignores it.</param>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task EngineTask_WithTimeOut_EngineStoppedBeforeIt_EndsCancelledNotTimedOut(bool workHonoursToken)
   {
     var clock = new ManualTimeProvider();
     using var engineStop = new CancellationTokenSource();
     using var workGate = new ManualResetEventSlim();
     try
     {
-      var task = new EngineTask("Load", _ =>
+      var task = NewTask("Load", async token =>
       {
-        workGate.Wait(MustComplete);
-        return Task.CompletedTask;
-      }, requiredForRunning: true, NullLogger.Instance, engineStop.Token, clock).SetTimeOut(TimeSpan.FromMinutes(90));
+        if (!workHonoursToken)
+        {
+          // Synchronous work, as task bodies often are.
+          workGate.Wait(MustComplete);
+          return;
+        }
+        try
+        {
+          await Task.Delay(Timeout.Infinite, token);
+        }
+        catch (OperationCanceledException)
+        {
+          workGate.Wait(MustComplete);
+          throw;
+        }
+      }, clock, engineStop.Token).SetTimeOut(TimeSpan.FromMinutes(90));
       await task.FireAsync(EngineTaskTrigger.Start);
       await WaitUntilAsync(() => clock.WaitingTimers == 1, "the time-out must run while the work does");
 
