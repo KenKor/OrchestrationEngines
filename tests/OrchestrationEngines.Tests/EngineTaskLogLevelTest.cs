@@ -27,7 +27,7 @@ public class EngineTaskLogLevelTest
   private static EngineTask NewTask(string name, Func<CancellationToken, Task> work, ILogger logger) =>
     new(name, work, requiredForRunning: true, logger, CancellationToken.None);
 
-  private static async Task RunAsync(EngineTask task)
+  private static async Task RunToEndAsync(EngineTask task)
   {
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -102,19 +102,20 @@ public class EngineTaskLogLevelTest
       MaxBackoff = TimeSpan.Zero,
     });
 
-    await RunAsync(task);
+    await RunToEndAsync(task);
 
     task.State.Should().Be(EngineTaskState.RecoveryFailed);
     task.FailReason.Should().StartWith("Restart limit exceeded for Root.").And.EndWith("(Recovering after an error: No data.)");
     var errors = logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).ToList();
     errors.Should().ContainSingle(r => r.Message.Contains("Restart limit exceeded"))
       .Which.Message.Should().Contain("(Recovering after an error: No data.)");
-    errors.Should().OnlyContain(r => r.Message.Contains("Restart limit exceeded") || r.Message == "Root: Exception: 'No data.'.",
-      "each failed attempt is one error, and so is the policy giving up");
+    errors.Should().HaveCount(3, "each failed attempt is one error (the first run and the one restart), and so is the policy giving up");
+    errors.Where(r => r.Message == "Root: Exception: 'No data.'.").Should().HaveCount(2);
   }
 
   /// <summary>
-  /// Verifies that a cancelled task logs a warning and no error, and that the task depending on it logs at Debug.
+  /// Verifies that a cancelled task logs one warning and no error, and that the task depending on it, cancelled too,
+  /// logs its own Cancelled warning.
   /// </summary>
   [Fact]
   public async Task CancelledTask_LogsNoError()
@@ -127,7 +128,7 @@ public class EngineTaskLogLevelTest
     await root.FireAsync(EngineTaskTrigger.Start);
     await Task.WhenAll(root.InnerTask, dependent.InnerTask)
       .WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-    // The task completes on entry into Failed, just before the Cancelled substate logs its warning.
+    // Both warnings are logged before the tasks complete; give a late trigger a moment to log anything it would.
     await Task.Delay(100, TestContext.Current.CancellationToken);
 
     root.State.Should().Be(EngineTaskState.Cancelled);
@@ -135,6 +136,8 @@ public class EngineTaskLogLevelTest
     records.Should().NotContain(r => r.Level == LogLevel.Error);
     records.Where(r => r.Level == LogLevel.Warning && r.Message.StartsWith("Root: ")).Should()
       .ContainSingle("the Cancelled line is the one warning").Which.Message.Should().StartWith("Root: Cancelled. Reason: ");
+    records.Where(r => r.Level == LogLevel.Warning && r.Message.StartsWith("Dependent: ")).Should()
+      .ContainSingle().Which.Message.Should().StartWith("Dependent: Cancelled. Reason: ");
   }
 
   /// <summary>
@@ -147,7 +150,7 @@ public class EngineTaskLogLevelTest
     var task = NewTask("Root", token => Task.Delay(Timeout.Infinite, token), logger)
       .SetTimeOut(TimeSpan.FromMilliseconds(50));
 
-    await RunAsync(task);
+    await RunToEndAsync(task);
 
     task.State.Should().Be(EngineTaskState.TimedOut);
     logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).Should().ContainSingle()
@@ -164,7 +167,7 @@ public class EngineTaskLogLevelTest
     var logger = new FakeLogger();
     var task = NewTask("Root", Succeeds, logger);
 
-    await RunAsync(task);
+    await RunToEndAsync(task);
 
     var records = logger.Collector.GetSnapshot();
     records.Should().NotContain(r => r.Level >= LogLevel.Information);
