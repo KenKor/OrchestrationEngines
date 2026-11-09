@@ -178,11 +178,6 @@ public partial class EngineTask
   public TimeSpan? Timeout { get; set; } = null;
 
   /// <summary>
-  /// The memory usage when the task finished.
-  /// </summary>
-  internal long MemoryUsage { get; set; }
-
-  /// <summary>
   /// Fluent configuration helper for timeout.
   /// </summary>
   public EngineTask SetTimeOut(TimeSpan timeOutMilliseconds)
@@ -957,15 +952,12 @@ public partial class EngineTask
   /// <summary>Starts measuring the current task run.</summary>
   protected virtual void StartCallTimer() => RunStartedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
 
-  /// <summary>Stops measuring the current task run and captures memory usage.</summary>
-  protected virtual void StopCallTimer()
-  {
-    RunEndedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
-    MemoryUsage = System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64;
-  }
-
-  /// <summary>Returns the captured memory usage as a formatted string.</summary>
-  public string GetMemoryUsageString() => $"{MemoryUsage:#,##0,, Mb}";
+  /// <summary>Stops measuring the current task run.</summary>
+  /// <remarks>
+  /// Runs as the exit action of Running, under the trigger lock, before the state changes: it must not throw or block,
+  /// or the task could never leave Running.
+  /// </remarks>
+  protected virtual void StopCallTimer() => RunEndedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
 
   // ---------------------------
   // Terminal state handling
