@@ -603,6 +603,18 @@ public partial class EngineTask
   }
 
   /// <summary>
+  /// Replaces the state machine with a new one in Created, on a reset. Under the init lock, like the lazy creation, so
+  /// the machine and CreateStateMachine's side effects (the parameterized-trigger fields) are replaced together; and
+  /// published with a fence, so a reader of <see cref="State"/> without a lock sees either the old machine or the new
+  /// one, fully built.
+  /// </summary>
+  private void ReplaceStateMachine()
+  {
+    lock (_machineInitLock)
+      Volatile.Write(ref _machine, CreateStateMachine());
+  }
+
+  /// <summary>
   /// Adds a dependency edge: this task depends on <paramref name="parent"/>.
   /// </summary>
   /// <remarks>
@@ -1179,7 +1191,7 @@ public partial class EngineTask
     try
     {
       await OnResetEnteredAsync().ConfigureAwait(false);
-      _machine = CreateStateMachine();
+      ReplaceStateMachine();
     }
     finally
     {
