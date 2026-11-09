@@ -267,7 +267,7 @@ public class ResetTasksTest
   /// one and stay failed.
   /// </summary>
   [Fact]
-  public async Task BaseEngine_ResetTasksAsync_StartDuringTheReset_WaitsForTheWholeBatch()
+  public async Task BaseEngine_ResetTasksAsync_StartDuringTheReset_WaitsForTheDependencysNextRun()
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = new GraphEngine(T("A"), T("B", "A"))
@@ -296,7 +296,7 @@ public class ResetTasksTest
 
   /// <summary>
   /// Verifies that a dependency's run that ends during the reset does not start a dependent of the set: A's first run
-  /// ignores its token and completes as B's reset begins. B must run once, after A's next run, not on the run that was
+  /// ignores its token and completes during B's reset. B must run once, after A's next run, not on the run that was
   /// reset.
   /// </summary>
   [Fact]
@@ -330,12 +330,8 @@ public class ResetTasksTest
     await aRunning.Task.WaitAsync(MustComplete, ct);
     engine.OnReset = name =>
     {
-      // A's reset takes its time: if B could be started meanwhile, the old run's outcome would start it.
       if (name == "A")
-      {
-        Thread.Sleep(200);
         return;
-      }
       release.TrySetResult();
       // Give the old run the time to complete and report it.
       SpinWait.SpinUntil(() => Volatile.Read(ref aCompleted) > 0, MustComplete);
@@ -347,6 +343,76 @@ public class ResetTasksTest
 
     engine.Tasks["B"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
     aCompletedWhenBRan.Should().Equal([2], "B runs once, after A's next run");
+  }
+
+  /// <summary>
+  /// Verifies that a task of the set waiting for a dependency outside the set does not start on its cancelled token
+  /// when that dependency completes during the reset: B (on A and X) is reset with X, and A completes during X's
+  /// reset. B must run after the reset, and C, outside the set and waiting for B, after it.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_DependencyOutsideTheSetCompletesDuringTheReset_DoesNotCancelTheTask()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = new GraphEngine(T("A"), T("X"), T("B", "A", "X"), T("C", "B"))
+    {
+      Work = (name, _, _) => name == "A" ? release.Task : Task.CompletedTask,
+    };
+    await engine.StartAsync();
+    await engine.TriggerStartAsync();
+    SpinWait.SpinUntil(() => engine.Tasks["X"].State == EngineTaskState.CompletedWithSuccess, MustComplete)
+      .Should().BeTrue();
+    engine.Tasks["B"].State.Should().Be(EngineTaskState.WaitingForDependencies);
+    engine.OnReset = name =>
+    {
+      if (name != "X")
+        return;
+      release.TrySetResult();
+      SpinWait.SpinUntil(() => engine.Tasks["A"].State == EngineTaskState.CompletedWithSuccess, MustComplete);
+      // Give A's callback the time to reach B.
+      Thread.Sleep(50);
+    };
+
+    await engine.ResetTasksAsync(["X", "B"], resetDependentTasks: false).WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.Tasks.Values.Should().OnlyContain(t => t.State == EngineTaskState.CompletedWithSuccess);
+    new[] { engine.Runs("A"), engine.Runs("X"), engine.Runs("B"), engine.Runs("C") }.Should().Equal(1, 2, 1, 1);
+    engine.State.Should().Be(EngineState.Ready);
+  }
+
+  /// <summary>
+  /// Verifies that a running task whose reset throws is cancelled rather than left running for good: its run was ended
+  /// before the reset, so it would never report an outcome, and its waiters would wait forever.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_RunningTasksResetThrows_CancelsIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = new GraphEngine(T("A"), T("B", "A"))
+    {
+      // B's first run ignores its token.
+      Work = (name, run, _) => name == "B" && run == 1 ? release.Task : Task.CompletedTask,
+    };
+    await engine.StartAsync();
+    await engine.TriggerStartAsync();
+    SpinWait.SpinUntil(() => engine.Tasks["B"].State == EngineTaskState.Running, MustComplete).Should().BeTrue();
+    engine.OnReset = name =>
+    {
+      if (name == "B")
+        throw new InvalidOperationException("B's reset failed.");
+    };
+
+    var act = () => engine.ResetTasksAsync(["A"], resetDependentTasks: true);
+
+    (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("B's reset failed.");
+    var notReady = await Assert.ThrowsAsync<EngineTaskNotReadyException>(
+      () => engine.EnsureTaskReadyAsync("B", ct).WaitAsync(MustComplete, ct));
+    notReady.State.Should().Be(EngineTaskState.Cancelled);
+    notReady.FailReason.Should().Contain("B's reset failed.");
+    release.TrySetResult();
   }
 
   /// <summary>

@@ -724,8 +724,9 @@ public abstract partial class BaseEngine : IEngine
   /// <para>
   /// The set is reset in two passes (see <see cref="ResetInTwoPassesAsync"/>): first every task's current run is ended,
   /// dependents before the tasks they depend on; then the tasks go back to Created, dependencies first. So no dependent
-  /// goes on running on a dependency that is being reset, and no task of the set can start (by a caller, or by a
-  /// dependency's old run completing) on a dependency of the set that is still to be reset.
+  /// goes on running on a dependency that is being reset, and no started task of the set can start again (by a caller,
+  /// or by a dependency's run completing) on a dependency of the set that is still to be reset. A task of the set that
+  /// is still Created is only started after the passes.
   /// </para>
   /// </remarks>
   /// <param name="tasks">The tasks.</param>
@@ -776,8 +777,8 @@ public abstract partial class BaseEngine : IEngine
   /// depends on one of them, directly or not; then starts them again, as <see cref="TriggerResetAsync"/> does.
   /// </summary>
   /// <remarks>
-  /// The runs of dependents are ended before those of the tasks they depend on, and no task of the set starts on a
-  /// dependency of the set that is still to be reset (see <see cref="TriggerResetAsync"/>). A task named twice or
+  /// The runs of dependents are ended before those of the tasks they depend on, and no started task of the set starts
+  /// again on a dependency of the set that is still to be reset (see <see cref="TriggerResetAsync"/>). A task named twice or
   /// reached twice is reset once. A reset ends the current run: its outcome is dropped and its token cancelled; it does
   /// not wait for the work to end, so work that ignores its token goes on until it checks. While a restart is prepared nothing is reset, as with
   /// <see cref="TriggerResetAsync"/>: the set is about to be replaced.
@@ -896,15 +897,17 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   /// <remarks>
   /// <para>
-  /// The first pass leaves the states as they are, so nothing can start a task yet, and drops each run's outcome, so a
-  /// dependency's old run cannot complete or fail a dependent. A dependent whose run ended after its dependency's would
-  /// go on running, until then, on a dependency that was reset under it.
+  /// The first pass leaves the states as they are and drops each run's outcome. Until its reset, a task whose run was
+  /// ended also ignores its dependencies' outcomes, so neither a dependency's old run nor one outside the set can start
+  /// it (on its cancelled token) or fail it. A dependent whose run ended after its dependency's would go on running,
+  /// until then, on a dependency that was reset under it.
   /// </para>
   ///
   /// <para>
   /// In the second pass a task goes back to Created only once the tasks of the set it depends on have. So whatever starts
-  /// it (a caller, or a dependency's new run completing) waits for those dependencies' next run. A failed reset is
-  /// reported once every level has been reset: the other tasks are reset anyway.
+  /// it (a caller, or a dependency's new run completing) waits for those dependencies' next run. A task whose reset
+  /// throws is cancelled, so whoever waits on it is released; the failure is reported once every level has been reset:
+  /// the other tasks are reset anyway.
   /// </para>
   /// </remarks>
   private static async Task ResetInTwoPassesAsync(List<List<EngineTask>> levels)

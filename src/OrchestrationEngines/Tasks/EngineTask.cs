@@ -72,6 +72,12 @@ public partial class EngineTask
   private bool _suppressDependencyCallbacks;
 
   /// <summary>
+  /// Set by <see cref="EndRunAsync"/> until the task is reset: a dependency completing or failing meanwhile is ignored,
+  /// since the task would otherwise start on the token that was cancelled. Read and written under the trigger lock.
+  /// </summary>
+  private bool _runEnded;
+
+  /// <summary>
   /// Enables or disables dependency callback suppression.
   /// </summary>
   internal void SetDependencyCallbackSuppression(bool suppress)
@@ -686,7 +692,7 @@ public partial class EngineTask
 
       try
       {
-        await FireAsync(EngineTaskTrigger.CompleteDependency).ConfigureAwait(false);
+        await FireDependencyTriggerAsync(EngineTaskTrigger.CompleteDependency).ConfigureAwait(false);
       }
       catch (Exception ex)
       {
@@ -703,7 +709,7 @@ public partial class EngineTask
       try
       {
         // The reason is taken from the failed dependency on entry into DependencyFailed (see DependencyFailReason).
-        await FireAsync(EngineTaskTrigger.FailDependency).ConfigureAwait(false);
+        await FireDependencyTriggerAsync(EngineTaskTrigger.FailDependency).ConfigureAwait(false);
       }
       catch (Exception ex)
       {
@@ -712,6 +718,25 @@ public partial class EngineTask
     };
 
     return this;
+  }
+
+  /// <summary>
+  /// Fires a dependency's outcome, unless <see cref="EndRunAsync"/> ended this task's run and it is not reset yet: it
+  /// starts again from Created after the reset, which looks at its dependencies then.
+  /// </summary>
+  private async Task FireDependencyTriggerAsync(EngineTaskTrigger trigger)
+  {
+    await _triggerLock.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      if (_runEnded)
+        return;
+      await StateMachine.FireAsync(trigger).ConfigureAwait(false);
+    }
+    finally
+    {
+      _triggerLock.Release();
+    }
   }
 
   /// <summary>
@@ -1237,8 +1262,9 @@ public partial class EngineTask
 
   /// <summary>
   /// Ends the current run (work or recovery) without changing the state, ahead of a reset: its outcome is dropped and
-  /// its token cancelled, as a reset does, but the task keeps its state until it is reset, so nothing starts it
-  /// meanwhile. See BaseEngine's two-pass reset.
+  /// its token cancelled, as a reset does, but the task keeps its state until it is reset. Until then it ignores its
+  /// dependencies' outcomes, so a task waiting for its dependencies does not start on the cancelled token. See
+  /// BaseEngine's two-pass reset.
   /// </summary>
   internal async Task EndRunAsync()
   {
@@ -1248,6 +1274,7 @@ public partial class EngineTask
       // Under the trigger lock: an outcome fired after this is not the current run's (see FireIfCurrentAsync).
       Interlocked.Increment(ref _runGeneration);
       RequestCancellation();
+      _runEnded = true;
     }
     finally
     {
@@ -1260,8 +1287,25 @@ public partial class EngineTask
     await _triggerLock.WaitAsync().ConfigureAwait(false);
     try
     {
-      await OnResetEnteredAsync().ConfigureAwait(false);
+      try
+      {
+        await OnResetEnteredAsync().ConfigureAwait(false);
+      }
+      catch (Exception ex) when (_runEnded)
+      {
+        // EndRunAsync dropped the run's outcome, so a task left in its state would never end, and whoever waits on it
+        // would wait for good. End it Cancelled, as CancelAsync does; a later reset picks it up.
+        if (!State.IsCompleted())
+        {
+          Interlocked.Increment(ref _runGeneration);
+          RequestCancellation();
+          FailReason = $"Cancelled because its reset failed: {ex.Message}";
+          await StateMachine.FireAsync(EngineTaskTrigger.Cancel).ConfigureAwait(false);
+        }
+        throw;
+      }
       ReplaceStateMachine();
+      _runEnded = false;
     }
     finally
     {
