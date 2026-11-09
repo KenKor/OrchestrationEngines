@@ -965,9 +965,8 @@ public partial class EngineTask
         .Ignore(EngineTaskTrigger.CompleteDependency)
         .Permit(EngineTaskTrigger.Reset, EngineTaskState.Created);
 
-    // Unhandled triggers are treated as warnings rather than exceptions. This MUST be registered in ALL builds
-    // (it was previously Debug-only, so Release fell back to Stateless's default action, which THROWS — crashing
-    // the whole engine drive on a benign race such as a late CompleteDependency).
+    // Unhandled triggers are treated as warnings rather than exceptions: Stateless's default action THROWS, which would
+    // crash the whole engine drive on a benign race such as a late CompleteDependency.
     machine.OnUnhandledTrigger((state, trigger) =>
     {
       LogUnhandledTrigger(Logger, trigger, state);
@@ -1076,8 +1075,8 @@ public partial class EngineTask
     WasCancelled = cancelled;
     if (cancelled)
       LogEnteredCancelled(Logger, FailReason);
-    // The cause of the failure was logged as the error where it was caught (the work's or the recovery's exception, the
-    // time-out); entering the state is Debug, so one failure is one error. The state is the destination already:
+    // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, the
+    // time-out); entering the state is Debug, so a failure is not an error twice. The state is the destination already:
     // Stateless sets it before it runs the entry actions.
     else if (State == EngineTaskState.DependencyFailed)
       LogEnteredDependencyFailed(Logger, FailReason);
