@@ -538,7 +538,7 @@ public partial class MechanicEngine : BaseEngine
   /// <para>
   /// Each engine is stopped once every engine that depends on it (by its descriptor's
   /// <see cref="EngineDescriptor.DependsOn"/>) has been stopped, and not before; engines that do not depend on each
-  /// other are not ordered, so independent engines stop together and no engine waits for one it has nothing to do with.
+  /// other, directly or through other engines, are not ordered, so independent engines stop together and no engine waits for one it has nothing to do with.
   /// "Stopped" means the dependent's <see cref="IEngine.StopAsync"/> has returned: work that ignores its token may still
   /// be running then.
   /// </para>
@@ -565,23 +565,22 @@ public partial class MechanicEngine : BaseEngine
   /// <see cref="StopAsync"/>).
   /// </summary>
   /// <remarks>
-  /// Dependencies come from the mechanic context's descriptors; an engine without one, or a dependency on an engine
-  /// that is not registered, orders nothing. The descriptors are checked for cycles when the mechanic starts; should
+  /// Dependencies come from the mechanic context's descriptors: an engine without one has no dependencies of its own
+  /// (it still waits for engines whose descriptors depend on it), and a dependency on an engine that is not registered
+  /// is ignored. Cycles are rejected when the mechanic wires its tasks (<see cref="EngineTask.AddDependsOn"/>); should
   /// one remain anyway, the edge that closes it is not waited for, so every engine still stops.
   /// </remarks>
   /// <param name="failures">Receives each failure to stop, in the order they occur.</param>
   private Task[] StopDependentsFirst(ConcurrentQueue<Exception> failures)
   {
-    var engines = new Dictionary<string, IEngine>(StringComparer.OrdinalIgnoreCase);
-    foreach (var engine in _engines)
-      engines[engine.Key] = engine.Value;
+    var engines = _engines.ToDictionary(e => e.Key, e => e.Value, StringComparer.OrdinalIgnoreCase);
     // For each registered engine, the registered engines that depend on it.
     var dependents = engines.Keys.ToDictionary(name => name, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
       StringComparer.OrdinalIgnoreCase);
     if (Context is MechanicContext mc)
       foreach (var descriptor in mc.EngineDescriptors.Where(d => d.Name != null && engines.ContainsKey(d.Name)))
         foreach (var parent in descriptor.DependsOn)
-          if (dependents.TryGetValue(parent, out var ofParent))
+          if (parent != null && dependents.TryGetValue(parent, out var ofParent))
             ofParent.Add(descriptor.Name);
 
     var stops = new Dictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
@@ -602,21 +601,36 @@ public partial class MechanicEngine : BaseEngine
   }
 
   /// <summary>
-  /// Stops <paramref name="engine"/> once <paramref name="first"/> have ended; a failure is logged and queued, not
+  /// Stops <paramref name="engine"/> once <paramref name="first"/> have ended; a failure is queued and logged, not
   /// thrown, so whatever waits for this stop goes on.
   /// </summary>
   private async Task StopAfterAsync(string name, IEngine engine, Task[] first, ConcurrentQueue<Exception> failures)
   {
-    // These never fault: each catches its own failure.
-    await Task.WhenAll(first).ConfigureAwait(false);
+    try
+    {
+      await Task.WhenAll(first).ConfigureAwait(false);
+    }
+    catch
+    {
+      // Not expected (each queues its own failure); the engine is stopped all the same.
+    }
+
     try
     {
       await engine.StopAsync().ConfigureAwait(false);
     }
     catch (Exception ex)
     {
-      LogEngineFailedToStop(Logger, ex, name);
+      // Queued before it is logged: a logging provider that throws must not lose the failure or end this stop.
       failures.Enqueue(ex);
+      try
+      {
+        LogEngineFailedToStop(Logger, ex, name);
+      }
+      catch
+      {
+        // The failure is rethrown by StopAsync.
+      }
     }
   }
 

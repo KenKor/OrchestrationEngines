@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
@@ -30,9 +30,9 @@ public class StopOrderTest
 
     public Exception StopFailure { get; init; }
 
-    private volatile bool _stopped;
+    public TaskCompletionSource StopCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public bool Stopped => _stopped;
+    public bool Stopped => StopCompleted.Task.IsCompleted;
 
     protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
 
@@ -44,12 +44,29 @@ public class StopOrderTest
       if (StopFailure != null)
         throw StopFailure;
       await base.StopAsync().ConfigureAwait(false);
-      _stopped = true;
+      StopCompleted.TrySetResult();
     }
   }
 
-  private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(StopOrderTest), NullLogger.Instance, useDispatcher: false);
+  /// <summary>
+  /// A logger whose provider throws on the log line of a failed stop.
+  /// </summary>
+  private sealed class ThrowingOnStopFailureLogger : ILogger
+  {
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception,
+      Func<TState, Exception, string> formatter)
+    {
+      if (formatter(state, exception).Contains("failed to stop"))
+        throw new InvalidOperationException("The logging provider failed.");
+    }
+  }
+
+  private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
+    new(nameof(StopOrderTest), logger ?? NullLogger.Instance, useDispatcher: false);
 
   private static EngineDescriptor Register(EngineCoordinator coordinator, RecordingEngine engine, string name) =>
     coordinator.RegisterEngine(name, _ => Task.FromResult<IEngine>(engine))
@@ -142,6 +159,31 @@ public class StopOrderTest
   }
 
   /// <summary>
+  /// Verifies that a logger that throws on the failed stop's log line neither keeps the dependency running nor hides
+  /// the stop's failure.
+  /// </summary>
+  [Fact]
+  public async Task Shutdown_DependentThrowsOnStopAndTheLoggerThrows_StillStopsItsDependency()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    var failure = new InvalidOperationException("stop failed");
+    var a = new RecordingEngine("A", stops);
+    var b = new RecordingEngine("B", stops) { StopFailure = failure };
+    a.Gate.SetResult();
+    b.Gate.SetResult();
+    var coordinator = CreateCoordinator(new ThrowingOnStopFailureLogger());
+    Register(coordinator, a, "A");
+    Register(coordinator, b, "B").AddDependsOn("A");
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var shutdown = () => coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    (await shutdown.Should().ThrowAsync<InvalidOperationException>()).Which.Should().BeSameAs(failure);
+    a.Stopped.Should().BeTrue();
+  }
+
+  /// <summary>
   /// Verifies a diamond (B and C depend on A, D on both): D first, then B and C together, then A once both have stopped.
   /// </summary>
   [Fact]
@@ -199,8 +241,7 @@ public class StopOrderTest
     var shutdown = coordinator.ShutdownAsync(ct);
     try
     {
-      await a.StopEntered.Task.WaitAsync(MustComplete, ct);
-      await WaitUntilAsync(() => a.Stopped, ct);
+      await a.StopCompleted.Task.WaitAsync(MustComplete, ct);
       b.Stopped.Should().BeTrue();
       slow.Stopped.Should().BeFalse();
     }
@@ -209,15 +250,5 @@ public class StopOrderTest
       slow.Gate.TrySetResult();
     }
     await shutdown.WaitAsync(MustComplete, ct);
-  }
-
-  private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken ct)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, "the condition must become true");
-      await Task.Delay(10, ct);
-    }
   }
 }
