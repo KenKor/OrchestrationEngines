@@ -202,7 +202,8 @@ Descriptors define _topology_, not behavior.
 They are collected before startup and remain fixed for the lifetime of a run.
 
 Engine and task names are case-insensitive everywhere: in dependencies, lookups, context refreshes and definition
-diffs. `AsBuilt` and `asbuilt` are the same engine.
+diffs. `AsBuilt` and `asbuilt` are the same engine. An engine refuses a second task under a name it already uses
+(`Load` and `load` included): `CreateTask` throws an `ArgumentException`, and during a set-up the start fails.
 
 ---
 

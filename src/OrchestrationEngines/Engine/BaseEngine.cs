@@ -72,7 +72,7 @@ public abstract partial class BaseEngine : IEngine
   private static Dictionary<string, EngineTask> NewTaskSet() => new(StringComparer.OrdinalIgnoreCase);
 
   private static Dictionary<string, EngineTask> NewTaskSet(Dictionary<string, EngineTask> copyOf, string name, EngineTask task) =>
-    new(copyOf, StringComparer.OrdinalIgnoreCase) { [name] = task };
+    new(copyOf, StringComparer.OrdinalIgnoreCase) { { name, task } };
 
   /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
@@ -933,10 +933,13 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="workAsync">Worker that defines the execution of the task.</param>
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
-  /// <returns></returns>
+  /// <returns>The task.</returns>
+  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case);
+  /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Func<CancellationToken, Task> workAsync,
       bool requiredForRunning = true)
   {
+    CheckNameFree(name);
     var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _linkedCts.Token, TimeProvider);
     return AddTask(name, task);
   }
@@ -949,26 +952,55 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="workAsync">Worker that defines the execution of the task.</param>
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
-  /// <returns></returns>
+  /// <returns>The task.</returns>
+  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case);
+  /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Action<CancellationToken> workAsync, bool requiredForRunning = true)
   {
+    CheckNameFree(name);
     var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _linkedCts.Token, TimeProvider);
     return AddTask(name, task);
   }
 
   /// <summary>
+  /// Throws if the engine already has a task named <paramref name="name"/> (ignoring case): in the set being built during
+  /// a set-up, or in the current set after it. Called under <see cref="_taskSetChange"/>.
+  /// </summary>
+  private void ThrowIfNameInUse(string name)
+  {
+    if ((_buildingTaskSet ?? _taskSet).TryGetValue(name, out var existing))
+      throw new ArgumentException($"Engine '{EngineName}' already has a task named '{existing.Name}', so '{name}' cannot be added (task names ignore case).", nameof(name));
+  }
+
+  /// <summary>
+  /// Refuses a name already in use before a task is built for it, so a refused task holds no token registration.
+  /// <see cref="AddTask"/> checks again, as the one that counts.
+  /// </summary>
+  private void CheckNameFree(string name)
+  {
+    lock (_taskSetChange)
+    {
+      ThrowIfNameInUse(name);
+    }
+  }
+
+  /// <summary>
   /// Adds a task that this engine maintains.
   /// </summary>
-  /// <param name="name"></param>
-  /// <param name="task"></param>
-  /// <returns></returns>
+  /// <param name="name">Name the task is identified by; names ignore case.</param>
+  /// <param name="task">The task.</param>
+  /// <returns>The task.</returns>
+  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case),
+  /// in the set being built during a set-up, or in the current set after it. The set is left unchanged: putting the
+  /// task in place of the existing one would leave that one wired as a dependency but never started.</exception>
   protected EngineTask AddTask(string name, EngineTask task)
   {
     lock (_taskSetChange)
     {
+      ThrowIfNameInUse(name);
       if (_buildingTaskSet != null)
       {
-        _buildingTaskSet[name] = task;
+        _buildingTaskSet.Add(name, task);
       }
       else
       {
