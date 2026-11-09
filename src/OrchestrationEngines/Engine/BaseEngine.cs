@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OrchestrationEngines.Helpers;
 using OrchestrationEngines.Logger;
 using OrchestrationEngines.Tasks;
 
@@ -232,7 +233,7 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   protected virtual void RequestCancellation()
   {
-    _linkedCts.Cancel();
+    _linkedCts.CancelBestEffort(Logger);
   }
 
   // ---------------------------------------------------------------------
@@ -265,9 +266,16 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   /// <param name="oldValue">The old value.</param>
   /// <param name="value">The value.</param>
+  /// <remarks>
+  /// Each subscriber is called in turn; one that throws is logged and does not keep the others from the change.
+  /// </remarks>
   protected virtual void OnEngineStatusChanged(EngineState oldValue, EngineState value)
   {
-    EngineStatusChanged?.Invoke(this, new EngineStatusEventArgs(EngineName, value, null));
+    var handlers = EngineStatusChanged;
+    if (handlers == null)
+      return;
+    var args = new EngineStatusEventArgs(EngineName, value, null);
+    handlers.InvokeEach(handler => handler(this, args), ex => LogStatusSubscriberFailed(ex, value));
   }
 
   /// <summary>
@@ -343,6 +351,12 @@ public abstract partial class BaseEngine : IEngine
       try
       {
         OnEngineStatusChanged(change.oldValue, change.newValue);
+      }
+      catch (Exception ex)
+      {
+        // Only an override gets here (the base method catches per subscriber). It must not hold back the changes queued
+        // after this one, nor fail whoever set the state.
+        LogStatusOverrideFailed(ex, change.newValue);
       }
       finally
       {
@@ -922,7 +936,7 @@ public abstract partial class BaseEngine : IEngine
   public void CancelAll()
   {
     LogCancellingAllTasks();
-    _linkedCts.Cancel();
+    _linkedCts.CancelBestEffort(Logger);
   }
 
   /// <summary>
@@ -1194,6 +1208,12 @@ public abstract partial class BaseEngine : IEngine
 
   [LoggerMessage(Level = LogLevel.Warning, Message = "The engine is not started again: {Reason}")]
   private partial void LogRestartAbandoned(string reason);
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "A subscriber to EngineStatusChanged threw on the change to {State}; the other subscribers were still called.")]
+  private partial void LogStatusSubscriberFailed(Exception exception, EngineState state);
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "OnEngineStatusChanged threw on the change to {State}; the change stands and later changes are still published.")]
+  private partial void LogStatusOverrideFailed(Exception exception, EngineState state);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Cancelling all tasks via global token.")]
   private partial void LogCancellingAllTasks();
