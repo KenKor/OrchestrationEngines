@@ -389,7 +389,8 @@ public partial class EngineTask
 
   /// <summary>
   /// Makes cancelling the task's source and disposing it exclusive: a source is flagged cancelled before its callbacks
-  /// run, so a reset or release on another thread could otherwise dispose it while a cancel is still notifying.
+  /// run, so a reset or release on another thread could otherwise dispose it while a cancel is still notifying. It
+  /// covers the task's own cancels (RequestCancellation), not one that comes through the engine's token.
   /// </summary>
   private readonly object _sourceGate = new();
 

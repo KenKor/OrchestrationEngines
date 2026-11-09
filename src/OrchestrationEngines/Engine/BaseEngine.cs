@@ -44,7 +44,9 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Makes cancelling <see cref="_linkedCts"/> and disposing it exclusive: a source is flagged cancelled before its
   /// callbacks run, so without it a stop could dispose the source while another thread's cancel is still notifying, and
-  /// the tasks' sources linked to it would not be cancelled.
+  /// the tasks' sources linked to it would not be cancelled. It covers the cancels this engine makes (CancelAll,
+  /// RequestCancellation), not one that comes through the parent token: that cascade runs without it, and a dispose
+  /// meanwhile waits for the link's callback that is running, not for the callbacks it goes on to call.
   /// </summary>
   private readonly object _sourceGate = new();
 
@@ -508,9 +510,12 @@ public abstract partial class BaseEngine : IEngine
   public virtual Task StartAsync()
   {
     // Stopping is final: a stopped engine is not started again. An engine cancelled other than by StopAsync (its parent
-    // token, CancelAll) has not published Stopped yet: ComputeState says Stopped once the token is cancelled.
+    // token, CancelAll) has not published Stopped yet: ComputeState says Stopped once the token is cancelled. A restart
+    // prepared before the cancel (a reset) is not carried out: it is released first, or the recompute is skipped and
+    // whoever waits for the restart waits until StopAsync.
     if (IsCancellationRequested)
     {
+      CompleteRestart();
       RecomputeStateSynchronized();
       return Task.CompletedTask;
     }
@@ -570,6 +575,8 @@ public abstract partial class BaseEngine : IEngine
       // would have replaced keeps its sources: they are cancelled through the engine's token, and go with the engine.
       if (IsCancellationRequested)
       {
+        // Release the restart first: the recompute is skipped while one is pending.
+        CompleteRestart();
         RecomputeStateSynchronized();
         return;
       }

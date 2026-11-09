@@ -206,6 +206,28 @@ public class EngineLifecycleTokenTest
   }
 
   /// <summary>
+  /// Verifies that an engine whose restart is prepared (a reset of its tasks) and whose parent token is then cancelled
+  /// reports Stopped when it is started, and that a wait for it ends.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_AfterAResetAndAParentCancel_ReportsStopped()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    parent.Cancel();
+
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Stopped);
+    engine.Runs.Should().Be(1);
+  }
+
+  /// <summary>
   /// Verifies that a reset, then another reset and a cancel, never cancel a disposed source.
   /// </summary>
   [Fact]
