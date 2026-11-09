@@ -180,12 +180,14 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <remarks>
   /// <para>
   /// Each lifecycle task gets an enforcer of its own from it (see <see cref="CreateRecoveryHelper"/>). An engine whose
-  /// load fails therefore retries with backoff, staying Starting and logging each attempt, before it reports Faulted
-  /// (how long <see cref="RestartPolicy.Default"/> takes is in the overview, docs/Overview.md).
+  /// load fails is therefore retried with backoff, logging each attempt; between attempts it can report Faulted, which
+  /// is final only once the policy gives up (how long <see cref="RestartPolicy.Default"/> takes, and what a host sees
+  /// meanwhile, is in the overview, docs/Overview.md).
   /// </para>
   ///
   /// <para>
-  /// The policy is checked when it is set, so an invalid one throws here rather than when the engine is started.
+  /// The policy is checked when it is set, so an invalid one throws here. A policy changed after it was set (its
+  /// properties have setters) is checked only when the engine is started.
   /// </para>
   ///
   /// <para>
@@ -193,8 +195,8 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// over this policy.
   /// </para>
   /// </remarks>
-  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is out of range (see
-  /// <see cref="RestartPolicyEnforcer"/>).</exception>
+  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is negative, or its
+  /// <see cref="RestartPolicy.MaxBackoff"/> is less than its <see cref="RestartPolicy.InitialBackoff"/>.</exception>
   public RestartPolicy RestartPolicy
   {
     get => _restartPolicy;

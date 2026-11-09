@@ -105,7 +105,8 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   public IRestartPolicyEnforcer GetEnforcer(TimeProvider timeProvider = null) => new RestartPolicyEnforcer(this, timeProvider);
 
   /// <summary>
-  /// Throws if the settings cannot be enforced (see <see cref="RestartPolicyEnforcer"/>'s constructor).
+  /// Throws if the settings cannot be enforced: for <see cref="RestartPolicyEnforcer"/>, and when the policy is set on
+  /// a descriptor.
   /// </summary>
   /// <exception cref="ArgumentOutOfRangeException">A setting is negative, or <see cref="MaxBackoff"/> is less than
   /// <see cref="InitialBackoff"/>.</exception>

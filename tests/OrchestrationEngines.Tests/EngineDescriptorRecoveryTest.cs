@@ -71,6 +71,7 @@ public class EngineDescriptorRecoveryTest
     var set = () => descriptor.RestartPolicy = new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(30) };
 
     set.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(RestartPolicy.MaxBackoff));
+    descriptor.RestartPolicy.Should().Be(RestartPolicy.Default, "a rejected policy leaves the previous one");
     descriptor.RestartPolicy = null;
     LifecycleTasks(descriptor).Should().OnlyContain(t => t.RecoveryHelper == null);
   }
