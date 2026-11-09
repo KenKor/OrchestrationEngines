@@ -293,6 +293,14 @@ Time-out: with `SetTimeOut` the work runs on the thread pool and races the time-
 (its token is cancelled and its outcome dropped; a recovery runs once the work has stopped). A stop or reset during the
 race is a cancellation, not a time-out.
 
+Logging: a task logs the same lines in every build; the logger's levels filter them. A failure is logged as an Error
+once, where it was caught: the work's exception or the time-out (with a restart policy, once per failed attempt), or
+the recovery's exception (with a restart policy, this is the limit being exceeded). The tasks that depend on a failed
+task log at Debug. A cancelled task logs one Warning, and so does each task that depends on it, as it is cancelled
+too. Entering the other states, work started and completed, resets and recovery steps are Debug, and each transition
+is Trace. A host at Information sees failures, cancellations, failing subscribers and dependency callbacks, and
+warnings such as a run that has not stopped or an unhandled trigger, and lowers its level to see the lifecycle.
+
 ---
 
 ### 4. Engine
