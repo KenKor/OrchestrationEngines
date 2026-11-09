@@ -16,7 +16,8 @@ namespace OrchestrationEngines.Tests;
 /// that depends on it, and a cancellation is no error at all.
 /// </summary>
 /// <remarks>
-/// The "Entered Failed state" lines are logged in Debug builds only, so some of these checks only bite in Debug.
+/// A task writes its log lines in every build; the levels do the filtering. The cause of a failure is the one error,
+/// entering the failed state and the routine lifecycle lines are Debug.
 /// </remarks>
 public class EngineTaskLogLevelTest
 {
@@ -120,6 +121,63 @@ public class EngineTaskLogLevelTest
     root.State.Should().Be(EngineTaskState.Cancelled);
     var records = logger.Collector.GetSnapshot();
     records.Should().NotContain(r => r.Level == LogLevel.Error);
-    records.Should().Contain(r => r.Level == LogLevel.Warning && r.Message.StartsWith("Root: Cancelled. Reason: "));
+    records.Where(r => r.Level == LogLevel.Warning && r.Message.StartsWith("Root: ")).Should()
+      .ContainSingle(r => r.Message.StartsWith("Root: Cancelled. Reason: "), "the Cancelled line is the one warning");
+  }
+
+  /// <summary>
+  /// Verifies that a task whose work throws logs one error, the exception, and enters the failed state at Debug.
+  /// </summary>
+  [Fact]
+  public async Task WorkThrows_LogsOneErrorWithTheException()
+  {
+    var logger = new FakeLogger();
+    var task = NewTask("Root", Throws, logger);
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+
+    var records = logger.Collector.GetSnapshot();
+    records.Where(r => r.Level == LogLevel.Error).Should().ContainSingle()
+      .Which.Exception.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("No data.");
+    records.Should().Contain(r => r.Level == LogLevel.Debug && r.Message.Contains("Entered Failed state"));
+  }
+
+  /// <summary>
+  /// Verifies that a task that times out logs one error.
+  /// </summary>
+  [Fact]
+  public async Task TimesOut_LogsOneError()
+  {
+    var logger = new FakeLogger();
+    var task = NewTask("Root", token => Task.Delay(Timeout.Infinite, token), logger)
+      .SetTimeOut(TimeSpan.FromMilliseconds(50));
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+
+    task.State.Should().Be(EngineTaskState.TimedOut);
+    logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).Should().ContainSingle()
+      .Which.Message.Should().Contain("timed out");
+  }
+
+  /// <summary>
+  /// Verifies that a task that completes logs nothing at Information or above, and its lifecycle at Debug, in every
+  /// build (CI runs this in Release).
+  /// </summary>
+  [Fact]
+  public async Task Completes_LogsItsLifecycleAtDebugOnly()
+  {
+    var logger = new FakeLogger();
+    var task = NewTask("Root", Succeeds, logger);
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+
+    var records = logger.Collector.GetSnapshot();
+    records.Should().NotContain(r => r.Level >= LogLevel.Information);
+    records.Where(r => r.Level == LogLevel.Debug).Select(r => r.Message).Should()
+      .Contain(m => m.Contains("Work started.")).And.Contain(m => m.Contains("Entered CompletedWithSuccess state."));
+    records.Should().Contain(r => r.Level == LogLevel.Trace && r.Message.Contains("Transition"));
   }
 }

@@ -942,9 +942,7 @@ public partial class EngineTask
         .Ignore(EngineTaskTrigger.Start)
         .OnEntry(() =>
         {
-#if DEBUG
           LogEnteredCompletedWithSuccess(Logger);
-#endif
 
           // If we succeeded after a recovery, reset recovery budget for future runs.
           RecoveryHelper?.Reset();
@@ -968,19 +966,17 @@ public partial class EngineTask
         .Permit(EngineTaskTrigger.Reset, EngineTaskState.Created);
 
     // Unhandled triggers are treated as warnings rather than exceptions. This MUST be registered in ALL builds
-    // (it was previously #if DEBUG, so Release fell back to Stateless's default action, which THROWS — crashing
+    // (it was previously Debug-only, so Release fell back to Stateless's default action, which THROWS — crashing
     // the whole engine drive on a benign race such as a late CompleteDependency).
     machine.OnUnhandledTrigger((state, trigger) =>
     {
       LogUnhandledTrigger(Logger, trigger, state);
     });
 
-#if DEBUG
     machine.OnTransitioned(t =>
     {
       LogTransition(Logger, t.Source, t.Trigger, t.Destination);
     });
-#endif
 
     return machine;
   }
@@ -1080,14 +1076,13 @@ public partial class EngineTask
     WasCancelled = cancelled;
     if (cancelled)
       LogEnteredCancelled(Logger, FailReason);
-#if DEBUG
-    // Only the failure itself is an error. A task that fails because a task it depends on failed logs at Debug, since
-    // that failure is logged already. The state is the destination already: Stateless sets it before it runs the entry actions.
+    // The cause of the failure was logged as the error where it was caught (the work's or the recovery's exception, the
+    // time-out); entering the state is Debug, so one failure is one error. The state is the destination already:
+    // Stateless sets it before it runs the entry actions.
     else if (State == EngineTaskState.DependencyFailed)
       LogEnteredDependencyFailed(Logger, FailReason);
     else
       LogEnteredFailed(Logger, FailReason);
-#endif
     RaiseTerminal(FailedStateReached, nameof(FailedStateReached));
   }
 
@@ -1159,9 +1154,7 @@ public partial class EngineTask
       FailException = null;
       RunStartedAtUtc = null;
       RunEndedAtUtc = null;
-#if DEBUG
       LogReset(Logger);
-#endif
 
       RecoveryHelper?.Reset();
       _timedOutWorkAbandoned = false;
@@ -1424,9 +1417,7 @@ public partial class EngineTask
       return true;
     if (!token.IsCancellationRequested)
       return false;
-#if DEBUG
     LogCancellationRequested(Logger);
-#endif
     await FireIfCurrentAsync(run, EngineTaskTrigger.Cancel).ConfigureAwait(false);
     return true;
   }
@@ -1442,9 +1433,7 @@ public partial class EngineTask
   {
     if (CancellationToken.IsCancellationRequested)
     {
-#if DEBUG
       LogCancellationRequested(Logger);
-#endif
       await FireCancelAsync();
       return true;
     }
@@ -1474,9 +1463,7 @@ public partial class EngineTask
   /// </param>
   private async Task ExecuteWorkAsync(int run, CancellationToken token)
   {
-#if DEBUG
     LogWorkStarted(Logger);
-#endif
 
     // Fix (RuntimeRecoveryTest): a run fires its outcome only while it is still the current run. A reset
     // while the work ran cancels that work and starts the task again with a new token and state machine; the old
@@ -1543,33 +1530,22 @@ public partial class EngineTask
       if (await CheckForCancellationIfCurrentAsync(run, token).ConfigureAwait(false))
         return;
 
-#if DEBUG
       LogWorkCompleted(Logger);
-#endif
       await FireIfCurrentAsync(run, EngineTaskTrigger.Succeed).ConfigureAwait(false);
     }
     catch (ThreadAbortException)
     {
-#if DEBUG
       LogThreadAbortCaught(Logger);
-#endif
       throw;
     }
     catch (OperationCanceledException)
     {
-#if DEBUG
       LogOperationCanceledCaught(Logger);
-#endif
       await FireIfCurrentAsync(run, EngineTaskTrigger.Cancel).ConfigureAwait(false);
     }
     catch (EngineTaskException ex)
     {
-#if DEBUG
       LogEngineTaskException(Logger, ex, ex.Message);
-#else
-      // Logged in Debug builds only (as before); this keeps the Release build from warning about an unused variable.
-      _ = ex;
-#endif
 
       // Design intent: EngineTaskException is treated as non-recoverable and maps to cancellation.
       // TODO: Reconsider "non-recoverable". Cancel from Running only ends in Cancelled when this task's token was
@@ -1625,35 +1601,27 @@ public partial class EngineTask
         _triggerLock.Release();
       }
 
-#if DEBUG
       if (recreated)
         LogRecoveryStartedAfterCancellation(Logger);
       else
         LogRecoveryStarted(Logger);
-#endif
 
       await RecoveryHelper.Invoke(this, token).ConfigureAwait(false);
 
       if (await CheckForCancellationIfCurrentAsync(run, token).ConfigureAwait(false))
         return;
 
-#if DEBUG
       LogRecoverySucceeded(Logger);
-#endif
       await FireIfCurrentAsync(run, EngineTaskTrigger.SucceedRecovery).ConfigureAwait(false);
     }
     catch (ThreadAbortException)
     {
-#if DEBUG
       LogThreadAbortCaught(Logger);
-#endif
       throw;
     }
     catch (OperationCanceledException)
     {
-#if DEBUG
       LogRecoveryCancelled(Logger);
-#endif
       await FireIfCurrentAsync(run, EngineTaskTrigger.Cancel).ConfigureAwait(false);
     }
     catch (Exception ex)
@@ -1686,7 +1654,7 @@ public partial class EngineTask
   [LoggerMessage(Level = LogLevel.Warning, Message = "Cancelled. Reason: '{Reason}'.")]
   private static partial void LogEnteredCancelled(ILogger logger, string reason);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Entered CompletedWithSuccess state.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Entered CompletedWithSuccess state.")]
   private static partial void LogEnteredCompletedWithSuccess(ILogger logger);
 
   [LoggerMessage(Level = LogLevel.Warning, Message = "Unhandled trigger {Trigger} in state {State}, ignoring.")]
@@ -1701,52 +1669,52 @@ public partial class EngineTask
   [LoggerMessage(Level = LogLevel.Trace, Message = "Transition {Source} --{Trigger}--> {Destination}")]
   private static partial void LogTransition(ILogger logger, EngineTaskState source, EngineTaskTrigger trigger, EngineTaskState destination);
 
-  [LoggerMessage(Level = LogLevel.Error, Message = "Entered Failed state. Reason: '{Reason}'.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Entered Failed state. Reason: '{Reason}'.")]
   private static partial void LogEnteredFailed(ILogger logger, string reason);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Entered Failed state because a task it depends on failed. Reason: '{Reason}'.")]
   private static partial void LogEnteredDependencyFailed(ILogger logger, string reason);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Reset.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Reset.")]
   private static partial void LogReset(ILogger logger);
 
-  [LoggerMessage(Level = LogLevel.Warning, Message = "Cancellation requested.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Cancellation requested.")]
   private static partial void LogCancellationRequested(ILogger logger);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "The work ended with an exception after its run had ended.")]
   private static partial void LogWorkEndedWithException(ILogger logger, Exception exception);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Work started.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Work started.")]
   private static partial void LogWorkStarted(ILogger logger);
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Task timed out after {Timeout}.")]
   private static partial void LogTimedOut(ILogger logger, TimeSpan timeout);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Work completed without exception.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Work completed without exception.")]
   private static partial void LogWorkCompleted(ILogger logger);
 
   [LoggerMessage(Level = LogLevel.Warning, Message = "ThreadAbortException caught.")]
   private static partial void LogThreadAbortCaught(ILogger logger);
 
-  [LoggerMessage(Level = LogLevel.Warning, Message = "OperationCanceledException caught.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "OperationCanceledException caught.")]
   private static partial void LogOperationCanceledCaught(ILogger logger);
 
-  [LoggerMessage(Level = LogLevel.Error, Message = "Engine task exception: '{Reason}'.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Engine task exception: '{Reason}'.")]
   private static partial void LogEngineTaskException(ILogger logger, Exception exception, string reason);
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Exception: '{Reason}'.")]
   private static partial void LogWorkFailed(ILogger logger, Exception exception, string reason);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Recovery start by resetting the requested cancellation.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Recovery start by resetting the requested cancellation.")]
   private static partial void LogRecoveryStartedAfterCancellation(ILogger logger);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Recovery started.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Recovery started.")]
   private static partial void LogRecoveryStarted(ILogger logger);
 
-  [LoggerMessage(Level = LogLevel.Information, Message = "Recovery succeeded.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Recovery succeeded.")]
   private static partial void LogRecoverySucceeded(ILogger logger);
 
-  [LoggerMessage(Level = LogLevel.Warning, Message = "Recovery cancelled.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "Recovery cancelled.")]
   private static partial void LogRecoveryCancelled(ILogger logger);
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Exception during recovery: '{Reason}'.")]
