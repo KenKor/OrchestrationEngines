@@ -972,6 +972,36 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
+  /// Resets tasks of the engine <paramref name="engineName"/>, and with <paramref name="resetDependentTasks"/> the
+  /// engine's tasks that depend on them, dependents first; the tasks then run again (see
+  /// <see cref="BaseEngine.ResetTasksAsync"/>). Starts the coordinator if it has not been started yet, and waits for the
+  /// engine to start.
+  /// </summary>
+  /// <param name="engineName">The name of the engine (compared ignoring case).</param>
+  /// <param name="taskNames">The names of the engine's tasks to reset (compared ignoring case).</param>
+  /// <param name="resetDependentTasks">Whether to reset the engine's tasks that depend on them too.</param>
+  /// <param name="token">Cancels the caller's wait for the engine to start.</param>
+  /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
+  /// <exception cref="InvalidOperationException">The engine never started, or is not a <see cref="BaseEngine"/>.</exception>
+  public async Task ResetTasksForEngineAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
+    CancellationToken token = default)
+  {
+    if (engineName == null)
+      throw new ArgumentNullException(nameof(engineName));
+    if (taskNames == null)
+      throw new ArgumentNullException(nameof(taskNames));
+    // A coordinator replaced by a generation switch has stopped its engines: the next generation has the live ones.
+    if (Successor is { } replaced)
+    {
+      await replaced.ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks, token).ConfigureAwait(false);
+      return;
+    }
+
+    await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+    await Mechanic.ResetEngineTasksAsync(engineName, taskNames, resetDependentTasks, token).ConfigureAwait(false);
+  }
+
+  /// <summary>
   /// The generation that answers for <paramref name="name"/> once this one was replaced: the one it handed over to, or
   /// the next one of a switch that rebuilds the engine (once it has started). Null if there is none.
   /// </summary>

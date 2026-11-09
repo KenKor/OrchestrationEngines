@@ -342,6 +342,39 @@ public partial class MechanicEngine : BaseEngine
   }
 
   /// <summary>
+  /// Resets tasks of the engine <paramref name="engineName"/> once it has started (see
+  /// <see cref="BaseEngine.ResetTasksAsync"/>).
+  /// </summary>
+  /// <remarks>
+  /// It first waits for the engine's kick-start to settle, since an engine's tasks are set up when it starts. An engine
+  /// that started and then failed is reset like any other: that is what a reset is for.
+  /// </remarks>
+  /// <param name="engineName">The name of the engine (compared ignoring case).</param>
+  /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
+  /// <param name="resetDependentTasks">Whether to reset the tasks that depend on them too.</param>
+  /// <param name="token">Cancels the wait for the kick-start; once the reset has begun, it is not cancelled.</param>
+  /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
+  /// <exception cref="InvalidOperationException">The engine never started, or is not a <see cref="BaseEngine"/>.</exception>
+  public async Task ResetEngineTasksAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
+    CancellationToken token = default)
+  {
+    if (!IsRegistered(engineName))
+      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
+    try
+    {
+      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix, token).ConfigureAwait(false);
+    }
+    catch (EngineTaskNotReadyException)
+    {
+      // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
+    }
+
+    if (!_engines.TryGetValue(engineName, out var engine) || engine is not BaseEngine { Tasks.Count: > 0 } started)
+      throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
+    await started.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+  }
+
+  /// <summary>
   /// Asynchronously waits for an engine (and its dependencies) to reach Ready.
   /// </summary>
   /// <param name="name">The name.</param>
