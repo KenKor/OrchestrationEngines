@@ -376,6 +376,11 @@ Internally, it maintains an **application-level state machine** that translates 
 
 The coordinator is intentionally conservative: once shutdown starts, it does not accept new operational triggers.
 
+Shutdown stops the engines dependents first: an engine stops only once every engine that depends on it (its
+descriptor's `DependsOn`) has stopped. Engines with no dependency between them stop together, one wave at a time. An
+engine that throws while stopping is logged and does not hold the others up; the shutdown rethrows its exception once
+every engine has been stopped.
+
 Its readiness follows the required engines only: an engine registered as not required for running may still be
 loading, or have failed, while the coordinator is `Running`.
 

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -531,19 +532,84 @@ public partial class MechanicEngine : BaseEngine
   // ---------------------------------------------------------------------
 
   /// <summary>
-  /// Stops the mechanic and all managed engines.
+  /// Stops the mechanic and all managed engines, dependents first.
   /// </summary>
+  /// <remarks>
+  /// An engine stops only once every engine that depends on it (by its descriptor's
+  /// <see cref="EngineDescriptor.DependsOn"/>) has stopped, so no engine stops under one that still uses it. Engines
+  /// with no dependency between them stop together, one wave at a time. An engine that fails to stop is logged and
+  /// counts as stopped, so the engines it depends on still stop; the first such failure is rethrown at the end.
+  /// </remarks>
   public override async Task StopAsync()
   {
     await base.StopAsync().ConfigureAwait(false);
     State = EngineState.Stopped;
 
-    var completionTasks = _engines.Values
-        .Select(e => e.StopAsync())
-        .ToArray();
-
     LogWaitingForAllEngines(Logger);
-    await Task.WhenAll(completionTasks).ConfigureAwait(false);
+    Exception firstFailure = null;
+    foreach (var wave in StopWaves())
+    {
+      var stops = wave.Select(async e =>
+      {
+        try
+        {
+          await e.Value.StopAsync().ConfigureAwait(false);
+          return null;
+        }
+        catch (Exception ex)
+        {
+          LogEngineFailedToStop(Logger, ex, e.Key);
+          return ex;
+        }
+      }).ToArray();
+      foreach (var failure in await Task.WhenAll(stops).ConfigureAwait(false))
+        firstFailure ??= failure;
+    }
+
+    if (firstFailure != null)
+      ExceptionDispatchInfo.Capture(firstFailure).Throw();
+  }
+
+  /// <summary>
+  /// Orders the managed engines for <see cref="StopAsync"/>: each wave holds the engines that no engine still running
+  /// depends on.
+  /// </summary>
+  /// <remarks>
+  /// Dependencies come from the mechanic context's descriptors; an engine without one, or a dependency on an engine
+  /// that is not registered, adds no edge. The descriptors are checked for cycles when the mechanic starts; should
+  /// one remain anyway, its engines stop together in a last wave rather than never.
+  /// </remarks>
+  private List<KeyValuePair<string, IEngine>[]> StopWaves()
+  {
+    var engines = _engines.ToArray();
+    var dependsOn = (Context as MechanicContext)?.EngineDescriptors
+        .ToDictionary(d => d.Name, d => d.DependsOn, StringComparer.OrdinalIgnoreCase);
+    // How many registered engines that are still running depend on each engine.
+    var dependents = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    foreach (var engine in engines)
+      dependents[engine.Key] = 0;
+    foreach (var engine in engines)
+      if (dependsOn != null && dependsOn.TryGetValue(engine.Key, out var parents))
+        foreach (var parent in parents.Where(dependents.ContainsKey))
+          dependents[parent]++;
+
+    var waves = new List<KeyValuePair<string, IEngine>[]>();
+    var left = engines.ToList();
+    while (left.Count > 0)
+    {
+      var wave = left.Where(e => dependents[e.Key] == 0).ToArray();
+      if (wave.Length == 0)
+        wave = left.ToArray();
+      waves.Add(wave);
+      foreach (var engine in wave)
+      {
+        left.Remove(engine);
+        if (dependsOn != null && dependsOn.TryGetValue(engine.Key, out var parents))
+          foreach (var parent in parents.Where(dependents.ContainsKey))
+            dependents[parent]--;
+      }
+    }
+    return waves;
   }
 
   /// <summary>
@@ -599,6 +665,9 @@ public partial class MechanicEngine : BaseEngine
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Waiting on completion of all engines..")]
   private static partial void LogWaitingForAllEngines(ILogger logger);
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "Engine {EngineName} failed to stop.")]
+  private static partial void LogEngineFailedToStop(ILogger logger, Exception exception, string engineName);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Waiting on reset of all engines depending on and incl. {EngineName}.")]
   private static partial void LogWaitingForResetOfEngines(ILogger logger, string engineName);
