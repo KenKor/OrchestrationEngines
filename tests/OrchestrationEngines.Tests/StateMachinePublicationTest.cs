@@ -19,21 +19,29 @@ public class StateMachinePublicationTest
   private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
 
   /// <summary>
-  /// A task whose work completes at once, that shows its state machine and counts how often one is built.
+  /// A task whose work completes at once, that shows its state machine and numbers each one it builds.
   /// </summary>
   private sealed class CountingTask()
     : EngineTask("Count", _ => Task.CompletedTask, requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
   {
-    private int _built;
+    private readonly ConcurrentDictionary<StateMachine<EngineTaskState, EngineTaskTrigger>, int> _numbers = new();
 
-    public int Built => Volatile.Read(ref _built);
+    public int Built => _numbers.Count;
 
     public StateMachine<EngineTaskState, EngineTaskTrigger> Machine => StateMachine;
 
+    /// <summary>
+    /// The number of a machine this task built (0 for the first), or -1 for one it did not build.
+    /// </summary>
+    public int NumberOf(StateMachine<EngineTaskState, EngineTaskTrigger> machine) =>
+      _numbers.TryGetValue(machine, out var number) ? number : -1;
+
     protected override StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
     {
-      Interlocked.Increment(ref _built);
-      return base.CreateStateMachine();
+      var machine = base.CreateStateMachine();
+      // Numbered before it is published: the builds are serialized by the task's init lock.
+      _numbers[machine] = _numbers.Count;
+      return machine;
     }
   }
 
@@ -42,7 +50,7 @@ public class StateMachinePublicationTest
   /// it is built once.
   /// </summary>
   [Fact]
-  public void FirstTouch_FromManyThreads_SeesOneMachine()
+  public void EngineTask_StateMachine_FirstTouchFromManyThreads_IsBuiltOnce()
   {
     const int Threads = 16;
     for (var attempt = 0; attempt < 50; attempt++)
@@ -67,33 +75,51 @@ public class StateMachinePublicationTest
   }
 
   /// <summary>
-  /// Verifies that reading a task's state while it is reset, again and again, never throws and only ever sees a state
-  /// of the old machine or of the new one.
+  /// Verifies that a thread reading a task's state machine while the task is reset, again and again, never throws,
+  /// only sees machines the task built, and never sees an older machine after a newer one.
   /// </summary>
+  /// <remarks>
+  /// A missing fence cannot be made to fail on x86-64 or ARM64 under .NET's memory model, so this guards the order of
+  /// publication rather than proving the fence.
+  /// </remarks>
   [Fact]
-  public async Task State_ReadDuringResets_NeverThrows()
+  public async Task EngineTask_StateMachine_ReadDuringResets_SeesOnlyBuiltMachinesInOrder()
   {
     var ct = TestContext.Current.CancellationToken;
     var task = new CountingTask();
+    _ = task.Machine;
     using var done = new CancellationTokenSource();
+    var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var reads = 0;
     var reader = Task.Run(() =>
     {
-      while (!done.IsCancellationRequested)
+      var last = 0;
+      started.TrySetResult();
+      while (!done.IsCancellationRequested && !ct.IsCancellationRequested)
       {
-        var state = task.State;
-        Enum.IsDefined(typeof(EngineTaskState), state).Should().BeTrue();
+        var number = task.NumberOf(task.Machine);
+        _ = task.State;
+        number.Should().BeGreaterThanOrEqualTo(last, "a machine is never replaced by an older one");
+        last = number;
         reads++;
+        Thread.Yield();
       }
     }, ct);
+    await started.Task.WaitAsync(MustComplete, ct);
 
-    for (var cycle = 0; cycle < 200; cycle++)
+    try
     {
-      await task.FireAsync(EngineTaskTrigger.Start);
-      await task.InnerTask.WaitAsync(MustComplete, ct);
-      await task.FireAsync(EngineTaskTrigger.Reset);
+      for (var cycle = 0; cycle < 200; cycle++)
+      {
+        await task.FireAsync(EngineTaskTrigger.Start);
+        await task.InnerTask.WaitAsync(MustComplete, ct);
+        await task.FireAsync(EngineTaskTrigger.Reset);
+      }
     }
-    done.Cancel();
+    finally
+    {
+      done.Cancel();
+    }
 
     await reader.WaitAsync(MustComplete, ct);
     reads.Should().BePositive();
