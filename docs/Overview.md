@@ -314,7 +314,8 @@ To wait for one task, `EnsureTaskReadyAsync(taskName)` starts it (and what it de
 it has completed with success. If it ended otherwise (`Failed`, `TimedOut`, `DependencyFailed`, `RecoveryFailed` or
 `Cancelled`) it throws an `EngineTaskNotReadyException` with the task's name, its final state and its fail reason; when
 the task's work (or recovery) threw, that exception is the inner exception. An unknown task name throws an
-`ArgumentException`. `EnsureReadyAsync(taskName)` and `EnsureTasksReadyAsync` still only wait.
+`ArgumentException`. A restart or reset that ends the task during the wait is not a failure: the wait goes on with the
+task's next run. `EnsureReadyAsync(taskName)` and `EnsureTasksReadyAsync` still only wait.
 
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
 engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A start replaces the
@@ -381,7 +382,8 @@ loading, or have failed, while the coordinator is `Running`.
 needed. It waits for the engine to start first (its kick-start, which ends once the engine is `Ready` or failed), so a
 task that completes early is reported once the engine is `Ready`. An engine that could not be created or started is
 reported by the mechanic's task that failed: its creation task, named after the engine, or its kick-start task. An
-unknown engine name throws an `ArgumentException`.
+unknown engine name throws an `ArgumentException`. A generation switch during the wait is answered by the next
+generation, as engine lookups are.
 
 #### Generation switch
 
