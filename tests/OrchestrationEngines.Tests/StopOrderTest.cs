@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -29,7 +30,9 @@ public class StopOrderTest
 
     public Exception StopFailure { get; init; }
 
-    public bool Stopped { get; private set; }
+    private volatile bool _stopped;
+
+    public bool Stopped => _stopped;
 
     protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
 
@@ -41,7 +44,7 @@ public class StopOrderTest
       if (StopFailure != null)
         throw StopFailure;
       await base.StopAsync().ConfigureAwait(false);
-      Stopped = true;
+      _stopped = true;
     }
   }
 
@@ -139,35 +142,82 @@ public class StopOrderTest
   }
 
   /// <summary>
-  /// Verifies the waves of a diamond (B and C depend on A, D on both): D first, then B and C together, then A.
+  /// Verifies a diamond (B and C depend on A, D on both): D first, then B and C together, then A once both have stopped.
   /// </summary>
   [Fact]
-  public async Task Shutdown_Diamond_StopsInWaves()
+  public async Task Shutdown_Diamond_StopsTheSharedDependencyLast()
   {
     var ct = TestContext.Current.CancellationToken;
     var stops = new ConcurrentQueue<string>();
-    var engines = new[] { "A", "B", "C", "D" }.ToDictionary(n => n, n => new RecordingEngine(n, stops));
+    var a = new RecordingEngine("A", stops);
+    var b = new RecordingEngine("B", stops);
+    var c = new RecordingEngine("C", stops);
+    var d = new RecordingEngine("D", stops);
     var coordinator = CreateCoordinator();
-    Register(coordinator, engines["A"], "A");
-    Register(coordinator, engines["B"], "B").AddDependsOn("A");
-    Register(coordinator, engines["C"], "C").AddDependsOn("A");
-    Register(coordinator, engines["D"], "D").AddDependsOn("B").AddDependsOn("C");
+    Register(coordinator, a, "A");
+    Register(coordinator, b, "B").AddDependsOn("A");
+    Register(coordinator, c, "C").AddDependsOn("A");
+    Register(coordinator, d, "D").AddDependsOn("B").AddDependsOn("C");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
     var shutdown = coordinator.ShutdownAsync(ct);
-    await engines["D"].StopEntered.Task.WaitAsync(MustComplete, ct);
-    engines["D"].Gate.SetResult();
-    await Task.WhenAll(engines["B"].StopEntered.Task, engines["C"].StopEntered.Task).WaitAsync(MustComplete, ct);
+    await d.StopEntered.Task.WaitAsync(MustComplete, ct);
     await Task.Delay(MustStayPending, ct);
-    engines["A"].StopEntered.Task.IsCompleted.Should().BeFalse("A must wait for both B and C");
-    engines["B"].Gate.SetResult();
+    stops.Should().Equal(["D"], "B and C must wait for D");
+    d.Gate.SetResult();
+    await Task.WhenAll(b.StopEntered.Task, c.StopEntered.Task).WaitAsync(MustComplete, ct);
+    b.Gate.SetResult();
     await Task.Delay(MustStayPending, ct);
-    engines["A"].StopEntered.Task.IsCompleted.Should().BeFalse("A must wait for C as well");
-    engines["C"].Gate.SetResult();
-    engines["A"].Gate.SetResult();
+    a.StopEntered.Task.IsCompleted.Should().BeFalse("A must wait for C as well as B");
+    c.Gate.SetResult();
+    a.Gate.SetResult();
     await shutdown.WaitAsync(MustComplete, ct);
 
-    stops.First().Should().Be("D");
     stops.Last().Should().Be("A");
+  }
+
+  /// <summary>
+  /// Verifies that an engine that is slow to stop holds back only the engines it depends on: a chain unrelated to it
+  /// stops in full meanwhile.
+  /// </summary>
+  [Fact]
+  public async Task Shutdown_SlowIndependentEngine_DoesNotHoldBackAnUnrelatedChain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    var slow = new RecordingEngine("Slow", stops);
+    var a = new RecordingEngine("A", stops);
+    var b = new RecordingEngine("B", stops);
+    a.Gate.SetResult();
+    b.Gate.SetResult();
+    var coordinator = CreateCoordinator();
+    Register(coordinator, slow, "Slow");
+    Register(coordinator, a, "A");
+    Register(coordinator, b, "B").AddDependsOn("A");
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var shutdown = coordinator.ShutdownAsync(ct);
+    try
+    {
+      await a.StopEntered.Task.WaitAsync(MustComplete, ct);
+      await WaitUntilAsync(() => a.Stopped, ct);
+      b.Stopped.Should().BeTrue();
+      slow.Stopped.Should().BeFalse();
+    }
+    finally
+    {
+      slow.Gate.TrySetResult();
+    }
+    await shutdown.WaitAsync(MustComplete, ct);
+  }
+
+  private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken ct)
+  {
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (!condition())
+    {
+      DateTime.UtcNow.Should().BeBefore(deadline, "the condition must become true");
+      await Task.Delay(10, ct);
+    }
   }
 }

@@ -535,10 +535,18 @@ public partial class MechanicEngine : BaseEngine
   /// Stops the mechanic and all managed engines, dependents first.
   /// </summary>
   /// <remarks>
-  /// An engine stops only once every engine that depends on it (by its descriptor's
-  /// <see cref="EngineDescriptor.DependsOn"/>) has stopped, so no engine stops under one that still uses it. Engines
-  /// with no dependency between them stop together, one wave at a time. An engine that fails to stop is logged and
-  /// counts as stopped, so the engines it depends on still stop; the first such failure is rethrown at the end.
+  /// <para>
+  /// Each engine is stopped once every engine that depends on it (by its descriptor's
+  /// <see cref="EngineDescriptor.DependsOn"/>) has been stopped, and not before; engines that do not depend on each
+  /// other are not ordered, so independent engines stop together and no engine waits for one it has nothing to do with.
+  /// "Stopped" means the dependent's <see cref="IEngine.StopAsync"/> has returned: work that ignores its token may still
+  /// be running then.
+  /// </para>
+  /// <para>
+  /// An engine that throws while stopping is logged and counts as stopped, so the engines it depends on still stop;
+  /// the first failure is rethrown once every engine has been stopped. An engine whose stop never returns keeps the
+  /// engines it depends on from being stopped.
+  /// </para>
   /// </remarks>
   public override async Task StopAsync()
   {
@@ -546,70 +554,70 @@ public partial class MechanicEngine : BaseEngine
     State = EngineState.Stopped;
 
     LogWaitingForAllEngines(Logger);
-    Exception firstFailure = null;
-    foreach (var wave in StopWaves())
-    {
-      var stops = wave.Select(async e =>
-      {
-        try
-        {
-          await e.Value.StopAsync().ConfigureAwait(false);
-          return null;
-        }
-        catch (Exception ex)
-        {
-          LogEngineFailedToStop(Logger, ex, e.Key);
-          return ex;
-        }
-      }).ToArray();
-      foreach (var failure in await Task.WhenAll(stops).ConfigureAwait(false))
-        firstFailure ??= failure;
-    }
-
-    if (firstFailure != null)
+    var failures = new ConcurrentQueue<Exception>();
+    await Task.WhenAll(StopDependentsFirst(failures)).ConfigureAwait(false);
+    if (failures.TryDequeue(out var firstFailure))
       ExceptionDispatchInfo.Capture(firstFailure).Throw();
   }
 
   /// <summary>
-  /// Orders the managed engines for <see cref="StopAsync"/>: each wave holds the engines that no engine still running
-  /// depends on.
+  /// Starts stopping every managed engine, each once the engines that depend on it have stopped (see
+  /// <see cref="StopAsync"/>).
   /// </summary>
   /// <remarks>
   /// Dependencies come from the mechanic context's descriptors; an engine without one, or a dependency on an engine
-  /// that is not registered, adds no edge. The descriptors are checked for cycles when the mechanic starts; should
-  /// one remain anyway, its engines stop together in a last wave rather than never.
+  /// that is not registered, orders nothing. The descriptors are checked for cycles when the mechanic starts; should
+  /// one remain anyway, the edge that closes it is not waited for, so every engine still stops.
   /// </remarks>
-  private List<KeyValuePair<string, IEngine>[]> StopWaves()
+  /// <param name="failures">Receives each failure to stop, in the order they occur.</param>
+  private Task[] StopDependentsFirst(ConcurrentQueue<Exception> failures)
   {
-    var engines = _engines.ToArray();
-    var dependsOn = (Context as MechanicContext)?.EngineDescriptors
-        .ToDictionary(d => d.Name, d => d.DependsOn, StringComparer.OrdinalIgnoreCase);
-    // How many registered engines that are still running depend on each engine.
-    var dependents = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-    foreach (var engine in engines)
-      dependents[engine.Key] = 0;
-    foreach (var engine in engines)
-      if (dependsOn != null && dependsOn.TryGetValue(engine.Key, out var parents))
-        foreach (var parent in parents.Where(dependents.ContainsKey))
-          dependents[parent]++;
+    var engines = new Dictionary<string, IEngine>(StringComparer.OrdinalIgnoreCase);
+    foreach (var engine in _engines)
+      engines[engine.Key] = engine.Value;
+    // For each registered engine, the registered engines that depend on it.
+    var dependents = engines.Keys.ToDictionary(name => name, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+      StringComparer.OrdinalIgnoreCase);
+    if (Context is MechanicContext mc)
+      foreach (var descriptor in mc.EngineDescriptors.Where(d => d.Name != null && engines.ContainsKey(d.Name)))
+        foreach (var parent in descriptor.DependsOn)
+          if (dependents.TryGetValue(parent, out var ofParent))
+            ofParent.Add(descriptor.Name);
 
-    var waves = new List<KeyValuePair<string, IEngine>[]>();
-    var left = engines.ToList();
-    while (left.Count > 0)
+    var stops = new Dictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
+    var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    Task StopAfterDependents(string name)
     {
-      var wave = left.Where(e => dependents[e.Key] == 0).ToArray();
-      if (wave.Length == 0)
-        wave = left.ToArray();
-      waves.Add(wave);
-      foreach (var engine in wave)
-      {
-        left.Remove(engine);
-        if (dependsOn != null && dependsOn.TryGetValue(engine.Key, out var parents))
-          foreach (var parent in parents.Where(dependents.ContainsKey))
-            dependents[parent]--;
-      }
+      if (stops.TryGetValue(name, out var stop))
+        return stop;
+      visiting.Add(name);
+      var first = dependents[name].Where(d => !visiting.Contains(d)).Select(StopAfterDependents).ToArray();
+      visiting.Remove(name);
+      stop = StopAfterAsync(name, engines[name], first, failures);
+      stops[name] = stop;
+      return stop;
     }
-    return waves;
+
+    return engines.Keys.Select(StopAfterDependents).ToArray();
+  }
+
+  /// <summary>
+  /// Stops <paramref name="engine"/> once <paramref name="first"/> have ended; a failure is logged and queued, not
+  /// thrown, so whatever waits for this stop goes on.
+  /// </summary>
+  private async Task StopAfterAsync(string name, IEngine engine, Task[] first, ConcurrentQueue<Exception> failures)
+  {
+    // These never fault: each catches its own failure.
+    await Task.WhenAll(first).ConfigureAwait(false);
+    try
+    {
+      await engine.StopAsync().ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+      LogEngineFailedToStop(Logger, ex, name);
+      failures.Enqueue(ex);
+    }
   }
 
   /// <summary>
