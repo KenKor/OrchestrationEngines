@@ -47,7 +47,7 @@ public class EngineStatusEventTest
   {
     private readonly ConcurrentQueue<(string engine, EngineState state)> _events = new();
 
-    public void Attach(string name, BaseEngine engine) =>
+    public void Attach(string name, IEngine engine) =>
       engine.EngineStatusChanged += (_, e) => _events.Enqueue((name, e.State));
 
     public IReadOnlyList<EngineState> For(string name) =>

@@ -41,11 +41,12 @@ public sealed class EngineStatusEventArgs(
   public EngineState State { get; } = state;
 
   /// <summary>
-  /// Optional exception associated with the state change.
+  /// Why the engine faulted: never null when <see cref="State"/> is <see cref="EngineState.Faulted"/>, and null for
+  /// every other state.
   /// </summary>
   /// <remarks>
-  /// This is typically populated when the engine transitions
-  /// into a faulted or terminal state.
+  /// For an engine whose required task failed, an <see cref="Tasks.EngineTaskNotReadyException"/> for that task (see
+  /// <see cref="BaseEngine.EngineStatusChanged"/>).
   /// </remarks>
   public Exception Error { get; } = error;
 }

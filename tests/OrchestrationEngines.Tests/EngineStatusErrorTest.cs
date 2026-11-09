@@ -33,7 +33,17 @@ public class EngineStatusErrorTest
       Context = new NoContext();
     }
 
+    /// <summary>
+    /// While set, the engine stays Starting, whatever its tasks do: the test lets several tasks fail before the state
+    /// that reports them is computed.
+    /// </summary>
+    public volatile bool Hold;
+
     protected override void SetUpTasks() => _setUp(this);
+
+    protected override EngineState ComputeState() => Hold ? EngineState.Starting : base.ComputeState();
+
+    public void Recompute() => RecomputeStateSynchronized();
 
     public EngineTask Task(string name, Func<CancellationToken, Task> work, bool required = true) =>
       CreateTask(name, work, required);
@@ -58,6 +68,16 @@ public class EngineStatusErrorTest
       };
   }
 
+  private static async Task WaitUntilAsync(Func<bool> condition, string because)
+  {
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (!condition())
+    {
+      DateTime.UtcNow.Should().BeBefore(deadline, because);
+      await Task.Delay(10, TestContext.Current.CancellationToken);
+    }
+  }
+
   private static async Task<EngineStatusEventArgs> FaultedAsync(TasksEngine engine)
   {
     var log = new EventLog(engine);
@@ -76,7 +96,7 @@ public class EngineStatusErrorTest
     var log = new EventLog(engine);
 
     await engine.StartAsync();
-    await ((BaseEngine)engine).EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     await engine.StopAsync();
 
     log.Events.Select(e => e.State).Should().Equal(EngineState.Starting, EngineState.Ready, EngineState.Stopped);
@@ -120,27 +140,60 @@ public class EngineStatusErrorTest
   }
 
   /// <summary>
-  /// Verifies that the error names the task whose failure faulted the engine, not a dependent that failed with it.
+  /// Verifies that, of several failed required tasks, the error names the one whose run ended first: not a dependent
+  /// that failed with it, nor a task that failed later, though both come before it in the set.
   /// </summary>
   [Fact]
-  public async Task BaseEngine_EngineStatusChanged_DependentFailsWithIt_ErrorNamesTheTaskThatFailed()
+  public async Task BaseEngine_EngineStatusChanged_SeveralFailed_ErrorNamesTheTaskThatFailedFirst()
   {
+    var ct = TestContext.Current.CancellationToken;
     var thrown = new InvalidOperationException("A failed.");
+    var releaseLater = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var engine = new TasksEngine(e =>
     {
-      // B is added first, so a search in the set's order finds it before A.
-      var b = e.Task("B", _ => Task.CompletedTask);
+      // Added before A, so a search in the set's order finds them first.
+      var dependent = e.Task("Dependent", _ => Task.CompletedTask);
+      e.Task("Later", async _ =>
+      {
+        await releaseLater.Task;
+        throw new InvalidOperationException("Later failed.");
+      });
       var a = e.Task("A", _ => throw thrown);
-      b.AddDependsOn(a);
-    });
+      dependent.AddDependsOn(a);
+    }) { Hold = true };
+    var log = new EventLog(engine);
 
-    var faulted = await FaultedAsync(engine);
-    // Wait for B to fail with A too, then look at what the event said.
-    SpinWait.SpinUntil(() => engine.Tasks["B"].State == EngineTaskState.DependencyFailed, MustComplete).Should().BeTrue();
+    await engine.StartAsync();
+    await WaitUntilAsync(() => engine.Tasks["Dependent"].State == EngineTaskState.DependencyFailed, "A fails");
+    releaseLater.SetResult();
+    await WaitUntilAsync(() => engine.Tasks["Later"].State == EngineTaskState.Failed, "Later throws");
+    engine.Hold = false;
+    engine.Recompute();
+    var faulted = await log.Faulted.Task.WaitAsync(MustComplete, ct);
 
     var error = faulted.Error.Should().BeOfType<EngineTaskNotReadyException>().Subject;
     error.TaskName.Should().Be("A");
     error.InnerException.Should().BeSameAs(thrown);
+  }
+
+  /// <summary>
+  /// Verifies that an engine whose prepared restart is given up is Faulted with an
+  /// <see cref="InvalidOperationException"/> carrying the reason.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EngineStatusChanged_RestartAbandoned_ErrorHasTheReason()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new TasksEngine(e => e.Task("Load", _ => Task.CompletedTask));
+    var log = new EventLog(engine);
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+
+    engine.AbandonRestart("its context failed");
+
+    var faulted = await log.Faulted.Task.WaitAsync(MustComplete, ct);
+    faulted.Error.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain("its context failed");
   }
 
   /// <summary>
