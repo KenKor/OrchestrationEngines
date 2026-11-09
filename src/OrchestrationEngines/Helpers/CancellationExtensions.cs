@@ -15,6 +15,10 @@ internal static partial class CancellationExtensions
   /// callback still runs (<see cref="CancellationTokenSource.Cancel()"/> runs them all before it throws), and the
   /// caller carries on with the state change that the cancellation belongs to.
   /// </summary>
+  /// <remarks>
+  /// Only a callback's exception is swallowed. Cancelling a disposed source still throws
+  /// <see cref="ObjectDisposedException"/>: the library never cancels a source it has disposed, so that is a bug to see.
+  /// </remarks>
   /// <param name="source">The token source to cancel.</param>
   /// <param name="logger">Where a callback's exception is logged.</param>
   public static void CancelBestEffort(this CancellationTokenSource source, ILogger logger)
@@ -26,7 +30,7 @@ internal static partial class CancellationExtensions
     catch (AggregateException ex)
     {
       // A callback on a linked token source (a task's, under its engine's) throws from inside this one's callback, so
-      // the exception arrives nested.
+      // the exception arrives nested. A single one is logged as itself, so the log shows what threw, not the wrapper.
       var flat = ex.Flatten();
       LogCancelCallbackFailed(logger, flat.InnerExceptions.Count == 1 ? flat.InnerExceptions[0] : flat);
     }

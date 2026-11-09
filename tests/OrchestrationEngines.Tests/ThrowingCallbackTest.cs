@@ -45,6 +45,40 @@ public class ThrowingCallbackTest
   }
 
   /// <summary>
+  /// Load, then Use, which depends on it, with no subscribers of their own.
+  /// </summary>
+  private sealed class PlainEngine : BaseEngine
+  {
+    public PlainEngine(ILogger logger) : base(logger) => Context = new NoContext();
+
+    public EngineTask Load { get; private set; }
+
+    protected override void SetUpTasks()
+    {
+      Load = CreateTask("Load", _ => Task.CompletedTask);
+      CreateTask("Use", _ => Task.CompletedTask).AddDependsOn(Load);
+    }
+  }
+
+  /// <summary>
+  /// A <see cref="PlainEngine"/> whose override of <see cref="BaseEngine.OnEngineStatusChanged"/> throws on Starting,
+  /// after it has published the change.
+  /// </summary>
+  private sealed class ThrowingOverrideEngine(ILogger logger) : BaseEngine(logger)
+  {
+    public EngineTask Load { get; private set; }
+
+    protected override void SetUpTasks() => Load = CreateTask("Load", _ => Task.CompletedTask);
+
+    protected override void OnEngineStatusChanged(EngineState oldValue, EngineState value)
+    {
+      base.OnEngineStatusChanged(oldValue, value);
+      if (value == EngineState.Starting)
+        throw new InvalidOperationException("Override failed.");
+    }
+  }
+
+  /// <summary>
   /// One task whose work registers a throwing callback on its token, then waits until it is cancelled.
   /// </summary>
   private sealed class HangingEngine(ILogger logger) : BaseEngine(logger)
@@ -106,14 +140,14 @@ public class ThrowingCallbackTest
 
   /// <summary>
   /// Verifies that an engine status subscriber that throws on every change does not stop the start, and that a
-  /// subscriber after it still receives every change, in order, up to Ready.
+  /// subscriber after it still receives every change, in order, up to Ready; both tasks complete.
   /// </summary>
   [Fact]
   public async Task StartAsync_StatusSubscriberThrows_OthersStillReceiveEveryChange()
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
-    var engine = new SubscribedEngine(logger, failLoad: false);
+    var engine = new PlainEngine(logger);
     var seen = new ConcurrentQueue<EngineState>();
     engine.EngineStatusChanged += (_, _) => throw new InvalidOperationException("Status subscriber failed.");
     engine.EngineStatusChanged += (_, e) => seen.Enqueue(e.State);
@@ -121,10 +155,32 @@ public class ThrowingCallbackTest
     await engine.StartAsync().WaitAsync(MustComplete, ct);
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
 
+    await engine.Load.InnerTask.WaitAsync(MustComplete, ct);
+    engine.Tasks.Values.Should().OnlyContain(t => t.State == EngineTaskState.CompletedWithSuccess);
     engine.State.Should().Be(EngineState.Ready);
-    seen.Should().NotBeEmpty().And.EndWith(EngineState.Ready);
-    seen.Should().OnlyHaveUniqueItems("each change is delivered once");
+    seen.Should().Equal([EngineState.Starting, EngineState.Ready], "each change is delivered once, in order");
     Logged(logger, "Status subscriber failed.").Should().BeTrue("a swallowed exception is logged");
+  }
+
+  /// <summary>
+  /// Verifies that an override of OnEngineStatusChanged that throws on Starting does not fail the start, and that the
+  /// change after it (Ready) is still published.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_StatusOverrideThrows_LaterChangesStillPublished()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    var engine = new ThrowingOverrideEngine(logger) { Context = new NoContext() };
+    var seen = new ConcurrentQueue<EngineState>();
+    engine.EngineStatusChanged += (_, e) => seen.Enqueue(e.State);
+
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Ready);
+    seen.Should().Equal([EngineState.Starting, EngineState.Ready], "each change is delivered once, in order");
+    Logged(logger, "Override failed.").Should().BeTrue("a swallowed exception is logged");
   }
 
   /// <summary>
@@ -162,6 +218,27 @@ public class ThrowingCallbackTest
     await task.FireAsync(EngineTaskTrigger.Start);
     await running.Task.WaitAsync(MustComplete, ct);
     await task.FireAsync(EngineTaskTrigger.Cancel);
+
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+    task.State.Should().Be(EngineTaskState.Cancelled);
+    Logged(logger, "Cancel callback failed.").Should().BeTrue("a swallowed exception is logged");
+  }
+
+  /// <summary>
+  /// Verifies that ending a task (as a restart does), whose work has a cancel callback that throws, ends it Cancelled.
+  /// </summary>
+  [Fact]
+  public async Task End_CancelCallbackThrows_EndsCancelled()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    var running = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var task = new EngineTask("Hang", token => HangAsync(token, running), requiredForRunning: true, logger,
+      CancellationToken.None);
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await running.Task.WaitAsync(MustComplete, ct);
+    await task.EndAsync().WaitAsync(MustComplete, ct);
 
     await task.InnerTask.WaitAsync(MustComplete, ct);
     task.State.Should().Be(EngineTaskState.Cancelled);
