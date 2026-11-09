@@ -41,14 +41,13 @@ public class EngineStatusEventTest
   }
 
   /// <summary>
-  /// Records the status events of the engines it is attached to, in the order they arrived. The event lives on
-  /// BaseEngine, not on IEngine, so a host binds to the concrete engines.
+  /// Records the status events of the engines it is attached to, in the order they arrived.
   /// </summary>
   private sealed class StatusLog
   {
     private readonly ConcurrentQueue<(string engine, EngineState state)> _events = new();
 
-    public void Attach(string name, BaseEngine engine) =>
+    public void Attach(string name, IEngine engine) =>
       engine.EngineStatusChanged += (_, e) => _events.Enqueue((name, e.State));
 
     public IReadOnlyList<EngineState> For(string name) =>

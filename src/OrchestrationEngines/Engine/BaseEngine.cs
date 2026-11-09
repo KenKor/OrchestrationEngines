@@ -96,10 +96,16 @@ public abstract partial class BaseEngine : IEngine
   private Dictionary<string, EngineTask> _buildingTaskSet;
 
   /// <summary>
-  /// True from a set-up that failed until the next set is published: no task set was built, and the engine is Faulted
-  /// (see <see cref="ComputeState"/>). Written under <see cref="_taskSetChange"/>.
+  /// What the last failed set-up threw, from that set-up until the next set is published: no task set was built, the
+  /// engine is Faulted (see <see cref="ComputeState"/>), and this is the cause its Faulted change reports. Written under
+  /// <see cref="_taskSetChange"/>.
   /// </summary>
-  private volatile bool _setUpFailed;
+  private volatile Exception _setUpException;
+
+  /// <summary>
+  /// True from a set-up that failed until the next set is published (see <see cref="_setUpException"/>).
+  /// </summary>
+  private bool SetUpFailed => _setUpException != null;
 
   private readonly Lock _taskSetChange = new();
 
@@ -281,10 +287,38 @@ public abstract partial class BaseEngine : IEngine
     set { SetStateSynchronized(() => value); }
   }
 
-  /// <summary>
-  /// Event raised when the engine lifecycle state changes.
-  /// </summary>
+  /// <inheritdoc/>
+  /// <remarks>
+  /// <para>
+  /// On a change to <see cref="EngineState.Faulted"/>, <see cref="EngineStatusEventArgs.Error"/> is never null. It is
+  /// an <see cref="EngineTaskNotReadyException"/> for the required task whose failure faulted the engine: its name, the
+  /// state it ended in and its <see cref="EngineTask.FailReason"/>, with the exception its work or recovery threw as
+  /// the inner exception (none for a time-out). Of several failed required tasks, it is the one whose run ended first
+  /// (for a failed recovery, the run that went into recovery; runs that ended within one tick of the clock, in the
+  /// set's order); a task that failed only because a dependency did comes after those that failed by themselves.
+  /// </para>
+  ///
+  /// <para>
+  /// An engine Faulted without a failed task carries what faulted it instead: the exception its task set-up threw, or
+  /// an <see cref="InvalidOperationException"/> saying why it was not started again (see
+  /// <see cref="AbandonRestart"/>). Otherwise it is an <see cref="InvalidOperationException"/> saying the engine is
+  /// Faulted: the state was set directly (the <see cref="State"/> setter, a <see cref="ComputeState"/> override), or
+  /// the failed task was reset between the state change and the lookup.
+  /// </para>
+  ///
+  /// <para>
+  /// The error is taken when the state changes, so it describes the tasks as they were then, even if they are reset
+  /// before the event is delivered.
+  /// </para>
+  /// </remarks>
   public event EventHandler<EngineStatusEventArgs> EngineStatusChanged;
+
+  /// <summary>
+  /// The error of the change being published (see <see cref="SetStateSynchronized"/>), for
+  /// <see cref="OnEngineStatusChanged"/>. Only the publishing thread writes it; an override that calls the base method
+  /// from another thread, during a publication, would read that publication's error.
+  /// </summary>
+  private Exception _publishingError;
 
   /// <summary>
   /// Hook invoked after a state transition.
@@ -292,14 +326,17 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="oldValue">The old value.</param>
   /// <param name="value">The value.</param>
   /// <remarks>
-  /// Each subscriber is called in turn; one that throws is logged and does not keep the others from the change.
+  /// Each subscriber is called in turn; one that throws is logged and does not keep the others from the change. An
+  /// override calls the base method synchronously, with the same arguments: the error of a change to Faulted is the one
+  /// taken when the state changed (see <see cref="EngineStatusChanged"/>), and is looked up again otherwise.
   /// </remarks>
   protected virtual void OnEngineStatusChanged(EngineState oldValue, EngineState value)
   {
     var handlers = EngineStatusChanged;
     if (handlers == null)
       return;
-    var args = new EngineStatusEventArgs(EngineName, value, null);
+    var args = new EngineStatusEventArgs(EngineName, value,
+      value == EngineState.Faulted ? _publishingError ?? FaultCause() : null);
     handlers.InvokeEach(handler => handler(this, args), ex => LogStatusSubscriberFailed(ex, value));
   }
 
@@ -331,7 +368,7 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// The state changes that are still to be published, in the order they were made.
   /// </summary>
-  private readonly Queue<(EngineState oldValue, EngineState newValue)> _pendingChanges = new();
+  private readonly Queue<(EngineState oldValue, EngineState newValue, Exception error)> _pendingChanges = new();
 
   /// <summary>
   /// True while a thread is publishing the pending changes.
@@ -350,20 +387,24 @@ public abstract partial class BaseEngine : IEngine
   /// changes in the order they were made, still without the gate held across their callbacks. A subscriber that
   /// changes the state from its callback has that change delivered after the current one, not nested.
   /// </remarks>
-  private void SetStateSynchronized(Func<EngineState> compute)
+  /// <param name="compute">The new state.</param>
+  /// <param name="faultCause">What faulted the engine, for a change to Faulted; if null, it is looked up (see
+  /// <see cref="FaultCause"/>).</param>
+  private void SetStateSynchronized(Func<EngineState> compute, Exception faultCause = null)
   {
     lock (_stateGate)
     {
       var oldValue = _state;
       var newValue = compute();
       _state = newValue;
+      // The cause is taken now, under the gate: by the time the change is published the tasks may have been reset.
       if (newValue != oldValue)
-        _pendingChanges.Enqueue((oldValue, newValue));
+        _pendingChanges.Enqueue((oldValue, newValue, newValue == EngineState.Faulted ? faultCause ?? FaultCause() : null));
     }
 
     while (true)
     {
-      (EngineState oldValue, EngineState newValue) change;
+      (EngineState oldValue, EngineState newValue, Exception error) change;
       lock (_stateGate)
       {
         // Another thread is publishing and will take this change along.
@@ -375,6 +416,7 @@ public abstract partial class BaseEngine : IEngine
 
       try
       {
+        _publishingError = change.error;
         OnEngineStatusChanged(change.oldValue, change.newValue);
       }
       catch (Exception ex)
@@ -385,10 +427,51 @@ public abstract partial class BaseEngine : IEngine
       }
       finally
       {
+        _publishingError = null;
         lock (_stateGate)
           _publishing = false;
       }
     }
+  }
+
+  /// <summary>
+  /// Whether a required task in <paramref name="state"/> faults the engine: it failed (also by a time-out, a failed
+  /// recovery or a failed dependency). A cancelled task makes the engine Stopped instead. Shared by
+  /// <see cref="ComputeState"/> and <see cref="FaultCause"/>, so the cause is looked up among the tasks that fault it.
+  /// </summary>
+  private static bool FaultsEngine(EngineTaskState state) => state.IsFailed() && state != EngineTaskState.Cancelled;
+
+  /// <summary>
+  /// What faulted the engine, for the event (see <see cref="EngineStatusChanged"/>): the failed set-up's exception, or
+  /// the required task whose run ended first, or, with neither, an <see cref="InvalidOperationException"/>.
+  /// </summary>
+  private Exception FaultCause()
+  {
+    if (_setUpException is { } setUpException)
+      return setUpException;
+    EngineTask cause = null;
+    var causeState = default(EngineTaskState);
+    var causeRank = (dependencyFailed: true, ended: DateTime.MaxValue);
+    foreach (var task in _tasks.Values)
+    {
+      if (!task.RequiredForRunning)
+        continue;
+      // Read once: the task can change meanwhile.
+      var state = task.State;
+      if (!FaultsEngine(state))
+        continue;
+      // A task that failed only because a dependency did never ran; it comes after those that failed by themselves.
+      var rank = (dependencyFailed: state == EngineTaskState.DependencyFailed, ended: task.RunEndedAtUtc ?? DateTime.MaxValue);
+      if (cause == null || rank.CompareTo(causeRank) < 0)
+      {
+        cause = task;
+        causeState = state;
+        causeRank = rank;
+      }
+    }
+    return cause != null
+      ? EngineTaskNotReadyException.For(cause, causeState)
+      : new InvalidOperationException($"Engine '{EngineName}' is Faulted.");
   }
 
   /// <summary>
@@ -418,7 +501,7 @@ public abstract partial class BaseEngine : IEngine
     if (IsCancellationRequested)
       return EngineState.Stopped;
     // No task set could be built (see SetUpAndStartAsync): with no tasks the engine would otherwise count as Ready.
-    if (_setUpFailed)
+    if (SetUpFailed)
       return EngineState.Faulted;
 
     var bestState = EngineState.Created;
@@ -446,8 +529,10 @@ public abstract partial class BaseEngine : IEngine
           // Keep looking: a failed task elsewhere makes the engine Faulted, not Stopped.
           anyCancelled = true;
           break;
-        // case >= EngineTaskState.Failed: C#10
-        default:
+        case EngineTaskState.Resetting:
+          // Between two runs, it counts as Faulted, though it has no cause to report.
+          return EngineState.Faulted;
+        case var failed when FaultsEngine(failed):
           return EngineState.Faulted;
       }
 
@@ -618,8 +703,8 @@ public abstract partial class BaseEngine : IEngine
           }
           Volatile.Write(ref _taskSet, _buildingTaskSet);
           _buildingTaskSet = null;
-          afterFailedSetUp = _setUpFailed;
-          _setUpFailed = false;
+          afterFailedSetUp = SetUpFailed;
+          _setUpException = null;
         }
       }
       catch (Exception ex)
@@ -637,7 +722,7 @@ public abstract partial class BaseEngine : IEngine
           if (!replacedWork.IsCompleted)
             InheritWork(replacedWork);
           Volatile.Write(ref _taskSet, NewTaskSet());
-          _setUpFailed = true;
+          _setUpException = ex;
         }
         // The tasks built before the failure never ran. (An overlapping set-up may have published the set already.)
         if (unpublished != null)
@@ -1193,7 +1278,7 @@ public abstract partial class BaseEngine : IEngine
     var tasks = _tasks.Values.ToArray();
     // An engine whose set-up failed has no tasks, but must be started again all the same.
     // Stopping is final: a stopped engine is not prepared for a restart.
-    if (IsCancellationRequested || (!_setUpFailed && !tasks.Any(needsRestart)))
+    if (IsCancellationRequested || (!SetUpFailed && !tasks.Any(needsRestart)))
       return;
     ArmRestart();
     LogEndingTasksBeforeRestart();
@@ -1243,7 +1328,8 @@ public abstract partial class BaseEngine : IEngine
     if (!RestartPending)
       return;
     LogRestartAbandoned(reason);
-    State = EngineState.Faulted;
+    SetStateSynchronized(() => EngineState.Faulted,
+      new InvalidOperationException($"Engine '{EngineName}' is not started again: {reason}"));
     CompleteRestart();
   }
 
