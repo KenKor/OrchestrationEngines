@@ -33,7 +33,9 @@ public class EngineCoordinatorLifecycleTest
 
   private static EngineDescriptor Descriptor(string name, IEngine engine) =>
     new EngineDescriptor(name, _ => Task.FromResult(engine), requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      // A failed load must fault at once, not retry by the default restart policy.
+      .WithoutRestarts();
 
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {

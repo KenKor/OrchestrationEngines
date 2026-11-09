@@ -60,7 +60,9 @@ public class EngineStartupTest
   private static void Register(EngineCoordinator coordinator, string name, IEngine engine, string dependsOn = null)
   {
     var descriptor = coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      // A failed load must fault at once, not retry by the default restart policy.
+      .WithoutRestarts();
     if (dependsOn != null)
       descriptor.AddDependsOn(dependsOn);
   }

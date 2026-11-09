@@ -345,6 +345,13 @@ Its responsibilities:
 
 The mechanic itself is an engine and participates in the same lifecycle model.
 
+An engine's lifecycle tasks (creation, context, kick-start) recover by the descriptor's `RestartPolicy`, which is
+`RestartPolicy.Default` unless the host sets another. A recovery helper that is set (`SetRecoveryHelper`) wins over it,
+and `RestartPolicy = null` turns recovery off. So an engine whose load fails retries with backoff before it reports
+`Faulted`: it stays `Starting` and each attempt is logged. With `RestartPolicy.Default` (five restarts in a row, the
+wait doubling from 1 s up to 10 s) a permanent error faults the engine after about 25 seconds and six attempts. A host
+that needs a failed load to fault at once sets `RestartPolicy = null`.
+
 When the descriptor's recovery retries an engine's kick-start, the engine is started again with a new task set if it
 is `Faulted`, or `Stopped` by one of its own tasks being cancelled from outside while the engine itself is live. Until
 the new set is built, nothing starts the old one and readiness waits wait for the new set. A lookup that arrives while

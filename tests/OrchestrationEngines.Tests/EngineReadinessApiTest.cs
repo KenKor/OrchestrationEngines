@@ -243,6 +243,8 @@ public class EngineReadinessApiTest
         InitialBackoff = TimeSpan.Zero,
         MaxBackoff = TimeSpan.Zero,
       });
+    else
+      descriptor.WithoutRestarts();
 
     try
     {

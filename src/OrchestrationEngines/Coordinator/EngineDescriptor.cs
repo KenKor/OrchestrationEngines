@@ -135,6 +135,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// (<see cref="SetRecoveryHelper(RestartPolicy)"/>), each lifecycle task of the engine gets an enforcer of its own
   /// (see <see cref="CreateRecoveryHelper"/>); an enforcer set directly is shared by those tasks.
   /// </para>
+  ///
+  /// <para>
+  /// When none is set, the lifecycle tasks recover by <see cref="RestartPolicy"/> instead.
+  /// </para>
   /// </remarks>
   public IRestartPolicyEnforcer RecoveryHelper
   {
@@ -169,17 +173,21 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   public bool RequiredForRunning { get; set; } = true;
 
   /// <summary>
-  /// Declarative restart policy for this engine.
+  /// The restart policy of the engine's lifecycle tasks (creation, context, kick-start) when no
+  /// <see cref="RecoveryHelper"/> is set; <see cref="RestartPolicy.Default"/> unless the host sets another, and null for
+  /// no recovery.
   /// </summary>
   /// <remarks>
   /// <para>
-  /// This policy is typically converted into a concrete
-  /// <see cref="IRestartPolicyEnforcer"/> via <see cref="RestartPolicy.GetEnforcer"/>.
+  /// Each lifecycle task gets an enforcer of its own from it (see <see cref="CreateRecoveryHelper"/>). An engine whose
+  /// load fails therefore retries with backoff, staying Starting and logging each attempt, before it reports Faulted:
+  /// with <see cref="RestartPolicy.Default"/> a permanent error faults after about 25 seconds (six attempts, the wait
+  /// doubling from 1 s up to 10 s).
   /// </para>
   ///
   /// <para>
-  /// The policy describes <em>what</em> should happen; the enforcer implements
-  /// <em>how</em> it is applied.
+  /// A <see cref="RecoveryHelper"/> that is set (also through <see cref="SetRecoveryHelper(RestartPolicy)"/>) wins
+  /// over this policy.
   /// </para>
   /// </remarks>
   public RestartPolicy RestartPolicy { get; set; } = RestartPolicy.Default;
@@ -322,10 +330,16 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// A new one for each task when <see cref="RecoveryHelper"/> was set from a policy, since an enforcer keeps the restart
   /// count of one task: shared, the tasks added up each other's restarts, and a task that completed reset the count of
   /// the others. Otherwise the enforcer that was set directly, shared, as there is no telling how to create another.
+  /// Without either, a new one from <see cref="RestartPolicy"/>, or null (no recovery) when that is null.
   /// </remarks>
   /// <param name="timeProvider">The clock of the task, for an enforcer created from the policy.</param>
   internal IRestartPolicyEnforcer CreateRecoveryHelper(TimeProvider timeProvider) =>
-    RecoveryPolicy?.GetEnforcer(timeProvider) ?? RecoveryHelper;
+    RecoveryPolicy?.GetEnforcer(timeProvider) ?? RecoveryHelper ?? RestartPolicy?.GetEnforcer(timeProvider);
+
+  /// <summary>
+  /// Whether the engine's lifecycle tasks recover from a failure (see <see cref="CreateRecoveryHelper"/>).
+  /// </summary>
+  internal bool HasRecovery => RecoveryHelper != null || RestartPolicy != null;
 
   /// <summary>
   /// Assigns a concrete recovery enforcer to this engine.

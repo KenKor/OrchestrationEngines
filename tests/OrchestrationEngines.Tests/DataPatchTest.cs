@@ -56,7 +56,9 @@ public class DataPatchTest
     ContextLog contexts = null)
   {
     var descriptor = coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
-      .SetContextFactory(_ => contexts?.Compute(name) ?? Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => contexts?.Compute(name) ?? Task.FromResult<IEngineContext>(new NoContext()))
+      // A failed load must fault at once, not retry by the default restart policy.
+      .WithoutRestarts();
     if (builtOn != null)
       descriptor.AddDependsOn(builtOn);
     return descriptor;
@@ -331,7 +333,9 @@ public class DataPatchTest
     coordinator.RegisterEngine("AsBuilt", _ => Task.FromResult<IEngine>(asBuilt), requiredForRunning: true)
       .SetContextFactory(_ => Interlocked.Increment(ref contexts) == 1
         ? Task.FromResult<IEngineContext>(new NoContext())
-        : throw new InvalidOperationException("The context could not be computed."));
+        : throw new InvalidOperationException("The context could not be computed."))
+      // The failed context must fail at once, not retry by the default restart policy.
+      .WithoutRestarts();
     await coordinator.GetEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
 
     await coordinator.InvalidateContextForEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);

@@ -156,23 +156,94 @@ public class RuntimeRecoveryTest
   }
 
   /// <summary>
-  /// Documents that the descriptor's <see cref="EngineDescriptor.RestartPolicy"/> property is declarative only: an
-  /// engine registered with a policy but without <see cref="EngineDescriptor.SetRecoveryHelper(RestartPolicy)"/> is
-  /// not started again when its load fails. A host must call SetRecoveryHelper; whether the property should apply
-  /// by itself is a decision for the Engine's owners.
+  /// Verifies that an engine registered without any recovery setting recovers by the descriptor's default
+  /// <see cref="EngineDescriptor.RestartPolicy"/>: its failed first start is retried after the backoff (1 s), and the
+  /// engine becomes Ready.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_DescriptorRestartPolicyWithoutRecoveryHelper_DoesNotRetry()
+  public async Task EngineCoordinator_DefaultRestartPolicy_StartFailsOnce_Recovers()
   {
     var ct = TestContext.Current.CancellationToken;
     var kernel = new KernelEngine(failedStarts: 1);
     var coordinator = CreateCoordinator();
-    Register(coordinator, "Kernel", kernel).RestartPolicy = NoWait(3);
+    Register(coordinator, "Kernel", kernel);
+
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    await WaitUntilAsync(() => kernel.State == EngineState.Ready, "the default policy starts it again");
+
+    kernel.Starts.Should().Be(2);
+  }
+
+  /// <summary>
+  /// Verifies that the descriptor's <see cref="EngineDescriptor.RestartPolicy"/> applies without
+  /// <see cref="EngineDescriptor.SetRecoveryHelper(RestartPolicy)"/>, and that the engine faults once it gives up.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_DescriptorRestartPolicy_StartKeepsFailing_FaultsWhenThePolicyGivesUp()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var kernel = new KernelEngine(failedStarts: int.MaxValue);
+    var coordinator = CreateCoordinator();
+    Register(coordinator, "Kernel", kernel).RestartPolicy = new RestartPolicy
+    {
+      MaxConsecutiveRestarts = 2,
+      InitialBackoff = TimeSpan.Zero,
+      MaxBackoff = TimeSpan.Zero,
+    };
+
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the policy gives up");
+    // Give a restart that should not happen the time to happen.
+    await Task.Delay(200, ct);
+
+    kernel.Starts.Should().Be(3, "one start and two restarts");
+  }
+
+  /// <summary>
+  /// Verifies that a <see cref="EngineDescriptor.RestartPolicy"/> of null turns recovery off: a failed start faults the
+  /// engine at once.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_NullRestartPolicy_StartFails_FaultsAtOnce()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var kernel = new KernelEngine(failedStarts: 1);
+    var coordinator = CreateCoordinator();
+    Register(coordinator, "Kernel", kernel).RestartPolicy = null;
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the first start fails");
+    // Give a restart that should not happen the time to happen.
+    await Task.Delay(200, ct);
 
     kernel.Starts.Should().Be(1);
+    kernel.State.Should().Be(EngineState.Faulted);
+  }
+
+  /// <summary>
+  /// Verifies that a recovery helper set explicitly wins over the descriptor's
+  /// <see cref="EngineDescriptor.RestartPolicy"/>: the helper's single restart is all the engine gets.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ExplicitRecoveryHelper_OverridesTheRestartPolicy()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var kernel = new KernelEngine(failedStarts: int.MaxValue);
+    var coordinator = CreateCoordinator();
+    var descriptor = Register(coordinator, "Kernel", kernel);
+    descriptor.RestartPolicy = NoWait(10);
+    descriptor.SetRecoveryHelper(new RestartPolicy
+    {
+      MaxConsecutiveRestarts = 1,
+      InitialBackoff = TimeSpan.Zero,
+      MaxBackoff = TimeSpan.Zero,
+    });
+
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the helper gives up");
+    await Task.Delay(200, ct);
+
+    kernel.Starts.Should().Be(2, "one start and the helper's one restart");
   }
 
   /// <summary>

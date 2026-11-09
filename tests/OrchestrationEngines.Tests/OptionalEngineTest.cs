@@ -33,7 +33,9 @@ public class OptionalEngineTest
   private static void Register(EngineCoordinator coordinator, string name, IEngine engine, bool required)
   {
     coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: required)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      // A failed load must fault at once, not retry by the default restart policy.
+      .WithoutRestarts();
   }
 
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
