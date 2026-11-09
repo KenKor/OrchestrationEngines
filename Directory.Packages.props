@@ -1,0 +1,30 @@
+<Project>
+  <!-- Central Package Management: every package version is set here, not in the .csproj files. -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- Library -->
+  <ItemGroup>
+    <PackageVersion Include="Stateless" Version="5.20.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <!-- TimeProvider for netstandard2.0 (built into .NET 8 and later). -->
+    <PackageVersion Include="Microsoft.Bcl.TimeProvider" Version="10.0.8" />
+    <!-- HashCode for netstandard2.0 (built into .NET Core 2.1 and later). -->
+    <PackageVersion Include="Microsoft.Bcl.HashCode" Version="6.0.0" />
+    <!-- Compile-time only: attributes for required, init and records on older targets. -->
+    <PackageVersion Include="PolySharp" Version="1.15.0" />
+  </ItemGroup>
+
+  <!-- Tests -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.Testing" Version="10.5.0" />
+    <!-- Apache-2.0 fork of FluentAssertions 7 (FluentAssertions 8+ needs a paid licence for commercial use). -->
+    <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,76 @@
+# Builds, tests and packs the library on every push and pull request, and publishes it on a version tag.
+#
+# Not finished on purpose until the open decisions in docs/Releasing.md are made. Building and testing already work.
+# Packing warns on pull requests and pushes to main, so their checks can pass, and fails on a version tag. Publishing
+# fails.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Windows, because the tests also run on .NET Framework 4.8.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history and tags, for versioning from git tags (see docs/Releasing.md).
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        run: >-
+          dotnet test --no-build --configuration Release
+          --coverage --coverage-output-format cobertura --coverage-settings tests/CodeCoverage.settings.xml
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults/
+          if-no-files-found: ignore
+
+      # Until the packaging decisions are made (see Directory.Build.targets) this warns, except on a version tag, where
+      # it fails: nothing may be released before then.
+      - name: Pack
+        run: >-
+          dotnet pack src/OrchestrationEngines/OrchestrationEngines.csproj --no-build --configuration Release
+          --output artifacts/packages
+          -p:RequirePackagingDecisions=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: artifacts/packages/
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # TODO: when publishing is set up, add a protected environment and, for nuget.org Trusted Publishing,
+    # "permissions: id-token: write" (see docs/Releasing.md).
+    steps:
+      - name: Publishing is not set up yet
+        run: |
+          echo "::error::Publishing is not set up yet. Decide the open points in docs/Releasing.md first."
+          exit 1

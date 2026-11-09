@@ -1,0 +1,37 @@
+# Pilot workflow for the iKendy self-hosted runner, the same arrangement as in kleene.
+# Kept separate from build.yml so the GitHub-hosted pipeline stays authoritative until this one has proven itself.
+# It builds and tests net10.0 only: the net48 tests need Windows and stay in build.yml.
+
+name: CI (self-hosted)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: build-and-test (self-hosted)
+    # This repo is public: never run code from a fork on our runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, ci]
+    steps:
+      - uses: actions/checkout@v7
+
+      # global.json pins an SDK that is newer than the one installed on the runner host. The runner user cannot
+      # write to the system dotnet folder, so the SDK goes into the job's temp directory.
+      - uses: actions/setup-dotnet@v6
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build and test (net10.0, Release)
+        run: dotnet test --configuration Release -f net10.0
