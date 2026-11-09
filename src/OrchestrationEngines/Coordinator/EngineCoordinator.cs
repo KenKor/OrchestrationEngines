@@ -946,17 +946,32 @@ public partial class EngineCoordinator : IDisposable
       throw new ArgumentNullException(nameof(engineName));
     if (taskName == null)
       throw new ArgumentNullException(nameof(taskName));
+    await ForEngineAsync(engineName,
+      generation => generation.EnsureEngineTaskReadyAsync(engineName, taskName, token),
+      () => Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token),
+      token).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
+  /// <paramref name="onGeneration"/> on the next generation once this one was replaced, else on this one, started if
+  /// needed. A generation switch during the call (its engine stopped: a cancellation, or a Cancelled task) is answered
+  /// by the next generation, if it has the engine.
+  /// </summary>
+  private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
+    CancellationToken token)
+  {
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
     if (Successor is { } replaced)
     {
-      await replaced.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+      await onGeneration(replaced).ConfigureAwait(false);
       return;
     }
 
     try
     {
       await DispatchAsync(StartAsync, token).ConfigureAwait(false);
-      await Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+      await onMechanic().ConfigureAwait(false);
     }
     // The switch check is a cheap pre-check: NextGenerationAsync answers null without a switch, but only after the
     // catch has been entered.
@@ -967,8 +982,40 @@ public partial class EngineCoordinator : IDisposable
       var next = await NextGenerationAsync(engineName, token).ConfigureAwait(false);
       if (next == null)
         throw;
-      await next.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+      await onGeneration(next).ConfigureAwait(false);
     }
+  }
+
+  /// <summary>
+  /// Resets tasks of the engine <paramref name="engineName"/>, and with <paramref name="resetDependentTasks"/> the
+  /// engine's tasks that depend on them, dependents first; the tasks then run again (see
+  /// <see cref="BaseEngine.ResetTasksAsync"/>). Starts the coordinator if it has not been started yet, and waits for the
+  /// engine to start.
+  /// </summary>
+  /// <param name="engineName">The name of the engine (compared ignoring case).</param>
+  /// <param name="taskNames">The names of the engine's tasks to reset (compared ignoring case).</param>
+  /// <param name="resetDependentTasks">Whether to reset the engine's tasks that depend on them too.</param>
+  /// <param name="token">Cancels the caller's wait for the engine to start.</param>
+  /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
+  /// <remarks>
+  /// A generation switch during the wait is answered by the next generation, which resets its engine, as with
+  /// <see cref="EnsureEngineTaskReadyAsync"/>. The wait for the engine to start lasts until it is Ready or its start
+  /// has failed (see <see cref="MechanicEngine.ResetEngineTasksAsync"/>).
+  /// </remarks>
+  /// <exception cref="InvalidOperationException">
+  /// The engine was not created, never started, is stopped, or is not a <see cref="BaseEngine"/>.
+  /// </exception>
+  public async Task ResetTasksForEngineAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
+    CancellationToken token = default)
+  {
+    if (engineName == null)
+      throw new ArgumentNullException(nameof(engineName));
+    if (taskNames == null)
+      throw new ArgumentNullException(nameof(taskNames));
+    await ForEngineAsync(engineName,
+      generation => generation.ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks, token),
+      () => Mechanic.ResetEngineTasksAsync(engineName, taskNames, resetDependentTasks, token),
+      token).ConfigureAwait(false);
   }
 
   /// <summary>
