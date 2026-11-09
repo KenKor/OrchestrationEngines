@@ -71,6 +71,9 @@ public abstract partial class BaseEngine : IEngine
 
   private static Dictionary<string, EngineTask> NewTaskSet() => new(StringComparer.OrdinalIgnoreCase);
 
+  private static Dictionary<string, EngineTask> NewTaskSet(Dictionary<string, EngineTask> copyOf, string name, EngineTask task) =>
+    new(copyOf, StringComparer.OrdinalIgnoreCase) { [name] = task };
+
   /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
   /// </summary>
@@ -364,6 +367,10 @@ public abstract partial class BaseEngine : IEngine
   /// cancellation: the engine is Faulted if any required task failed, and Stopped
   /// only if required tasks were cancelled and none failed.
   /// </para>
+  /// <para>
+  /// An engine whose last set-up failed has no tasks and is Faulted. An override that does not call this method must
+  /// handle that case itself, or such an engine counts as Ready.
+  /// </para>
   /// </remarks>
   protected virtual EngineState ComputeState()
   {
@@ -490,11 +497,12 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Makes the tasks of the next task set run only once <paramref name="work"/> has ended, as they wait for the work of
   /// the set they replace: for work outside this engine that builds on the same data, such as that of a previous engine
-  /// whose data this engine takes over. Used by the next start only.
+  /// whose data this engine takes over. Used by the next start only. Adds to the work already waited for (such as the
+  /// work a failed set-up handed on) rather than replacing it.
   /// </summary>
   /// <param name="work">The work to wait for.</param>
   /// <remarks>Called before <see cref="StartAsync"/>.</remarks>
-  protected void StartAfter(Task work) => Volatile.Write(ref _inheritedWork, work);
+  protected void StartAfter(Task work) => InheritWork(work);
 
   /// <summary>
   /// Adds <paramref name="work"/> to the work the next task set waits for (see <see cref="StartAfter"/>).
@@ -518,8 +526,18 @@ public abstract partial class BaseEngine : IEngine
       // The work of the set that is replaced can still be running: its tasks were ended (or timed out), which cancels
       // their work but cannot stop it. The new set's tasks start once it has ended, since they build on the same data.
       // So does work outside this engine that builds on it (see StartAfter).
-      var inheritedWork = Interlocked.Exchange(ref _inheritedWork, null) ?? Task.CompletedTask;
-      var replacedWork = Task.WhenAll(_tasks.Values.Select(t => t.LatestRunEnded).Append(inheritedWork));
+      // Only work still running is waited for, and a single piece is passed on as is, so that retries after failed
+      // set-ups do not wrap it deeper each time.
+      var pending = _tasks.Values.Select(t => t.LatestRunEnded)
+        .Append(Interlocked.Exchange(ref _inheritedWork, null))
+        .Where(work => work is { IsCompleted: false })
+        .ToList();
+      var replacedWork = pending.Count switch
+      {
+        0 => Task.CompletedTask,
+        1 => pending[0],
+        _ => Task.WhenAll(pending),
+      };
       lock (_taskSetChange)
       {
         _buildingTaskSet = NewTaskSet();
@@ -539,6 +557,7 @@ public abstract partial class BaseEngine : IEngine
               task.RunAfter(replacedWork);
           }
           Volatile.Write(ref _taskSet, _buildingTaskSet);
+          _buildingTaskSet = null;
           afterFailedSetUp = _setUpFailed;
           _setUpFailed = false;
         }
@@ -550,22 +569,25 @@ public abstract partial class BaseEngine : IEngine
         // PrepareRestartAsync).
         lock (_taskSetChange)
         {
+          _buildingTaskSet = null;
+          // The work the next set must wait for is still running: hand it on to that set, before a start can see the
+          // failure and build it.
+          if (!replacedWork.IsCompleted)
+            InheritWork(replacedWork);
           Volatile.Write(ref _taskSet, NewTaskSet());
           _setUpFailed = true;
         }
-        // The work the next set must wait for is still running: hand it on to that set.
-        if (!replacedWork.IsCompleted)
-          InheritWork(replacedWork);
-        LogSetUpFailed(ex);
-        State = EngineState.Faulted;
-        throw;
-      }
-      finally
-      {
-        lock (_taskSetChange)
+        // A stop during the set-up (which may be why it threw) leaves the engine Stopped, as ComputeState would say.
+        if (IsCancellationRequested)
         {
-          _buildingTaskSet = null;
+          State = EngineState.Stopped;
         }
+        else
+        {
+          LogSetUpFailed(ex);
+          State = EngineState.Faulted;
+        }
+        throw;
       }
 
       // Fire the start trigger for those that we're started yet.
@@ -951,7 +973,7 @@ public abstract partial class BaseEngine : IEngine
       else
       {
         // Outside a set-up the published set is not changed: copy it.
-        Volatile.Write(ref _taskSet, new Dictionary<string, EngineTask>(_taskSet, StringComparer.OrdinalIgnoreCase) { [name] = task });
+        Volatile.Write(ref _taskSet, NewTaskSet(_taskSet, name, task));
       }
     }
     if (task.RequiredForRunning)

@@ -31,7 +31,7 @@ public class TaskSetSetUpFailureTest
 
     public int SetUps;
 
-    public EngineTask Make(string name) => CreateTask(name, _ => Task.CompletedTask);
+    public EngineTask Make(string name) => Make(name, _ => Task.CompletedTask);
 
     public EngineTask Make(string name, Func<CancellationToken, Task> work) => CreateTask(name, work);
 
@@ -41,6 +41,16 @@ public class TaskSetSetUpFailureTest
     {
       Interlocked.Increment(ref SetUps);
       SetUp(this);
+    }
+  }
+
+  private static async Task WaitUntilAsync(Func<bool> condition, string because)
+  {
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (!condition())
+    {
+      DateTime.UtcNow.Should().BeBefore(deadline, because);
+      await Task.Delay(10, TestContext.Current.CancellationToken);
     }
   }
 
@@ -151,11 +161,8 @@ public class TaskSetSetUpFailureTest
       });
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (engine.State != EngineState.Ready && DateTime.UtcNow < deadline)
-      await Task.Delay(10, ct);
-
-    engine.State.Should().Be(EngineState.Ready);
+    await WaitUntilAsync(() => engine.State == EngineState.Ready, "recovery must start the engine again");
+    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must run again");
     Volatile.Read(ref engine.SetUps).Should().Be(2);
   }
 
@@ -185,6 +192,56 @@ public class TaskSetSetUpFailureTest
     inherited.SetResult();
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
     Volatile.Read(ref ran).Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that work given with StartAfter before the retry is added to the work a failed set-up handed on, not put
+  /// in its place. Without the fix, StartAfter overwrote it, and the next set ran next to the handed-on work.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_StartAfterOnTheRetry_StillWaitsForTheHandedOnWork()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var handedOn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var ran = 0;
+    var engine = new SetUpEngine { SetUp = Cyclic };
+    engine.WaitFor(handedOn.Task);
+    (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<CyclicEngineTaskDependencyException>();
+
+    engine.SetUp = e => e.Make("A", _ =>
+    {
+      Interlocked.Increment(ref ran);
+      return Task.CompletedTask;
+    });
+    engine.WaitFor(Task.CompletedTask);
+    await engine.StartAsync();
+    await Task.Delay(200, ct);
+    Volatile.Read(ref ran).Should().Be(0, "the handed-on work has not ended yet");
+
+    handedOn.SetResult();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    Volatile.Read(ref ran).Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that a set-up that throws because the engine was stopped meanwhile leaves the engine Stopped, not
+  /// Faulted: the stop is not a failure.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_StoppedDuringSetUp_IsStopped()
+  {
+    var engine = new SetUpEngine
+    {
+      SetUp = e =>
+      {
+        e.StopAsync().GetAwaiter().GetResult();
+        throw new OperationCanceledException();
+      }
+    };
+
+    (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<OperationCanceledException>();
+
+    engine.State.Should().Be(EngineState.Stopped);
   }
 
   /// <summary>
