@@ -306,7 +306,7 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
 - shields itself from the code it calls back: a subscriber to `EngineStatusChanged`, or to a task's
   `CompletedStateReached`/`FailedStateReached`, that throws is logged and skipped, and the other subscribers (among
   them the tasks that depend on it) still get the change. This covers what a subscriber throws before it returns: the
-  events are `Action`s, so an `async` subscriber must catch what it throws after its first `await` itself. A callback
+  events' handlers return `void`, so an `async` subscriber must catch what it throws after its first `await` itself. A callback
   registered on a work's cancellation token that throws is logged too, and the stop, cancellation or time-out goes
   ahead
 

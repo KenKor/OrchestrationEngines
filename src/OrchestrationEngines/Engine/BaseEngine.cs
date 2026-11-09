@@ -275,7 +275,7 @@ public abstract partial class BaseEngine : IEngine
     if (handlers == null)
       return;
     var args = new EngineStatusEventArgs(EngineName, value, null);
-    handlers.InvokeEach(handler => handler(this, args), ex => LogSubscriberFailed(ex, nameof(EngineStatusChanged), value));
+    handlers.InvokeEach(handler => handler(this, args), ex => LogStatusSubscriberFailed(ex, value));
   }
 
   /// <summary>
@@ -356,7 +356,7 @@ public abstract partial class BaseEngine : IEngine
       {
         // Only an override gets here (the base method catches per subscriber). It must not hold back the changes queued
         // after this one, nor fail whoever set the state.
-        LogSubscriberFailed(ex, nameof(OnEngineStatusChanged), change.newValue);
+        LogStatusOverrideFailed(ex, change.newValue);
       }
       finally
       {
@@ -1209,8 +1209,11 @@ public abstract partial class BaseEngine : IEngine
   [LoggerMessage(Level = LogLevel.Warning, Message = "The engine is not started again: {Reason}")]
   private partial void LogRestartAbandoned(string reason);
 
-  [LoggerMessage(Level = LogLevel.Error, Message = "A subscriber to {EventName} threw on the change to {State}; the other subscribers were still called.")]
-  private partial void LogSubscriberFailed(Exception exception, string eventName, EngineState state);
+  [LoggerMessage(Level = LogLevel.Error, Message = "A subscriber to EngineStatusChanged threw on the change to {State}; the other subscribers were still called.")]
+  private partial void LogStatusSubscriberFailed(Exception exception, EngineState state);
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "OnEngineStatusChanged threw on the change to {State}; the change stands and later changes are still published.")]
+  private partial void LogStatusOverrideFailed(Exception exception, EngineState state);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Cancelling all tasks via global token.")]
   private partial void LogCancellingAllTasks();

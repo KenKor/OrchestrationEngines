@@ -857,16 +857,8 @@ public partial class EngineTask
           // If we succeeded after a recovery, reset recovery budget for future runs.
           RecoveryHelper?.Reset();
 
-          // Notify dependents, then release awaiters waiting on lifecycle completion (even if logging a subscriber's
-          // exception threw).
-          try
-          {
-            RaiseTerminal(CompletedStateReached, nameof(CompletedStateReached));
-          }
-          finally
-          {
-            _completionTcs.TrySetResult(true);
-          }
+          // Notify dependents, then release awaiters waiting on lifecycle completion.
+          RaiseTerminal(CompletedStateReached, nameof(CompletedStateReached));
         })
         .Ignore(EngineTaskTrigger.CompleteDependency)
         .Ignore(EngineTaskTrigger.Cancel)
@@ -1004,23 +996,25 @@ public partial class EngineTask
     else
       LogEnteredFailed(Logger, FailReason);
 #endif
+    RaiseTerminal(FailedStateReached, nameof(FailedStateReached));
+  }
+
+  /// <summary>
+  /// Calls each subscriber of a terminal-state event in turn, then completes this task's latch
+  /// (<see cref="InnerTask"/>). A subscriber that throws is logged and does not keep the subscribers after it, among
+  /// them the tasks that depend on this one, from being called (see <see cref="DelegateExtensions.InvokeEach{T}"/>).
+  /// </summary>
+  private void RaiseTerminal(Action<EngineTask> handlers, string eventName)
+  {
     try
     {
-      RaiseTerminal(FailedStateReached, nameof(FailedStateReached));
+      handlers.InvokeEach(handler => handler(this), ex => LogSubscriberFailed(Logger, ex, eventName));
     }
     finally
     {
       _completionTcs.TrySetResult(true);
     }
   }
-
-  /// <summary>
-  /// Calls each subscriber of a terminal-state event in turn. A subscriber that throws is logged and does not keep the
-  /// subscribers after it, among them the tasks that depend on this one, from being called, nor this task's latch
-  /// (<see cref="InnerTask"/>) from completing.
-  /// </summary>
-  private void RaiseTerminal(Action<EngineTask> handlers, string eventName) =>
-    handlers.InvokeEach(handler => handler(this), ex => LogSubscriberFailed(Logger, ex, eventName));
 
   /// <summary>
   /// Returns why this task cannot run because of a task it depends on that failed or was cancelled.

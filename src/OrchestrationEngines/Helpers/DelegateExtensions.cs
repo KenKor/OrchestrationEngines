@@ -9,7 +9,8 @@ internal static class DelegateExtensions
 {
   /// <summary>
   /// Calls each subscriber in <paramref name="handlers"/> in turn through <paramref name="call"/>. One that throws is
-  /// passed to <paramref name="onError"/>, and the subscribers after it are still called.
+  /// passed to <paramref name="onError"/>, and the subscribers after it are still called, even if
+  /// <paramref name="onError"/> throws too (a logging provider that fails).
   /// </summary>
   /// <typeparam name="T">The event's delegate type.</typeparam>
   /// <param name="handlers">The event's subscribers, or null when it has none.</param>
@@ -27,7 +28,14 @@ internal static class DelegateExtensions
       }
       catch (Exception ex)
       {
-        onError(ex);
+        try
+        {
+          onError(ex);
+        }
+        catch
+        {
+          // Nothing is left to report it to; the next subscriber must still be called.
+        }
       }
     }
   }

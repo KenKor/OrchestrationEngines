@@ -47,7 +47,7 @@ public class ThrowingCallbackTest
   /// <summary>
   /// Load, then Use, which depends on it, with no subscribers of their own.
   /// </summary>
-  private sealed class PlainEngine : BaseEngine
+  private class PlainEngine : BaseEngine
   {
     public PlainEngine(ILogger logger) : base(logger) => Context = new NoContext();
 
@@ -64,12 +64,8 @@ public class ThrowingCallbackTest
   /// A <see cref="PlainEngine"/> whose override of <see cref="BaseEngine.OnEngineStatusChanged"/> throws on Starting,
   /// after it has published the change.
   /// </summary>
-  private sealed class ThrowingOverrideEngine(ILogger logger) : BaseEngine(logger)
+  private sealed class ThrowingOverrideEngine(ILogger logger) : PlainEngine(logger)
   {
-    public EngineTask Load { get; private set; }
-
-    protected override void SetUpTasks() => Load = CreateTask("Load", _ => Task.CompletedTask);
-
     protected override void OnEngineStatusChanged(EngineState oldValue, EngineState value)
     {
       base.OnEngineStatusChanged(oldValue, value);
@@ -171,7 +167,7 @@ public class ThrowingCallbackTest
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
-    var engine = new ThrowingOverrideEngine(logger) { Context = new NoContext() };
+    var engine = new ThrowingOverrideEngine(logger);
     var seen = new ConcurrentQueue<EngineState>();
     engine.EngineStatusChanged += (_, e) => seen.Enqueue(e.State);
 
