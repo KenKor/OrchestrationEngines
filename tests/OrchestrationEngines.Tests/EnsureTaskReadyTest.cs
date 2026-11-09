@@ -339,7 +339,6 @@ public class EnsureTaskReadyTest
     var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine("Mixed", create, requiredForRunning: false)
       .SetContextFactory(contextFactory ?? (_ => Task.FromResult<IEngineContext>(new NoContext())))
-      // A failed creation or context must fail at once, not retry by the default restart policy.
       .WithoutRestarts();
     return coordinator;
   }

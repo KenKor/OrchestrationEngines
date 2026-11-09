@@ -95,13 +95,7 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   {
     _policy = policy ?? throw new ArgumentNullException(nameof(policy));
     _timeProvider = timeProvider ?? TimeProvider.System;
-
-    // 0 means disable this check.
-    if (_policy.MaxRestartsInWindow < 0) throw new ArgumentOutOfRangeException(nameof(policy.MaxRestartsInWindow));
-    if (_policy.Window < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(policy.Window));
-    if (_policy.MaxConsecutiveRestarts < 0) throw new ArgumentOutOfRangeException(nameof(policy.MaxConsecutiveRestarts));
-    if (_policy.InitialBackoff < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(policy.InitialBackoff));
-    if (_policy.MaxBackoff < _policy.InitialBackoff) throw new ArgumentOutOfRangeException(nameof(policy.MaxBackoff));
+    _policy.Validate();
     CurrentBackoff = _policy.InitialBackoff;
   }
 

@@ -34,7 +34,6 @@ public class OptionalEngineTest
   {
     coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: required)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      // A failed load must fault at once, not retry by the default restart policy.
       .WithoutRestarts();
   }
 

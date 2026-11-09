@@ -27,9 +27,8 @@ namespace OrchestrationEngines.Mechanic;
 ///
 /// <para>
 /// Note: Recovery for engine creation currently reuses the engine's recovery (see
-/// <see cref="EngineDescriptor.CreateRecoveryHelper"/>: its <see cref="EngineDescriptor.RecoveryHelper"/>, or else its
-/// <see cref="EngineDescriptor.RestartPolicy"/>), but this is conceptually different from launch/restart recovery and
-/// may warrant a separate policy.
+/// <see cref="EngineDescriptor.CreateRecoveryHelper"/>), but this is conceptually different from launch/restart
+/// recovery and may warrant a separate policy.
 /// </para>
 /// </remarks>
 public class EngineCreationTask : EngineTask

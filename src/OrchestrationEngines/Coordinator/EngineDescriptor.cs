@@ -180,9 +180,12 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <remarks>
   /// <para>
   /// Each lifecycle task gets an enforcer of its own from it (see <see cref="CreateRecoveryHelper"/>). An engine whose
-  /// load fails therefore retries with backoff, staying Starting and logging each attempt, before it reports Faulted:
-  /// with <see cref="RestartPolicy.Default"/> a permanent error faults after about 25 seconds (six attempts, the wait
-  /// doubling from 1 s up to 10 s).
+  /// load fails therefore retries with backoff, staying Starting and logging each attempt, before it reports Faulted
+  /// (how long <see cref="RestartPolicy.Default"/> takes is in the overview, docs/Overview.md).
+  /// </para>
+  ///
+  /// <para>
+  /// The policy is checked when it is set, so an invalid one throws here rather than when the engine is started.
   /// </para>
   ///
   /// <para>
@@ -190,7 +193,19 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// over this policy.
   /// </para>
   /// </remarks>
-  public RestartPolicy RestartPolicy { get; set; } = RestartPolicy.Default;
+  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is out of range (see
+  /// <see cref="RestartPolicyEnforcer"/>).</exception>
+  public RestartPolicy RestartPolicy
+  {
+    get => _restartPolicy;
+    set
+    {
+      value?.Validate();
+      _restartPolicy = value;
+    }
+  }
+
+  private RestartPolicy _restartPolicy = RestartPolicy.Default;
 
   /// <summary>
   /// Names of engines that this engine depends on.
@@ -339,6 +354,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <summary>
   /// Whether the engine's lifecycle tasks recover from a failure (see <see cref="CreateRecoveryHelper"/>).
   /// </summary>
+  /// <remarks>
+  /// Keep in step with <see cref="CreateRecoveryHelper"/>, which it restates without creating an enforcer; it leaves out
+  /// <see cref="RecoveryPolicy"/>, which is only ever set together with <see cref="RecoveryHelper"/>.
+  /// </remarks>
   internal bool HasRecovery => RecoveryHelper != null || RestartPolicy != null;
 
   /// <summary>

@@ -147,7 +147,6 @@ public class GenerationSwitchEdgeCaseTest
     var coordinator = new EngineCoordinator("Switch", logger, useDispatcher: false);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()))
       .SetRestartFactory((input, _) => Task.FromResult(input.PreviousEngine))
-      // The refused creation must fail at once, not retry by the default restart policy.
       .WithoutRestarts();
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 

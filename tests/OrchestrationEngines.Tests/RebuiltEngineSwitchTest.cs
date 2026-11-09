@@ -116,7 +116,6 @@ public class RebuiltEngineSwitchTest
         return Task.FromResult<IEngine>(new DataEngine());
       })
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      // A failed load must fault at once, not retry by the default restart policy.
       .WithoutRestarts();
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     first.State.Should().Be(EngineState.Faulted);

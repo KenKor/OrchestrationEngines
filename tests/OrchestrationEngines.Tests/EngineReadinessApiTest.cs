@@ -229,13 +229,13 @@ public class EngineReadinessApiTest
   [Theory]
   [InlineData(true)]
   [InlineData(false)]
-  public async Task EngineKickStartTask_EngineNotStarted_LogsAWarningOnlyWhenItMayRestart(bool withRestartPolicy)
+  public async Task EngineKickStartTask_EngineNotStarted_LogsAWarningOnlyWhenItMayRestart(bool mayRestart)
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
     var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), logger, useDispatcher: false);
     var descriptor = coordinator.RegisterEngine("E", _ => Task.FromResult<IEngine>(new FailsOnceEngine()));
-    if (withRestartPolicy)
+    if (mayRestart)
       descriptor.SetRecoveryHelper(new RestartPolicy
       {
         MaxRestartsInWindow = 3,
@@ -251,7 +251,7 @@ public class EngineReadinessApiTest
       await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
       var records = logger.Collector.GetSnapshot();
-      if (withRestartPolicy)
+      if (mayRestart)
       {
         records.Should().Contain(r => r.Level == LogLevel.Warning && r.Message.Contains("The restart policy decides"));
         records.Should().NotContain(r => r.Level == LogLevel.Error && IsNotStarted(r.Exception));

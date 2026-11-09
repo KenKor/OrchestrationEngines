@@ -175,7 +175,7 @@ classDiagram
     EngineContextWithDependencies o-- IEngine : underlying engines
     EngineTask ..> IRestartPolicyEnforcer : recovery
     RestartPolicy ..> IRestartPolicyEnforcer : GetEnforcer()
-    EngineDescriptor ..> RestartPolicy : SetRecoveryHelper()
+    EngineDescriptor ..> RestartPolicy : RestartPolicy, SetRecoveryHelper()
     note for IReplacesPreviousEngine "Optional: implemented by an engine that takes over\nwhat its predecessor loaded in a generation switch"
 ```
 
@@ -350,7 +350,9 @@ An engine's lifecycle tasks (creation, context, kick-start) recover by the descr
 and `RestartPolicy = null` turns recovery off. So an engine whose load fails retries with backoff before it reports
 `Faulted`: it stays `Starting` and each attempt is logged. With `RestartPolicy.Default` (five restarts in a row, the
 wait doubling from 1 s up to 10 s) a permanent error faults the engine after about 25 seconds and six attempts. A host
-that needs a failed load to fault at once sets `RestartPolicy = null`.
+that needs a failed load to fault at once sets `RestartPolicy = null`. The retries also delay what waits for the
+engine: a generation switch that waits until the next generation is ready keeps the previous generation (and the
+engine handed over) until the retries have ended.
 
 When the descriptor's recovery retries an engine's kick-start, the engine is started again with a new task set if it
 is `Faulted`, or `Stopped` by one of its own tasks being cancelled from outside while the engine itself is live. Until

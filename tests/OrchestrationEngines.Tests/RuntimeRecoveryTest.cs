@@ -33,6 +33,14 @@ public class RuntimeRecoveryTest
     MaxBackoff = TimeSpan.Zero,
   };
 
+  // A policy that allows a number of restarts in a row, without a window or a wait.
+  private static RestartPolicy NoWaitInARow(int maxRestarts) => new()
+  {
+    MaxConsecutiveRestarts = maxRestarts,
+    InitialBackoff = TimeSpan.Zero,
+    MaxBackoff = TimeSpan.Zero,
+  };
+
   /// <summary>
   /// An engine shaped like a process host: a required start task that fails the first <paramref name="failedStarts"/>
   /// times, and a background watcher (not required for running) that fails the first <paramref name="failedWatches"/>
@@ -130,20 +138,24 @@ public class RuntimeRecoveryTest
   /// <summary>
   /// Verifies that the restarts in a row stop a kick-start whose engine keeps faulting after its context task
   /// succeeded, also without a restart window: the count must not start over during the kick-start's restarts, or the
-  /// engine would never be given up on.
+  /// engine would never be given up on. The policy applies the same set through
+  /// <see cref="EngineDescriptor.SetRecoveryHelper(RestartPolicy)"/> or as the descriptor's
+  /// <see cref="EngineDescriptor.RestartPolicy"/>.
   /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_DescriptorRecovery_StartKeepsFailing_StopsAfterTheConsecutiveRestarts()
+  [Theory]
+  [InlineData(true)]
+  [InlineData(false)]
+  public async Task EngineCoordinator_DescriptorRecovery_StartKeepsFailing_StopsAfterTheConsecutiveRestarts(
+    bool setRecoveryHelper)
   {
     var ct = TestContext.Current.CancellationToken;
     var kernel = new KernelEngine(failedStarts: int.MaxValue);
     var coordinator = CreateCoordinator();
-    Register(coordinator, "Kernel", kernel).SetRecoveryHelper(new RestartPolicy
-    {
-      MaxConsecutiveRestarts = 2,
-      InitialBackoff = TimeSpan.Zero,
-      MaxBackoff = TimeSpan.Zero,
-    });
+    var descriptor = Register(coordinator, "Kernel", kernel);
+    if (setRecoveryHelper)
+      descriptor.SetRecoveryHelper(NoWaitInARow(2));
+    else
+      descriptor.RestartPolicy = NoWaitInARow(2);
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the recovery gives up");
@@ -172,31 +184,6 @@ public class RuntimeRecoveryTest
     await WaitUntilAsync(() => kernel.State == EngineState.Ready, "the default policy starts it again");
 
     kernel.Starts.Should().Be(2);
-  }
-
-  /// <summary>
-  /// Verifies that the descriptor's <see cref="EngineDescriptor.RestartPolicy"/> applies without
-  /// <see cref="EngineDescriptor.SetRecoveryHelper(RestartPolicy)"/>, and that the engine faults once it gives up.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_DescriptorRestartPolicy_StartKeepsFailing_FaultsWhenThePolicyGivesUp()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var kernel = new KernelEngine(failedStarts: int.MaxValue);
-    var coordinator = CreateCoordinator();
-    Register(coordinator, "Kernel", kernel).RestartPolicy = new RestartPolicy
-    {
-      MaxConsecutiveRestarts = 2,
-      InitialBackoff = TimeSpan.Zero,
-      MaxBackoff = TimeSpan.Zero,
-    };
-
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the policy gives up");
-    // Give a restart that should not happen the time to happen.
-    await Task.Delay(200, ct);
-
-    kernel.Starts.Should().Be(3, "one start and two restarts");
   }
 
   /// <summary>
@@ -232,15 +219,11 @@ public class RuntimeRecoveryTest
     var coordinator = CreateCoordinator();
     var descriptor = Register(coordinator, "Kernel", kernel);
     descriptor.RestartPolicy = NoWait(10);
-    descriptor.SetRecoveryHelper(new RestartPolicy
-    {
-      MaxConsecutiveRestarts = 1,
-      InitialBackoff = TimeSpan.Zero,
-      MaxBackoff = TimeSpan.Zero,
-    });
+    descriptor.SetRecoveryHelper(NoWaitInARow(1));
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the helper gives up");
+    // Give a restart that should not happen the time to happen.
     await Task.Delay(200, ct);
 
     kernel.Starts.Should().Be(2, "one start and the helper's one restart");

@@ -66,7 +66,6 @@ public class PreviousEngineReleaseTest
     var descriptor = new EngineDescriptor(name, _ => Task.FromResult<IEngine>(new TakingOverEngine()), required, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartFactory((input, _) => Task.FromResult(next(input.PreviousEngine)))
-      // A failed load or creation must fail at once, not retry by the default restart policy.
       .WithoutRestarts();
     return builtOn == null ? descriptor : descriptor.AddDependsOn(builtOn);
   }
