@@ -689,8 +689,12 @@ public abstract partial class BaseEngine : IEngine
     return RestartPending ? Task.CompletedTask : TriggerStartCoreAsync(tasks);
   }
 
-  private Task TriggerStartCoreAsync(IEnumerable<EngineTask> tasks = null)
+  private async Task TriggerStartCoreAsync(IEnumerable<EngineTask> tasks = null)
   {
+    // A start waits for the reset batches in progress, so no task of a batch starts on a dependency that the batch has
+    // not reset yet (see TriggerResetAsync).
+    if (ResetsInProgress() is { } resets)
+      await resets.ConfigureAwait(false);
     // Set default task list.
     tasks ??= _tasks.Values;
     // Fire Start on all tasks:
@@ -704,7 +708,42 @@ public abstract partial class BaseEngine : IEngine
         .Select(t => t.FireAsync(EngineTaskTrigger.Start))
         .ToArray();
     LogFiringStartTriggers();
-    return Task.WhenAll(startTasks);
+    await Task.WhenAll(startTasks).ConfigureAwait(false);
+  }
+
+  // The reset batches in progress (see TriggerResetAsync), and the task that completes when the last of them has reset
+  // its tasks. Guarded by _resetBatchesLock.
+  private readonly object _resetBatchesLock = new();
+  private int _resetBatches;
+  private TaskCompletionSource<bool> _resetBatchesDone;
+
+  private Task ResetsInProgress()
+  {
+    lock (_resetBatchesLock)
+      return _resetBatchesDone?.Task;
+  }
+
+  private void BeginResetBatch()
+  {
+    lock (_resetBatchesLock)
+    {
+      if (_resetBatches++ == 0)
+        _resetBatchesDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+  }
+
+  private void EndResetBatch()
+  {
+    TaskCompletionSource<bool> done = null;
+    lock (_resetBatchesLock)
+    {
+      if (--_resetBatches == 0)
+      {
+        done = _resetBatchesDone;
+        _resetBatchesDone = null;
+      }
+    }
+    done?.TrySetResult(true);
   }
 
   /// <summary>
@@ -741,8 +780,22 @@ public abstract partial class BaseEngine : IEngine
     // dependency in this batch was still failed would otherwise fail at once (a task that starts with a failed
     // dependency ends DependencyFailed).
     var notStarted = resetTasks.Where(t => t.State == EngineTaskState.Created).ToArray();
+    var toReset = resetTasks.Except(notStarted).ToArray();
+    // Ordered before any reset, so a cycle throws with nothing reset.
+    var levels = DependentsFirst(toReset);
     LogFiringResetTriggers();
-    await ResetDependentsFirstAsync(resetTasks.Except(notStarted).ToArray()).ConfigureAwait(false);
+    // Starts wait until the whole batch is reset: a task of the batch that something started meanwhile would otherwise
+    // run on a dependency of the batch that is still to be reset (or fail at once on one that is still failed), and
+    // nothing would run it again.
+    BeginResetBatch();
+    try
+    {
+      await ResetDependentsFirstAsync(levels).ConfigureAwait(false);
+    }
+    finally
+    {
+      EndResetBatch();
+    }
     await TriggerStartCoreAsync(notStarted).ConfigureAwait(false);
     if (!startAgain)
       return;
@@ -763,15 +816,19 @@ public abstract partial class BaseEngine : IEngine
   /// depends on one of them, directly or not; then starts them again, as <see cref="TriggerResetAsync"/> does.
   /// </summary>
   /// <remarks>
-  /// Dependents are reset before the tasks they depend on (see <see cref="TriggerResetAsync"/>), so no dependent runs on
-  /// a dependency that is about to be reset, and a task named twice or reached twice is reset once. A reset ends the
-  /// current run: its outcome is dropped and its token cancelled. While a restart is prepared nothing is reset, as with
+  /// Dependents are reset before the tasks they depend on, and no task of the batch starts before the whole batch is
+  /// reset (see <see cref="TriggerResetAsync"/>). A task named twice or reached twice is reset once. A reset ends the
+  /// current run: its outcome is dropped and its token cancelled; it does not wait for the work to end, so work that
+  /// ignores its token goes on until it checks. While a restart is prepared nothing is reset, as with
   /// <see cref="TriggerResetAsync"/>: the set is about to be replaced.
   /// </remarks>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
   /// <param name="resetDependentTasks">Whether to reset the tasks that depend on them too.</param>
   /// <exception cref="ArgumentException">The engine has no task of one of the names.</exception>
-  public Task ResetTasksAsync(IEnumerable<string> taskNames, bool resetDependentTasks)
+  /// <exception cref="InvalidOperationException">The engine is stopped, so its tasks would not run again.</exception>
+  /// <exception cref="CyclicEngineTaskDependencyException">The tasks to reset depend on each other in a cycle (possible
+  /// only for tasks added after the set-up); nothing is reset.</exception>
+  public async Task ResetTasksAsync(IEnumerable<string> taskNames, bool resetDependentTasks)
   {
     if (taskNames == null)
       throw new ArgumentNullException(nameof(taskNames));
@@ -783,51 +840,111 @@ public abstract partial class BaseEngine : IEngine
         throw new ArgumentException($"Engine '{EngineName}' has no task named '{name}'.", nameof(taskNames));
       named.Add(task);
     }
+    // A stopped engine's reset tasks would sit in Created for good (TriggerResetAsync does not start them again).
+    if (IsCancellationRequested)
+      throw new InvalidOperationException($"Engine '{EngineName}' is stopped, so its tasks cannot be run again.");
 
-    var toReset = resetDependentTasks
-      ? tasks.Values.Where(t => named.Contains(t) || t.GetAllDependsOn().Any(named.Contains)).ToArray()
-      : named.ToArray();
-    return TriggerResetAsync(toReset);
+    if (resetDependentTasks)
+    {
+      // Everything that depends on a named task, directly or not.
+      var dependents = DirectDependents(tasks.Values);
+      var pending = new Stack<EngineTask>(named);
+      while (pending.Count > 0)
+      {
+        if (!dependents.TryGetValue(pending.Pop(), out var direct))
+          continue;
+        foreach (var dependent in direct)
+        {
+          if (named.Add(dependent))
+            pending.Push(dependent);
+        }
+      }
+    }
+    await TriggerResetAsync(named.ToArray()).ConfigureAwait(false);
   }
 
   /// <summary>
-  /// Fires Reset on <paramref name="tasks"/>, each once the tasks of the set that depend on it, directly or not, have
-  /// been reset; tasks that do not depend on each other are reset together.
+  /// Each task's direct dependents among <paramref name="tasks"/>, for the tasks that have any.
   /// </summary>
-  /// <remarks>
-  /// A dependent reset after its dependency could, until its own reset, go on running on (or start on) a dependency that
-  /// was reset under it. A failed reset is reported by the returned task; the tasks it depends on are reset anyway.
-  /// </remarks>
-  private static Task ResetDependentsFirstAsync(EngineTask[] tasks)
+  private static Dictionary<EngineTask, List<EngineTask>> DirectDependents(IEnumerable<EngineTask> tasks)
   {
-    // Task sets have no cycles (CheckForCyclicDependecies), so the recursion ends.
-    var dependsOn = tasks.ToDictionary(t => t, t => t.GetAllDependsOn());
-    var resets = new Dictionary<EngineTask, Task>();
-    Task ResetAfterDependents(EngineTask task)
+    var dependents = new Dictionary<EngineTask, List<EngineTask>>();
+    foreach (var task in tasks)
     {
-      if (resets.TryGetValue(task, out var reset))
-        return reset;
-      var dependents = tasks.Where(d => dependsOn[d].Contains(task)).Select(ResetAfterDependents).ToArray();
-      reset = ResetAfterAsync(task, dependents);
-      resets[task] = reset;
-      return reset;
+      foreach (var dependency in task.DependsOn)
+      {
+        if (!dependents.TryGetValue(dependency, out var list))
+          dependents[dependency] = list = new List<EngineTask>();
+        list.Add(task);
+      }
     }
-
-    return Task.WhenAll(tasks.Select(ResetAfterDependents).ToArray());
+    return dependents;
   }
 
-  private static async Task ResetAfterAsync(EngineTask task, Task[] dependents)
+  /// <summary>
+  /// Puts <paramref name="tasks"/> in levels to reset one after the other: each task in a level after the tasks of
+  /// <paramref name="tasks"/> that depend on it, directly or not (also through tasks outside it).
+  /// </summary>
+  /// <remarks>
+  /// A task's level is the longest chain of dependents above it in the engine's tasks, so the tasks of one level do not
+  /// depend on each other and are reset together. Linear in the tasks and their dependencies.
+  /// </remarks>
+  /// <exception cref="CyclicEngineTaskDependencyException">One of <paramref name="tasks"/> is in, or depends on, a cycle
+  /// (possible only for tasks added after the set-up, which <see cref="CheckForCyclicDependecies()"/> did not see).</exception>
+  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks)
   {
-    try
+    if (tasks.Length == 0)
+      return new List<List<EngineTask>>();
+    var all = _tasks.Values.Union(tasks).ToArray();
+    var dependents = DirectDependents(all);
+    // Kahn's algorithm over the reversed graph: a task is placed once all its direct dependents are.
+    var remaining = all.ToDictionary(t => t, t => dependents.TryGetValue(t, out var d) ? d.Count : 0);
+    var level = all.ToDictionary(t => t, _ => 0);
+    var ready = new Queue<EngineTask>(all.Where(t => remaining[t] == 0));
+    while (ready.Count > 0)
     {
-      await Task.WhenAll(dependents).ConfigureAwait(false);
-    }
-    catch
-    {
-      // The dependent's failure reaches the caller through its own task; this one is reset all the same.
+      var task = ready.Dequeue();
+      foreach (var dependency in task.DependsOn)
+      {
+        if (!remaining.ContainsKey(dependency))
+          continue;
+        level[dependency] = Math.Max(level[dependency], level[task] + 1);
+        if (--remaining[dependency] == 0)
+          ready.Enqueue(dependency);
+      }
     }
 
-    await task.FireAsync(EngineTaskTrigger.Reset).ConfigureAwait(false);
+    // A task never placed waits on a cycle's dependents for good.
+    if (tasks.FirstOrDefault(t => remaining[t] > 0) is { } cyclic)
+      throw new CyclicEngineTaskDependencyException(cyclic);
+    return tasks.Distinct().GroupBy(t => level[t]).OrderBy(g => g.Key).Select(g => g.ToList()).ToList();
+  }
+
+  /// <summary>
+  /// Fires Reset on the tasks of <paramref name="levels"/>, one level after the other (see <see cref="DependentsFirst"/>).
+  /// </summary>
+  /// <remarks>
+  /// A dependent reset after its dependency would, until its own reset, go on running on a dependency that was reset
+  /// under it. A failed reset is reported by the returned task once every level has been reset: the tasks it depends on
+  /// are reset anyway.
+  /// </remarks>
+  private static async Task ResetDependentsFirstAsync(List<List<EngineTask>> levels)
+  {
+    var resets = new List<Task>();
+    foreach (var level in levels)
+    {
+      var resetLevel = level.Select(t => t.FireAsync(EngineTaskTrigger.Reset)).ToArray();
+      resets.AddRange(resetLevel);
+      try
+      {
+        await Task.WhenAll(resetLevel).ConfigureAwait(false);
+      }
+      catch
+      {
+        // Reported below, once the next levels have been reset too.
+      }
+    }
+    await Task.WhenAll(resets).ConfigureAwait(false);
   }
 
   /// <inheritdoc/>

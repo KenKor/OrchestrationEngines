@@ -315,20 +315,10 @@ public partial class MechanicEngine : BaseEngine
   /// </exception>
   public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
   {
-    if (!IsRegistered(engineName))
-      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
-    EngineTaskNotReadyException notStarted = null;
-    try
-    {
-      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix, token).ConfigureAwait(false);
-    }
-    catch (EngineTaskNotReadyException ex)
-    {
-      notStarted = ex;
-    }
+    var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
 
     // Not created: the creation task says why.
-    if (!_engines.TryGetValue(engineName, out var engine))
+    if (engine == null)
     {
       await EnsureTaskReadyAsync(engineName, token).ConfigureAwait(false);
       throw notStarted ?? new EngineTaskNotReadyException(engineName, EngineTaskState.Failed, "The engine was not created.");
@@ -342,36 +332,68 @@ public partial class MechanicEngine : BaseEngine
   }
 
   /// <summary>
+  /// Waits for the kick-start of the engine <paramref name="engineName"/> to settle: until the engine is Ready, or its
+  /// start has failed (or been cancelled). An engine's tasks are set up when its kick-start starts it.
+  /// </summary>
+  /// <returns>The engine, or null if it was not created; and the kick-start's exception if it did not succeed.</returns>
+  /// <exception cref="ArgumentException">No engine of that name is registered.</exception>
+  private async Task<(IEngine Engine, EngineTaskNotReadyException NotStarted)> WaitForKickStartAsync(string engineName,
+    CancellationToken token)
+  {
+    if (!IsRegistered(engineName))
+      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
+    EngineTaskNotReadyException notStarted = null;
+    try
+    {
+      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix, token).ConfigureAwait(false);
+    }
+    catch (EngineTaskNotReadyException ex)
+    {
+      notStarted = ex;
+    }
+    return (_engines.TryGetValue(engineName, out var engine) ? engine : null, notStarted);
+  }
+
+  /// <summary>
   /// Resets tasks of the engine <paramref name="engineName"/> once it has started (see
   /// <see cref="BaseEngine.ResetTasksAsync"/>).
   /// </summary>
   /// <remarks>
-  /// It first waits for the engine's kick-start to settle, since an engine's tasks are set up when it starts. An engine
-  /// that started and then failed is reset like any other: that is what a reset is for.
+  /// It first waits for the engine's kick-start to settle, since an engine's tasks are set up when it starts: until the
+  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start can be reset only
+  /// once the kick-start has given up (or through the engine itself). An engine whose tasks failed is reset like any
+  /// other, and its tasks run again; the mechanic's own record of the failed start (its kick-start task) is not reset.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
   /// <param name="resetDependentTasks">Whether to reset the tasks that depend on them too.</param>
   /// <param name="token">Cancels the wait for the kick-start; once the reset has begun, it is not cancelled.</param>
   /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
-  /// <exception cref="InvalidOperationException">The engine never started, or is not a <see cref="BaseEngine"/>.</exception>
+  /// <exception cref="InvalidOperationException">
+  /// The engine was not created, never started, is stopped, or is not a <see cref="BaseEngine"/>.
+  /// </exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The engine was stopped while its kick-start was waited for (its kick-start ended Cancelled), for example by a
+  /// generation switch: the next generation has the live engine.
+  /// </exception>
   public async Task ResetEngineTasksAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
     CancellationToken token = default)
   {
-    if (!IsRegistered(engineName))
-      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
-    try
+    // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
+    var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
+    switch (engine)
     {
-      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix, token).ConfigureAwait(false);
+      case null:
+        throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.");
+      case not BaseEngine:
+        throw new InvalidOperationException($"Engine '{engineName}' is not a {nameof(BaseEngine)}, so its tasks cannot be reset.");
+      // Stopped meanwhile: report the cancelled kick-start, which a caller that follows generation switches recognises.
+      case BaseEngine { IsCancellationRequested: true } when notStarted is { State: EngineTaskState.Cancelled }:
+        throw notStarted;
+      case BaseEngine { Tasks.Count: 0 }:
+        throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
     }
-    catch (EngineTaskNotReadyException)
-    {
-      // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
-    }
-
-    if (!_engines.TryGetValue(engineName, out var engine) || engine is not BaseEngine { Tasks.Count: > 0 } started)
-      throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
-    await started.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+    await ((BaseEngine)engine).ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
   }
 
   /// <summary>

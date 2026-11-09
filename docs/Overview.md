@@ -274,11 +274,14 @@ Resets:
   tasks stay cancelled.
 - `BaseEngine.ResetTasksAsync(taskNames, resetDependentTasks)` resets tasks by name (ignoring case), and with
   `resetDependentTasks` every task that depends on them, directly or not; the coordinator's
-  `ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks)` does it for one engine, once it has started.
-  An unknown name throws an `ArgumentException`, before anything is reset. The tasks then run again: a Ready engine
-  goes to `Starting` and back to `Ready`.
+  `ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks)` does it for one engine, once its start has
+  settled (it is `Ready`, or its start failed); after a generation switch, on the next generation. An unknown name
+  throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. The
+  tasks then run again: a Ready engine goes to `Starting` and back to `Ready`.
 - Every reset of several tasks (also `TriggerResetAsync`) resets a task only once the tasks in the set that depend on
-  it have been reset, so no dependent goes on running on a dependency that was reset under it.
+  it have been reset, so a dependent's run is cancelled before its dependency's. Starts wait until the whole set is
+  reset, so no task of the set starts on a dependency that is still to be reset. A reset does not wait for the work it
+  cancels: work that ignores its token goes on until it checks.
 
 Time: every task has a `TimeProvider` (its time-out, its run times, the backoff of a policy set with `SetRecovery`);
 `BaseEngine.TimeProvider` passes one to the tasks an engine creates. Tests pass a clock they advance themselves.

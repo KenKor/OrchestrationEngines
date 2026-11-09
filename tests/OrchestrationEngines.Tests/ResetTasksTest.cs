@@ -41,21 +41,45 @@ public class ResetTasksTest
     /// </summary>
     public Func<string, int, CancellationToken, Task> Work { get; init; }
 
+    /// <summary>
+    /// Runs as a task's reset begins (before it is back in Created), with the task's name.
+    /// </summary>
+    public Action<string> OnReset { get; set; }
+
     public int Runs(string name) => _runs.TryGetValue(name, out var runs) ? runs : 0;
 
     protected override void SetUpTasks()
     {
-      var created = new Dictionary<string, EngineTask>();
       foreach (var (name, dependsOn) in _graph)
+        Add(name, dependsOn);
+    }
+
+    /// <summary>
+    /// Adds a task; after the set-up, to a set the engine's cycle check has already seen.
+    /// </summary>
+    public EngineTask Add(string name, params string[] dependsOn)
+    {
+      var task = AddTask(name, new HookedTask(name, token =>
       {
-        var task = CreateTask(name, token =>
-        {
-          var run = _runs.AddOrUpdate(name, 1, (_, n) => n + 1);
-          return Work?.Invoke(name, run, token) ?? Task.CompletedTask;
-        });
-        foreach (var parent in dependsOn)
-          task.AddDependsOn(created[parent]);
-        created[name] = task;
+        var run = _runs.AddOrUpdate(name, 1, (_, n) => n + 1);
+        return Work?.Invoke(name, run, token) ?? Task.CompletedTask;
+      }, this));
+      foreach (var parent in dependsOn)
+        task.AddDependsOn(_byName[parent]);
+      _byName[name] = task;
+      return task;
+    }
+
+    // The latest task of each name: during the set-up, the set is not published yet.
+    private readonly Dictionary<string, EngineTask> _byName = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed class HookedTask(string name, Func<CancellationToken, Task> work, GraphEngine engine)
+      : EngineTask(name, work, requiredForRunning: true, NullLogger.Instance, engine.CancellationToken)
+    {
+      protected override Task OnResetEnteredAsync()
+      {
+        engine.OnReset?.Invoke(Name);
+        return base.OnResetEnteredAsync();
       }
     }
   }
@@ -237,6 +261,92 @@ public class ResetTasksTest
     states.Should().Equal(EngineState.Starting, EngineState.Ready);
   }
 
+  /// <summary>
+  /// Verifies that a start fired while a batch is being reset waits for the whole batch: A failed and B with it; while A
+  /// is reset (B already reset, A still failed) something starts B. B must wait for A's next run, not fail on the old
+  /// one and stay failed.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_StartDuringTheReset_WaitsForTheWholeBatch()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new GraphEngine(T("A"), T("B", "A"))
+    {
+      Work = (name, run, _) => name == "A" && run == 1
+        ? throw new InvalidOperationException("The first run failed.")
+        : Task.CompletedTask,
+    };
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.Tasks["B"].State.Should().Be(EngineTaskState.DependencyFailed);
+    Task startDuringReset = null;
+    engine.OnReset = name =>
+    {
+      if (name == "A")
+        startDuringReset = engine.TriggerStartAsync([engine.Tasks["B"]]);
+    };
+
+    await engine.ResetTasksAsync(["A"], resetDependentTasks: true).WaitAsync(MustComplete, ct);
+    await startDuringReset.WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.Tasks["B"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    new[] { engine.Runs("A"), engine.Runs("B") }.Should().Equal(2, 1);
+  }
+
+  /// <summary>
+  /// Verifies that a stopped engine's tasks are not reset: they would never run again.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_StoppedEngine_ThrowsAndResetsNothing()
+  {
+    var engine = await ReadyAsync(Chain());
+    await engine.StopAsync();
+
+    var act = () => engine.ResetTasksAsync(["A"], resetDependentTasks: true);
+
+    await act.Should().ThrowAsync<InvalidOperationException>();
+    engine.Tasks.Values.Should().OnlyContain(t => t.State == EngineTaskState.CompletedWithSuccess);
+  }
+
+  /// <summary>
+  /// Verifies that tasks added after the set-up in a cycle are refused before anything is reset.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_CycleAddedAfterTheSetUp_ThrowsAndResetsNothing()
+  {
+    var engine = await ReadyAsync(Chain());
+    engine.Add("D", "C");
+    engine.Tasks["C"].AddDependsOn(engine.Tasks["D"]);
+
+    var act = () => engine.ResetTasksAsync(["A"], resetDependentTasks: true);
+
+    await act.Should().ThrowAsync<CyclicEngineTaskDependencyException>();
+    new[] { "A", "B", "C" }.Should().OnlyContain(n => engine.Tasks[n].State == EngineTaskState.CompletedWithSuccess);
+  }
+
+  /// <summary>
+  /// Verifies that a dependent whose reset throws does not keep its dependency from being reset, and that the caller
+  /// gets the exception.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_DependentsResetThrows_ResetsTheDependencyAndThrows()
+  {
+    var engine = await ReadyAsync(Chain());
+    var aReset = false;
+    engine.OnReset = name =>
+    {
+      if (name == "C")
+        throw new InvalidOperationException("C's reset failed.");
+      aReset |= name == "A";
+    };
+
+    var act = () => engine.ResetTasksAsync(["A"], resetDependentTasks: true);
+
+    (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("C's reset failed.");
+    aReset.Should().BeTrue("A is reset after its dependents, also when one of their resets fails");
+  }
+
   private static EngineCoordinator CoordinatorWith(IEngine engine)
   {
     var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
@@ -273,5 +383,59 @@ public class ResetTasksTest
     var act = () => coordinator.ResetTasksForEngineAsync("Missing", ["A"], resetDependentTasks: false, ct);
 
     await act.Should().ThrowAsync<ArgumentException>();
+  }
+
+  /// <summary>
+  /// Verifies that an engine that never started (its context failed, so it has no tasks) throws an
+  /// <see cref="InvalidOperationException"/>.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_EngineNeverStarted_Throws()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var descriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(Chain()))
+      .SetContextFactory(_ => throw new InvalidOperationException("No context."));
+    // The context must fail for good, not be retried.
+    descriptor.RestartPolicy = null;
+
+    var act = () => coordinator.ResetTasksForEngineAsync("Graph", ["A"], resetDependentTasks: false, ct)
+      .WaitAsync(MustComplete, ct);
+
+    (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Contain("has not started");
+  }
+
+  /// <summary>
+  /// Verifies that a coordinator replaced by a generation switch resets the next generation's engine.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_AfterASwitch_ResetsTheNextGenerationsEngine()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engines = new ConcurrentQueue<GraphEngine>();
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Graph", _ =>
+      {
+        var engine = Chain();
+        engines.Enqueue(engine);
+        return Task.FromResult<IEngine>(engine);
+      })
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      .WaitAsync(MustComplete, ct);
+    try
+    {
+      await coordinator.ResetTasksForEngineAsync("Graph", ["C"], resetDependentTasks: false, ct).WaitAsync(MustComplete, ct);
+      await next.EnsureEngineTaskReadyAsync("Graph", "C", ct).WaitAsync(MustComplete, ct);
+
+      engines.Should().HaveCount(2);
+      engines.Last().Runs("C").Should().Be(2);
+      engines.First().Runs("C").Should().Be(1);
+    }
+    finally
+    {
+      await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
   }
 }
