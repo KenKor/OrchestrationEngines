@@ -3,7 +3,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Tasks;
 using Xunit;
@@ -21,20 +23,27 @@ public class StartTriggerTest
   /// A task that, when asked whether it has started while it has not, waits briefly for its dependency to start it.
   /// </summary>
   /// <remarks>
-  /// This stands in for a thread that is preempted between a start's look at the task and its choice of trigger: the
-  /// dependency, completing on another thread, moves the task from Created to Running in between. Without the wait
-  /// the window is a few instructions wide, and 500 starts only rarely hit it.
+  /// This stands in for a thread that is preempted between the start's two looks at the task (IsStarted, then State,
+  /// to choose between Start and Reset): the dependency, completing on another thread, moves the task from Created to
+  /// Running in between. Without the wait the window is a few instructions wide, and 500 starts only rarely hit it.
+  /// It guards against a return of that shape; a start that reads the state once never asks. It waits once per task,
+  /// so a regression fails fast.
   /// </remarks>
   private sealed class SlowToLookTask(string name, Func<CancellationToken, Task> workAsync)
     : EngineTask(name, workAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
   {
+    private bool _waited;
+
     public override bool IsStarted
     {
       get
       {
         var started = base.IsStarted;
-        if (!started)
+        if (!started && !_waited)
+        {
+          _waited = true;
           SpinWait.SpinUntil(() => State != EngineTaskState.Created, TimeSpan.FromMilliseconds(200));
+        }
         return started;
       }
     }
@@ -56,23 +65,16 @@ public class StartTriggerTest
 
     protected override void SetUpTasks()
     {
-      EngineTask previous = null;
-      for (var i = 0; i < Length; i++)
-      {
-        var index = i;
-        Func<CancellationToken, Task> work = _ =>
-        {
-          Interlocked.Increment(ref _runs[index]);
-          return Task.CompletedTask;
-        };
-        var task = previous == null
-          ? CreateTask($"Step{i}", work)
-          : AddTask($"Step{i}", new SlowToLookTask($"Step{i}", work));
-        if (previous != null)
-          task.AddDependsOn(previous);
-        previous = task;
-      }
+      var previous = CreateTask("Step0", Count(0));
+      for (var i = 1; i < Length; i++)
+        previous = AddTask($"Step{i}", new SlowToLookTask($"Step{i}", Count(i))).AddDependsOn(previous);
     }
+
+    private Func<CancellationToken, Task> Count(int index) => _ =>
+    {
+      Interlocked.Increment(ref _runs[index]);
+      return Task.CompletedTask;
+    };
   }
 
   /// <summary>
@@ -94,5 +96,29 @@ public class StartTriggerTest
       engine.Runs.Should().OnlyContain(runs => runs == 1, "each task runs once per start (attempt {0})", attempt);
       await engine.StopAsync().WaitAsync(MustComplete, ct);
     }
+  }
+
+  /// <summary>
+  /// Verifies that a Start that reaches a task after it has started (Running) or completed is ignored, without an
+  /// "Unhandled trigger" warning: a start that found the task Created can fire it after a dependency started it.
+  /// </summary>
+  [Fact]
+  public async Task Start_OnATaskThatHasStarted_IsIgnoredWithoutAWarning()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var task = new EngineTask("Load", _ => release.Task, requiredForRunning: true, logger, CancellationToken.None);
+    await task.FireAsync(EngineTaskTrigger.Start);
+    task.State.Should().Be(EngineTaskState.Running);
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    task.State.Should().Be(EngineTaskState.Running);
+    release.SetResult(true);
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+    await task.FireAsync(EngineTaskTrigger.Start);
+
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Warning);
   }
 }
