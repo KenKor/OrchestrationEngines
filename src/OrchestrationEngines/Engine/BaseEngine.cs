@@ -74,6 +74,12 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   private Dictionary<string, EngineTask> _buildingTaskSet;
 
+  /// <summary>
+  /// True when the latest set-up failed, so no task set was built: the engine is Faulted (see <see cref="ComputeState"/>).
+  /// Written under <see cref="_taskSetChange"/>.
+  /// </summary>
+  private volatile bool _setUpFailed;
+
   private readonly Lock _taskSetChange = new();
 
   /// <summary>
@@ -363,6 +369,9 @@ public abstract partial class BaseEngine : IEngine
     // is Stopped whatever its tasks say (a background task's late cancellation must not flip it back to Ready).
     if (IsCancellationRequested)
       return EngineState.Stopped;
+    // No task set could be built (see SetUpAndStartAsync): with no tasks the engine would otherwise count as Ready.
+    if (_setUpFailed)
+      return EngineState.Faulted;
 
     var bestState = EngineState.Created;
     var allAreCompletedSuccessfully = true;
@@ -497,15 +506,17 @@ public abstract partial class BaseEngine : IEngine
       lock (_taskSetChange)
       {
         _buildingTaskSet = new(StringComparer.OrdinalIgnoreCase);
+        _setUpFailed = false;
       }
       try
       {
         SetUpTasks();
-      }
-      finally
-      {
         lock (_taskSetChange)
         {
+          // Before the set is published: the tasks of a cyclic set would wait for each other for good, and so would
+          // everyone waiting for them.
+          foreach (var task in _buildingTaskSet.Values)
+            task.CheckForCyclicDependecies();
           if (!replacedWork.IsCompleted)
           {
             foreach (var task in _buildingTaskSet.Values)
@@ -515,9 +526,20 @@ public abstract partial class BaseEngine : IEngine
           _buildingTaskSet = null;
         }
       }
-
-      // Check if cyclic dependencies have been introduced.
-      CheckForCyclicDependecies();
+      catch (Exception ex)
+      {
+        // The set could not be built: none of it is published, and the set it replaces is gone too (its tasks were
+        // ended), so there is nothing to wait for. The engine is Faulted until the next start builds a set.
+        lock (_taskSetChange)
+        {
+          Volatile.Write(ref _taskSet, new Dictionary<string, EngineTask>(StringComparer.OrdinalIgnoreCase));
+          _buildingTaskSet = null;
+          _setUpFailed = true;
+        }
+        LogSetUpFailed(ex);
+        State = EngineState.Faulted;
+        throw;
+      }
 
       // Fire the start trigger for those that we're started yet.
       // Fix (EngineStatusEventTest): publish Starting before the tasks run. The state was otherwise only
@@ -1056,6 +1078,9 @@ public abstract partial class BaseEngine : IEngine
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Setting up tasks and dependencies...")]
   private partial void LogSettingUpTasks();
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "Setting up tasks and dependencies failed; the engine is Faulted.")]
+  private partial void LogSetUpFailed(Exception exception);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Firing start triggers. Now wait for all tasks to reach a ready state...")]
   private partial void LogFiringStartTriggers();
