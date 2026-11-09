@@ -26,9 +26,11 @@ jobs:
           # Full history and tags, for versioning from git tags (see docs/Releasing.md).
           fetch-depth: 0
 
+      # The newest SDK of the 10.0.1xx band, the band global.json allows. Not global-json-file: under latestPatch,
+      # setup-dotnet would install exactly the version global.json names (10.0.100), not the newest patch.
       - uses: actions/setup-dotnet@v6
         with:
-          global-json-file: global.json
+          dotnet-version: 10.0.1xx
 
       - name: Restore
         run: dotnet restore
@@ -39,7 +41,9 @@ jobs:
       - name: Test
         run: >-
           dotnet test --no-build --configuration Release
-          --coverage --coverage-output-format cobertura --coverage-settings tests/CodeCoverage.settings.xml
+          --coverage --coverage-output-format cobertura
+          --coverage-settings ${{ github.workspace }}/tests/CodeCoverage.settings.xml
+          --results-directory ${{ github.workspace }}/TestResults
 
       - name: Upload test results and coverage
         if: always()
