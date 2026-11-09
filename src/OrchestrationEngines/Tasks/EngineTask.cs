@@ -381,8 +381,18 @@ public partial class EngineTask
   /// </remarks>
   protected void RequestCancellation()
   {
-    _linkedCts.CancelBestEffort(Logger);
+    // A cancelled source may have been replaced and disposed meanwhile (see CreateToken); CancelBestEffort leaves it
+    // alone. Under the gate, so a dispose waits for a cancel that is still notifying (see _sourceGate).
+    lock (_sourceGate)
+      _linkedCts.CancelBestEffort(Logger);
   }
+
+  /// <summary>
+  /// Makes cancelling the task's source and disposing it exclusive: a source is flagged cancelled before its callbacks
+  /// run, so a reset or release on another thread could otherwise dispose it while a cancel is still notifying. It
+  /// covers the task's own cancels (RequestCancellation), not one that comes through the engine's token.
+  /// </summary>
+  private readonly object _sourceGate = new();
 
   /// <summary>
   /// Fix: counts the resets, so that the work of a run that was reset can tell it is no longer current.
@@ -501,11 +511,43 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// This is called once during construction and again during reset/recovery scenarios.
+  /// <para>
+  /// The source it replaces has been cancelled (by the reset, or before the recovery), so the work that holds its token
+  /// has been told to stop, and nothing cancels it again (see <see cref="RequestCancellation"/>): it is disposed, which
+  /// also takes its registration off the engine's token. Called under the trigger lock.
+  /// </para>
   /// </remarks>
   private void CreateToken()
   {
-    _linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_engineToken);
-    CancellationToken = _linkedCts.Token;
+    var previous = _linkedCts;
+    var next = CancellationTokenSource.CreateLinkedTokenSource(_engineToken);
+    lock (_sourceGate)
+    {
+      _linkedCts = next;
+      CancellationToken = next.Token;
+      previous?.Dispose();
+    }
+  }
+
+  /// <summary>
+  /// Lets go of this task's token source once its latest run has ended, for a task whose set was replaced: disposing
+  /// it takes its registration off the engine's token. The source is cancelled first, so a later cancel or reset of
+  /// this task does not touch the disposed source (see <see cref="RequestCancellation"/> and <see cref="CreateToken"/>).
+  /// </summary>
+  internal async Task ReleaseTokenAsync()
+  {
+    await LatestRunEnded.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+    await _triggerLock.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      RequestCancellation();
+      lock (_sourceGate)
+        _linkedCts.Dispose();
+    }
+    finally
+    {
+      _triggerLock.Release();
+    }
   }
 
   // ---------------------------
