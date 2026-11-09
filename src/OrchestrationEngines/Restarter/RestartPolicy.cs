@@ -48,14 +48,14 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   public static RestartPolicy Default => new() { MaxConsecutiveRestarts = 5 };
 
   /// <summary>
-  /// Critical restart policy. For typical engine, Cricital Infrastructure:<br/>
+  /// Critical restart policy. For typical engine, Critical Infrastructure:<br/>
   /// MaxRestarts: 3<br/>
   /// Window: 1 minute<br/>
   /// MaxConsecutiveRestarts: 3<br/>
   /// Initial backoff: 500 (ms)<br/>
   /// MaxBackoff: 30 (s) 
   /// </summary>
-  public static RestartPolicy Cricical => new()
+  public static RestartPolicy Critical => new()
   {
     MaxRestartsInWindow = 3,
     Window = TimeSpan.FromMinutes(1),
