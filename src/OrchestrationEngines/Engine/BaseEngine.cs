@@ -67,7 +67,9 @@ public abstract partial class BaseEngine : IEngine
 
   // Fix (NameCaseTest): task names were compared case-sensitively, so a lookup in another case did not find the task.
   // Every task set (this one, the one a set-up builds and the copy AddTask makes) now ignores case.
-  private Dictionary<string, EngineTask> _taskSet = new(StringComparer.OrdinalIgnoreCase);
+  private Dictionary<string, EngineTask> _taskSet = NewTaskSet();
+
+  private static Dictionary<string, EngineTask> NewTaskSet() => new(StringComparer.OrdinalIgnoreCase);
 
   /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
@@ -75,8 +77,8 @@ public abstract partial class BaseEngine : IEngine
   private Dictionary<string, EngineTask> _buildingTaskSet;
 
   /// <summary>
-  /// True when the latest set-up failed, so no task set was built: the engine is Faulted (see <see cref="ComputeState"/>).
-  /// Written under <see cref="_taskSetChange"/>.
+  /// True from a set-up that failed until the next set is published: no task set was built, and the engine is Faulted
+  /// (see <see cref="ComputeState"/>). Written under <see cref="_taskSetChange"/>.
   /// </summary>
   private volatile bool _setUpFailed;
 
@@ -448,9 +450,11 @@ public abstract partial class BaseEngine : IEngine
   /// Validates that no EngineTask depends on itself.
   /// </summary>
   /// <exception cref="CyclicEngineTaskDependencyException"></exception>
-  public void CheckForCyclicDependecies()
+  public void CheckForCyclicDependecies() => CheckForCyclicDependecies(_tasks.Values);
+
+  private static void CheckForCyclicDependecies(IEnumerable<EngineTask> tasks)
   {
-    foreach (var t in _tasks.Values)
+    foreach (var t in tasks)
     {
       t.CheckForCyclicDependecies();
     }
@@ -492,6 +496,19 @@ public abstract partial class BaseEngine : IEngine
   /// <remarks>Called before <see cref="StartAsync"/>.</remarks>
   protected void StartAfter(Task work) => Volatile.Write(ref _inheritedWork, work);
 
+  /// <summary>
+  /// Adds <paramref name="work"/> to the work the next task set waits for (see <see cref="StartAfter"/>).
+  /// </summary>
+  private void InheritWork(Task work)
+  {
+    Task current;
+    do
+    {
+      current = Volatile.Read(ref _inheritedWork);
+    }
+    while (Interlocked.CompareExchange(ref _inheritedWork, current == null ? work : Task.WhenAll(current, work), current) != current);
+  }
+
   private async Task SetUpAndStartAsync()
   {
     try
@@ -505,9 +522,9 @@ public abstract partial class BaseEngine : IEngine
       var replacedWork = Task.WhenAll(_tasks.Values.Select(t => t.LatestRunEnded).Append(inheritedWork));
       lock (_taskSetChange)
       {
-        _buildingTaskSet = new(StringComparer.OrdinalIgnoreCase);
-        _setUpFailed = false;
+        _buildingTaskSet = NewTaskSet();
       }
+      bool afterFailedSetUp;
       try
       {
         SetUpTasks();
@@ -515,30 +532,40 @@ public abstract partial class BaseEngine : IEngine
         {
           // Before the set is published: the tasks of a cyclic set would wait for each other for good, and so would
           // everyone waiting for them.
-          foreach (var task in _buildingTaskSet.Values)
-            task.CheckForCyclicDependecies();
+          CheckForCyclicDependecies(_buildingTaskSet.Values);
           if (!replacedWork.IsCompleted)
           {
             foreach (var task in _buildingTaskSet.Values)
               task.RunAfter(replacedWork);
           }
           Volatile.Write(ref _taskSet, _buildingTaskSet);
-          _buildingTaskSet = null;
+          afterFailedSetUp = _setUpFailed;
+          _setUpFailed = false;
         }
       }
       catch (Exception ex)
       {
         // The set could not be built: none of it is published, and the set it replaces is gone too (its tasks were
-        // ended), so there is nothing to wait for. The engine is Faulted until the next start builds a set.
+        // ended). The engine is Faulted until a start builds a set; a prepared restart can start it again (see
+        // PrepareRestartAsync).
         lock (_taskSetChange)
         {
-          Volatile.Write(ref _taskSet, new Dictionary<string, EngineTask>(StringComparer.OrdinalIgnoreCase));
-          _buildingTaskSet = null;
+          Volatile.Write(ref _taskSet, NewTaskSet());
           _setUpFailed = true;
         }
+        // The work the next set must wait for is still running: hand it on to that set.
+        if (!replacedWork.IsCompleted)
+          InheritWork(replacedWork);
         LogSetUpFailed(ex);
         State = EngineState.Faulted;
         throw;
+      }
+      finally
+      {
+        lock (_taskSetChange)
+        {
+          _buildingTaskSet = null;
+        }
       }
 
       // Fire the start trigger for those that we're started yet.
@@ -546,7 +573,8 @@ public abstract partial class BaseEngine : IEngine
       // recomputed when a task ended, so an engine went from Created straight to Ready (or Faulted) and a host
       // watching EngineStatusChanged never saw it start. Publishing it after the triggers (from a recompute) is not
       // enough: a task that ends before the recompute makes it compute Ready at once, and Starting is skipped again.
-      if (State == EngineState.Created)
+      // So is a start after a failed set-up, which left the engine Faulted.
+      if (State == EngineState.Created || afterFailedSetUp)
         State = EngineState.Starting;
       await TriggerStartCoreAsync().ConfigureAwait(false);
     }
@@ -829,7 +857,8 @@ public abstract partial class BaseEngine : IEngine
   private async Task PrepareRestartAsync(Func<EngineTask, bool> needsRestart)
   {
     var tasks = _tasks.Values.ToArray();
-    if (!tasks.Any(needsRestart))
+    // An engine whose set-up failed has no tasks, but must be started again all the same.
+    if (!_setUpFailed && !tasks.Any(needsRestart))
       return;
     Interlocked.CompareExchange(ref _restart, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), null);
     LogEndingTasksBeforeRestart();

@@ -297,6 +297,9 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
 - owns the engine’s task DAG
 - derives engine state from the states of its required tasks (`Created → Starting → Ready`, or `Faulted` when one
   failed; `Stopped` once the engine is stopped, or when a required task was cancelled and none failed)
+- checks a new task set for cyclic dependencies before it replaces the current one. A start whose set-up fails (a
+  cycle, or `SetUpTasks` throwing) publishes none of the new set, logs an error, leaves the engine `Faulted` with no
+  tasks, and throws; the next start, or a recovery retry, builds the set again
 - coordinates cancellation and reset behavior
 
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
