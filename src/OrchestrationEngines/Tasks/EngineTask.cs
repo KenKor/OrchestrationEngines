@@ -257,8 +257,12 @@ public partial class EngineTask
 
   /// <summary>
   /// The exception the work or the recovery threw when the task last failed, or null (a time-out, a cancellation, a
-  /// failed dependency). Cleared by a reset.
+  /// failed dependency). Cleared when the work or its recovery succeeds, and by a reset.
   /// </summary>
+  /// <remarks>
+  /// The task holds the exception, and what it refers to, until then: an exception that carries large objects or
+  /// resources keeps them alive while the task stays failed.
+  /// </remarks>
   public Exception FailException { get; private set; }
 
   /// <summary>
@@ -1273,7 +1277,8 @@ public partial class EngineTask
       if (run != CurrentRun)
         return false;
 
-      if (exception != null)
+      // The run's exception, or none once it (or its recovery) succeeded: a recovered task does not keep the exception.
+      if (exception != null || trigger is EngineTaskTrigger.Succeed or EngineTaskTrigger.SucceedRecovery)
         FailException = exception;
 
       if (trigger == EngineTaskTrigger.Cancel)

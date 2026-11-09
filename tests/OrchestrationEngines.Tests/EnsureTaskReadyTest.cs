@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Mechanic;
+using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
 
@@ -37,6 +38,16 @@ public class EnsureTaskReadyTest
       var broken = CreateTask("Broken", _ => throw Thrown, requiredForRunning: false);
       CreateTask("Cancelled", _ => throw new OperationCanceledException("The query timed out."), requiredForRunning: false);
       CreateTask("AfterBroken", _ => Task.CompletedTask, requiredForRunning: false).AddDependsOn(broken);
+      CreateTask("Retried", _ => throw new LoadException("Still missing."), requiredForRunning: false)
+        .SetRecovery(new RestartPolicy
+        {
+          MaxRestartsInWindow = 1,
+          Window = TimeSpan.FromMinutes(10),
+          InitialBackoff = TimeSpan.Zero,
+          MaxBackoff = TimeSpan.Zero,
+        });
+      CreateTask("Slow", token => Task.Delay(Timeout.Infinite, token), requiredForRunning: false)
+        .SetTimeOut(TimeSpan.FromMilliseconds(50));
     }
   }
 
@@ -114,6 +125,64 @@ public class EnsureTaskReadyTest
   }
 
   /// <summary>
+  /// Verifies that a task whose recovery gives up reports RecoveryFailed with the recovery's exception.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureTaskReadyAsync_RecoveryFails_ThrowsWithTheRecoveryException()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await StartedEngineAsync(ct);
+
+    var thrown = await engine.Awaiting(e => e.EnsureTaskReadyAsync("Retried").WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<EngineTaskNotReadyException>();
+
+    thrown.Which.State.Should().Be(EngineTaskState.RecoveryFailed);
+    thrown.Which.InnerException.Should().NotBeNull();
+    thrown.Which.InnerException.Should().BeSameAs(engine.Tasks["Retried"].FailException);
+  }
+
+  /// <summary>
+  /// Verifies that a task that times out reports TimedOut, without an inner exception.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureTaskReadyAsync_TaskTimesOut_ThrowsTimedOut()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await StartedEngineAsync(ct);
+
+    var thrown = await engine.Awaiting(e => e.EnsureTaskReadyAsync("Slow").WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<EngineTaskNotReadyException>();
+
+    thrown.Which.State.Should().Be(EngineTaskState.TimedOut);
+    thrown.Which.InnerException.Should().BeNull();
+  }
+
+  /// <summary>
+  /// Verifies that a task whose work fails once and then succeeds through its recovery does not keep the exception.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_RecoverySucceeds_ClearsFailException()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var runs = 0;
+    var task = new EngineTask("Load", _ => ++runs == 1 ? throw new LoadException("First run fails.") : Task.CompletedTask,
+        requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
+      .SetRecovery(new RestartPolicy
+      {
+        MaxRestartsInWindow = 2,
+        Window = TimeSpan.FromMinutes(10),
+        InitialBackoff = TimeSpan.Zero,
+        MaxBackoff = TimeSpan.Zero,
+      });
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    task.FailException.Should().BeNull();
+  }
+
+  /// <summary>
   /// Verifies that a reset clears the exception a failed task recorded.
   /// </summary>
   [Fact]
@@ -121,7 +190,7 @@ public class EnsureTaskReadyTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = await StartedEngineAsync(ct);
-    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync("Broken").WaitAsync(MustComplete, ct);
     var broken = engine.Tasks["Broken"];
     broken.FailException.Should().BeSameAs(MixedEngine.Thrown);
 
@@ -145,13 +214,18 @@ public class EnsureTaskReadyTest
     thrown.Which.ParamName.Should().Be("taskName");
   }
 
-  private static EngineCoordinator CoordinatorWith(IEngine engine)
+  private static EngineCoordinator CoordinatorWith(Func<CancellationToken, Task<IEngine>> create,
+    Func<CancellationToken, Task<IEngineContext>> contextFactory = null)
   {
     var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Mixed", _ => Task.FromResult(engine), requiredForRunning: false)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    coordinator.RegisterEngine("Mixed", create, requiredForRunning: false)
+      .SetContextFactory(contextFactory ?? (_ => Task.FromResult<IEngineContext>(new NoContext())));
     return coordinator;
   }
+
+  private static EngineCoordinator CoordinatorWith(IEngine engine,
+    Func<CancellationToken, Task<IEngineContext>> contextFactory = null) =>
+    CoordinatorWith(_ => Task.FromResult(engine), contextFactory);
 
   /// <summary>
   /// Verifies that the coordinator, not started yet, starts and waits for an engine's task that completes.
@@ -193,9 +267,7 @@ public class EnsureTaskReadyTest
   public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_EngineNotCreated_ThrowsForTheEngine()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Mixed", _ => throw new InvalidOperationException("No connection."), requiredForRunning: false)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    var coordinator = CoordinatorWith(_ => throw new InvalidOperationException("No connection."));
 
     var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "Load", ct).WaitAsync(MustComplete, ct))
       .Should().ThrowAsync<EngineTaskNotReadyException>();
@@ -212,14 +284,37 @@ public class EnsureTaskReadyTest
   public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_EngineNotStarted_ThrowsForTheKickStart()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Mixed", _ => Task.FromResult<IEngine>(new MixedEngine()), requiredForRunning: false)
-      .SetContextFactory(_ => throw new InvalidOperationException("No context."));
+    var coordinator = CoordinatorWith(new MixedEngine(), _ => throw new InvalidOperationException("No context."));
 
     var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "Load", ct).WaitAsync(MustComplete, ct))
       .Should().ThrowAsync<EngineTaskNotReadyException>();
 
     thrown.Which.TaskName.Should().Be("Mixed" + EngineKickStartTask.PostFix);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// An engine whose one required task fails, so it starts and faults.
+  /// </summary>
+  private sealed class FaultingEngine() : BaseEngine(NullLogger.Instance)
+  {
+    protected override void SetUpTasks() => CreateTask("Required", _ => throw new LoadException("Broken."));
+  }
+
+  /// <summary>
+  /// Verifies that the coordinator reports an unknown task on an engine that started and faulted as an unknown task,
+  /// not as the engine's failure.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_UnknownTaskOnAFaultedEngine_ThrowsArgumentException()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = CoordinatorWith(new FaultingEngine());
+
+    var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "Typo", ct).WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<ArgumentException>();
+
+    thrown.Which.ParamName.Should().Be("taskName");
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 

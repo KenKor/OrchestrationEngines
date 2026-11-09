@@ -849,15 +849,23 @@ public abstract partial class BaseEngine : IEngine
   {
     if (taskName == null)
       throw new ArgumentNullException(nameof(taskName));
-    // Look the task up after a prepared restart, in the set that replaced the current one.
-    await WaitForRestartAsync().ConfigureAwait(false);
-    if (!_tasks.TryGetValue(taskName, out var task))
-      throw new ArgumentException($"The engine has no task '{taskName}'.", nameof(taskName));
-    await EnsureReadyAsync(task).ConfigureAwait(false);
-    // Read once: the exception reports the state that was looked at.
-    var state = task.State;
-    if (state != EngineTaskState.CompletedWithSuccess)
+    while (true)
+    {
+      // Look the task up after a prepared restart, in the set that replaced the current one.
+      await WaitForRestartAsync().ConfigureAwait(false);
+      if (!_tasks.TryGetValue(taskName, out var task))
+        throw new ArgumentException($"The engine has no task '{taskName}'.", nameof(taskName));
+      await EnsureReadyAsync(task).ConfigureAwait(false);
+      // Read once: the exception reports the state that was looked at.
+      var state = task.State;
+      if (state == EngineTaskState.CompletedWithSuccess)
+        return;
+      // A restart prepared meanwhile ended the task (Cancelled) and replaces it, or a reset made it run again: the
+      // answer is the next run's, so look again.
+      if (!state.IsCompleted() || RestartPending || !_tasks.TryGetValue(taskName, out var current) || current != task)
+        continue;
       throw EngineTaskNotReadyException.For(task, state);
+    }
   }
 
   /// <summary>

@@ -292,6 +292,51 @@ public partial class MechanicEngine : BaseEngine
     && engine is not BaseEngine { IsCancellationRequested: true };
 
   /// <summary>
+  /// Whether an engine of this name is known: created, or to be created by this mechanic's tasks (its kick-start task
+  /// exists as soon as the mechanic's tasks are set up, while its creation task may not have run yet).
+  /// </summary>
+  private bool IsRegistered(string name) =>
+    _engines.ContainsKey(name) || _tasks.ContainsKey(name + EngineKickStartTask.PostFix);
+
+  /// <summary>
+  /// Waits until the task <paramref name="taskName"/> of the engine <paramref name="engineName"/> has completed with
+  /// success (see <see cref="IEngine.EnsureTaskReadyAsync"/>), after the engine has started: its tasks are set up when
+  /// its kick-start starts it, and the kick-start ends once the engine is Ready, or has failed.
+  /// </summary>
+  /// <exception cref="ArgumentException">No engine of that name is registered, or the engine has no such task.</exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The task ended without success; or the engine could not be created (reported by its creation task, which bears
+  /// the engine's name) or was created but never started (reported by its kick-start task).
+  /// </exception>
+  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName)
+  {
+    if (!IsRegistered(engineName))
+      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
+    EngineTaskNotReadyException notStarted = null;
+    try
+    {
+      await EnsureTaskReadyAsync(engineName + EngineKickStartTask.PostFix).ConfigureAwait(false);
+    }
+    catch (EngineTaskNotReadyException ex)
+    {
+      notStarted = ex;
+    }
+
+    // Not created: the creation task says why.
+    if (!_engines.TryGetValue(engineName, out var engine))
+    {
+      await EnsureTaskReadyAsync(engineName).ConfigureAwait(false);
+      throw notStarted ?? new EngineTaskNotReadyException(engineName, EngineTaskState.Failed, "The engine was not created.");
+    }
+
+    // Created but never started (its context failed): it has no tasks, so report the kick-start. An engine that started
+    // and then faulted has its tasks, and the task (or an unknown name) answers for itself.
+    if (notStarted != null && engine is BaseEngine { Tasks.Count: 0 })
+      throw notStarted;
+    await engine.EnsureTaskReadyAsync(taskName).ConfigureAwait(false);
+  }
+
+  /// <summary>
   /// Asynchronously waits for an engine (and its dependencies) to reach Ready.
   /// </summary>
   /// <param name="name">The name.</param>
@@ -301,15 +346,16 @@ public partial class MechanicEngine : BaseEngine
   /// </remarks>
   public async Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound = true)
   {
-    // The engine is created by its creation task, which may not have run yet on a freshly started mechanic:
-    // StartAsync returns once the tasks have been fired, not once they have run. Its kick-start task exists as
-    // soon as the mechanic's tasks are set up, so that is what decides whether the engine is unknown.
-    var kickStartTaskName = name + EngineKickStartTask.PostFix;
-    if (!_engines.ContainsKey(name) && !_tasks.ContainsKey(kickStartTaskName))
+    if (!IsRegistered(name))
       if (throwErrorIfNotFound)
         throw new EvaluateException($"Engine {name} is not found. Has EngineCoordinator.StartAsync() been awaited?");
       else
         return null;
+
+    // The engine is created by its creation task, which may not have run yet on a freshly started mechanic:
+    // StartAsync returns once the tasks have been fired, not once they have run. Its kick-start task exists as
+    // soon as the mechanic's tasks are set up, so that is what decides whether the engine is unknown.
+    var kickStartTaskName = name + EngineKickStartTask.PostFix;
 
     if (_engines.TryGetValue(name, out var engine))
     {

@@ -44,7 +44,7 @@ public partial class EngineCoordinator : IDisposable
   private readonly Lock _sync = new();
 
   // The engines a running generation switch stopped early, as it rebuilds them from scratch, with the next generation
-  // once it has started (null if it did not start); null when no such switch runs. See GetEngineWhenReadyAsync.
+  // once it has started (null if it did not start); null when no such switch runs. See NextGenerationAsync.
   private RebuildingSwitch _rebuildingSwitch;
 
   // Declarative configuration describing all engines and their dependencies.
@@ -942,6 +942,8 @@ public partial class EngineCoordinator : IDisposable
   {
     if (engineName == null)
       throw new ArgumentNullException(nameof(engineName));
+    if (taskName == null)
+      throw new ArgumentNullException(nameof(taskName));
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
     if (Successor is { } replaced)
     {
@@ -949,40 +951,35 @@ public partial class EngineCoordinator : IDisposable
       return;
     }
 
-    await DispatchAsync(StartAsync, token).ConfigureAwait(false);
-    var mechanic = Mechanic;
-    // The engine is created by the mechanic's creation task (which bears its name) and started by its kick-start task,
-    // which sets its tasks up; neither may have run yet. The kick-start completes once the engine is Ready, or fails.
-    var kickStartName = engineName + EngineKickStartTask.PostFix;
-    if (!mechanic.Tasks.ContainsKey(kickStartName))
-      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
-    EngineTaskNotReadyException notStarted = null;
     try
     {
-      await mechanic.EnsureTaskReadyAsync(kickStartName).WaitAsync(token).ConfigureAwait(false);
+      await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      await Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName).WaitAsync(token).ConfigureAwait(false);
     }
-    catch (EngineTaskNotReadyException ex)
+    catch (Exception ex) when (ex is OperationCanceledException or EngineTaskNotReadyException { State: EngineTaskState.Cancelled }
+      && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _rebuildingSwitch) != null))
     {
-      notStarted = ex;
+      // A generation switch while waiting stopped this generation's engines: ask the next one, if it has the engine.
+      var next = await NextGenerationAsync(engineName, token).ConfigureAwait(false);
+      if (next == null)
+        throw;
+      await next.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
     }
+  }
 
-    // Not created: report the creation task, which says why.
-    if (!mechanic.Engines.TryGetValue(engineName, out var engine))
-    {
-      await mechanic.EnsureTaskReadyAsync(engineName).WaitAsync(token).ConfigureAwait(false);
-      throw notStarted ?? new EngineTaskNotReadyException(engineName, EngineTaskState.Failed, "The engine was not created.");
-    }
-
-    // An engine that started and then faulted has its tasks, and the task answers for itself. One created but never
-    // started (its context failed) has none: report the kick-start rather than an unknown task.
-    try
-    {
-      await engine.EnsureTaskReadyAsync(taskName).WaitAsync(token).ConfigureAwait(false);
-    }
-    catch (ArgumentException) when (notStarted != null && taskName != null)
-    {
-      throw notStarted;
-    }
+  /// <summary>
+  /// The generation that answers for <paramref name="name"/> once this one was replaced: the one it handed over to, or
+  /// the next one of a switch that rebuilds the engine (once it has started). Null if there is none.
+  /// </summary>
+  private async Task<EngineCoordinator> NextGenerationAsync(string name, CancellationToken token)
+  {
+    if (Successor is { } successor)
+      return successor;
+    // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
+    // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
+    if (Volatile.Read(ref _rebuildingSwitch) is { } rebuilding && rebuilding.Names.Contains(name))
+      return await rebuilding.Next.Task.WaitAsync(token).ConfigureAwait(false);
+    return null;
   }
 
   /// <summary>
@@ -1224,20 +1221,12 @@ public partial class EngineCoordinator : IDisposable
       engine = null;
     }
 
-    // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
-    // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
-    if (engine == null && Successor == null && Volatile.Read(ref _rebuildingSwitch) is { } rebuilding &&
-        rebuilding.Names.Contains(name))
-    {
-      var next = await rebuilding.Next.Task.WaitAsync(token).ConfigureAwait(false);
-      return next == null ? null : await next.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
-    }
-
-    // Replaced by a generation switch while waiting: this generation stopped its engines, ask the next one. An engine
-    // that the switch released is not found there, and gives null.
-    return engine ?? (Successor is { } successor
-      ? await successor.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false)
-      : null);
+    // Replaced by a generation switch while waiting: this generation stopped its engines, ask the next one (see
+    // NextGenerationAsync). An engine that the switch released is not found there, and gives null.
+    if (engine != null)
+      return engine;
+    var next = await NextGenerationAsync(name, token).ConfigureAwait(false);
+    return next == null ? null : await next.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
   }
 
   /// <summary>
