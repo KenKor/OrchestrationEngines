@@ -382,9 +382,16 @@ public partial class EngineTask
   protected void RequestCancellation()
   {
     // A cancelled source may have been replaced and disposed meanwhile (see CreateToken); CancelBestEffort leaves it
-    // alone.
-    _linkedCts.CancelBestEffort(Logger);
+    // alone. Under the gate, so a dispose waits for a cancel that is still notifying (see _sourceGate).
+    lock (_sourceGate)
+      _linkedCts.CancelBestEffort(Logger);
   }
+
+  /// <summary>
+  /// Makes cancelling the task's source and disposing it exclusive: a source is flagged cancelled before its callbacks
+  /// run, so a reset or release on another thread could otherwise dispose it while a cancel is still notifying.
+  /// </summary>
+  private readonly object _sourceGate = new();
 
   /// <summary>
   /// Fix: counts the resets, so that the work of a run that was reset can tell it is no longer current.
@@ -512,9 +519,13 @@ public partial class EngineTask
   private void CreateToken()
   {
     var previous = _linkedCts;
-    _linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_engineToken);
-    CancellationToken = _linkedCts.Token;
-    previous?.Dispose();
+    var next = CancellationTokenSource.CreateLinkedTokenSource(_engineToken);
+    lock (_sourceGate)
+    {
+      _linkedCts = next;
+      CancellationToken = next.Token;
+      previous?.Dispose();
+    }
   }
 
   /// <summary>
@@ -529,7 +540,8 @@ public partial class EngineTask
     try
     {
       RequestCancellation();
-      _linkedCts.Dispose();
+      lock (_sourceGate)
+        _linkedCts.Dispose();
     }
     finally
     {

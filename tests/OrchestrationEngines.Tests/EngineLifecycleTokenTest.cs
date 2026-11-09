@@ -27,6 +27,9 @@ public class EngineLifecycleTokenTest
 
     public CountingEngine() : base(NullLogger.Instance) => Context = new NoContext();
 
+    public CountingEngine(CancellationToken engineToken) : base(NullLogger.Instance, engineToken) =>
+      Context = new NoContext();
+
     public int Runs => Volatile.Read(ref _runs);
 
     public bool Fail { get; set; }
@@ -127,11 +130,12 @@ public class EngineLifecycleTokenTest
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, ct);
     var previous = task.Source;
+    var previousToken = previous.Token;
 
     await task.FireAsync(EngineTaskTrigger.Reset);
 
     task.Source.Should().NotBeSameAs(previous);
-    FluentActions.Invoking(() => previous.Token.WaitHandle).Should().Throw<ObjectDisposedException>();
+    IsDisposed(previousToken).Should().BeTrue();
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, ct);
     task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
@@ -180,6 +184,25 @@ public class EngineLifecycleTokenTest
     engine.IsCancellationRequested.Should().BeTrue();
     await FluentActions.Awaiting(() => engine.StopAsync().WaitAsync(MustComplete, ct)).Should().NotThrowAsync(
       "a second stop does not cancel the disposed source");
+  }
+
+  /// <summary>
+  /// Verifies that an engine whose parent token is cancelled before it starts reports Stopped when it is started, and
+  /// runs nothing.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_WithACancelledParentToken_ReportsStopped()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token);
+    parent.Cancel();
+
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Stopped);
+    engine.Runs.Should().Be(0);
   }
 
   /// <summary>
@@ -247,16 +270,20 @@ public class EngineLifecycleTokenTest
   /// <summary>
   /// One required task whose work runs until it is cancelled.
   /// </summary>
-  private sealed class HangingEngine(TaskCompletionSource<bool> running) : BaseEngine(NullLogger.Instance)
+  private sealed class HangingEngine : BaseEngine
   {
-    protected override void SetUpTasks()
+    private readonly TaskCompletionSource<bool> _running;
+
+    public HangingEngine(TaskCompletionSource<bool> running) : base(NullLogger.Instance)
     {
+      _running = running;
       Context = new NoContext();
-      CreateTask("Hang", async token =>
-      {
-        running.TrySetResult(true);
-        await Task.Delay(Timeout.Infinite, token);
-      });
     }
+
+    protected override void SetUpTasks() => CreateTask("Hang", async token =>
+    {
+      _running.TrySetResult(true);
+      await Task.Delay(Timeout.Infinite, token);
+    });
   }
 }
