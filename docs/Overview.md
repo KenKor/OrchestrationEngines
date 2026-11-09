@@ -278,10 +278,11 @@ Resets:
   settled (it is `Ready`, or its start failed); after a generation switch, on the next generation. An unknown name
   throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. The
   tasks then run again: a Ready engine goes to `Starting` and back to `Ready`.
-- Every reset of several tasks (also `TriggerResetAsync`) resets a task only once the tasks in the set that depend on
-  it have been reset, so a dependent's run is cancelled before its dependency's. Starts wait until the whole set is
-  reset, so no task of the set starts on a dependency that is still to be reset. A reset does not wait for the work it
-  cancels: work that ignores its token goes on until it checks.
+- Every reset of several tasks (also `TriggerResetAsync`) goes in two passes. First it ends the current run of every
+  task (its outcome is dropped, its token cancelled), dependents before the tasks they depend on, so no dependent goes
+  on running on a dependency that is being reset. Then it puts the tasks back in Created, dependencies first, so no task
+  of the set starts (by a caller, or by a dependency's old run) on a dependency of the set that is still to be reset. A
+  reset does not wait for the work it cancels: work that ignores its token goes on until it checks.
 
 Time: every task has a `TimeProvider` (its time-out, its run times, the backoff of a policy set with `SetRecovery`);
 `BaseEngine.TimeProvider` passes one to the tasks an engine creates. Tests pass a clock they advance themselves.

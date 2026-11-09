@@ -262,8 +262,8 @@ public class ResetTasksTest
   }
 
   /// <summary>
-  /// Verifies that a start fired while a batch is being reset waits for the whole batch: A failed and B with it; while A
-  /// is reset (B already reset, A still failed) something starts B. B must wait for A's next run, not fail on the old
+  /// Verifies that a start fired while a set is being reset does not start a task on a dependency still to be reset: A
+  /// failed and B with it; as A's reset begins, something starts B. B must wait for A's next run, not fail on the old
   /// one and stay failed.
   /// </summary>
   [Fact]
@@ -292,6 +292,61 @@ public class ResetTasksTest
 
     engine.Tasks["B"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
     new[] { engine.Runs("A"), engine.Runs("B") }.Should().Equal(2, 1);
+  }
+
+  /// <summary>
+  /// Verifies that a dependency's run that ends during the reset does not start a dependent of the set: A's first run
+  /// ignores its token and completes as B's reset begins. B must run once, after A's next run, not on the run that was
+  /// reset.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_OldRunOfADependencyEndsDuringTheReset_DoesNotStartTheDependent()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var aRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var aCompleted = 0;
+    var aCompletedWhenBRan = new ConcurrentQueue<int>();
+    var engine = new GraphEngine(T("A"), T("B", "A"))
+    {
+      Work = async (name, run, _) =>
+      {
+        if (name == "B")
+        {
+          aCompletedWhenBRan.Enqueue(Volatile.Read(ref aCompleted));
+          return;
+        }
+        // The first run ignores its token, and completes when released.
+        if (run == 1)
+        {
+          aRunning.TrySetResult();
+          await release.Task;
+        }
+        Interlocked.Increment(ref aCompleted);
+      },
+    };
+    await engine.StartAsync();
+    await engine.TriggerStartAsync();
+    await aRunning.Task.WaitAsync(MustComplete, ct);
+    engine.OnReset = name =>
+    {
+      // A's reset takes its time: if B could be started meanwhile, the old run's outcome would start it.
+      if (name == "A")
+      {
+        Thread.Sleep(200);
+        return;
+      }
+      release.TrySetResult();
+      // Give the old run the time to complete and report it.
+      SpinWait.SpinUntil(() => Volatile.Read(ref aCompleted) > 0, MustComplete);
+      Thread.Sleep(50);
+    };
+
+    await engine.ResetTasksAsync(["A"], resetDependentTasks: true).WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.Tasks["B"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    aCompletedWhenBRan.Should().Equal([2], "B runs once, after A's next run");
   }
 
   /// <summary>

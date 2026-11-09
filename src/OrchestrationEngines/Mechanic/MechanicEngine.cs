@@ -381,19 +381,17 @@ public partial class MechanicEngine : BaseEngine
   {
     // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
     var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
-    switch (engine)
-    {
-      case null:
-        throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.");
-      case not BaseEngine:
-        throw new InvalidOperationException($"Engine '{engineName}' is not a {nameof(BaseEngine)}, so its tasks cannot be reset.");
-      // Stopped meanwhile: report the cancelled kick-start, which a caller that follows generation switches recognises.
-      case BaseEngine { IsCancellationRequested: true } when notStarted is { State: EngineTaskState.Cancelled }:
-        throw notStarted;
-      case BaseEngine { Tasks.Count: 0 }:
-        throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
-    }
-    await ((BaseEngine)engine).ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+    // Stopped meanwhile (before or after the engine was created): report the cancelled kick-start, which a caller that
+    // follows generation switches recognises.
+    if (notStarted is { State: EngineTaskState.Cancelled } && engine is null or BaseEngine { IsCancellationRequested: true })
+      throw notStarted;
+    if (engine == null)
+      throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.");
+    if (engine is not BaseEngine baseEngine)
+      throw new InvalidOperationException($"Engine '{engineName}' is not a {nameof(BaseEngine)}, so its tasks cannot be reset.");
+    if (baseEngine.Tasks.Count == 0)
+      throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
+    await baseEngine.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
   }
 
   /// <summary>

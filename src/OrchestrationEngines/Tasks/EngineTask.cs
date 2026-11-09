@@ -1235,6 +1235,26 @@ public partial class EngineTask
     }
   }
 
+  /// <summary>
+  /// Ends the current run (work or recovery) without changing the state, ahead of a reset: its outcome is dropped and
+  /// its token cancelled, as a reset does, but the task keeps its state until it is reset, so nothing starts it
+  /// meanwhile. See BaseEngine's two-pass reset.
+  /// </summary>
+  internal async Task EndRunAsync()
+  {
+    await _triggerLock.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      // Under the trigger lock: an outcome fired after this is not the current run's (see FireIfCurrentAsync).
+      Interlocked.Increment(ref _runGeneration);
+      RequestCancellation();
+    }
+    finally
+    {
+      _triggerLock.Release();
+    }
+  }
+
   private async Task ResetAsync()
   {
     await _triggerLock.WaitAsync().ConfigureAwait(false);
