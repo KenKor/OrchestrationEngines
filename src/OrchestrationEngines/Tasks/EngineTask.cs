@@ -381,7 +381,19 @@ public partial class EngineTask
   /// </remarks>
   protected void RequestCancellation()
   {
-    _linkedCts.CancelBestEffort(Logger);
+    // A source that is cancelled already is not cancelled again: it may have been replaced and disposed meanwhile
+    // (see CreateToken), and a second cancel would do nothing anyway.
+    var source = _linkedCts;
+    if (source.IsCancellationRequested)
+      return;
+    try
+    {
+      source.CancelBestEffort(Logger);
+    }
+    catch (ObjectDisposedException) when (source != Volatile.Read(ref _linkedCts))
+    {
+      // Cancelled and replaced by a reset in between: its work has been told to stop already.
+    }
   }
 
   /// <summary>
@@ -501,11 +513,38 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// This is called once during construction and again during reset/recovery scenarios.
+  /// <para>
+  /// The source it replaces has been cancelled (by the reset, or before the recovery), so the work that holds its token
+  /// has been told to stop, and nothing cancels it again (see <see cref="RequestCancellation"/>): it is disposed, which
+  /// also takes its registration off the engine's token. Called under the trigger lock.
+  /// </para>
   /// </remarks>
   private void CreateToken()
   {
+    var previous = _linkedCts;
     _linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_engineToken);
     CancellationToken = _linkedCts.Token;
+    previous?.Dispose();
+  }
+
+  /// <summary>
+  /// Lets go of this task's token source once its latest run has ended, for a task whose set was replaced: disposing
+  /// it takes its registration off the engine's token. The source is cancelled first, so a later cancel or reset of
+  /// this task does not touch the disposed source (see <see cref="RequestCancellation"/> and <see cref="CreateToken"/>).
+  /// </summary>
+  internal async Task ReleaseTokenAsync()
+  {
+    await LatestRunEnded.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+    await _triggerLock.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      RequestCancellation();
+      _linkedCts.Dispose();
+    }
+    finally
+    {
+      _triggerLock.Release();
+    }
   }
 
   // ---------------------------
