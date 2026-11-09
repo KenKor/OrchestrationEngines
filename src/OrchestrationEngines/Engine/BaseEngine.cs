@@ -72,7 +72,7 @@ public abstract partial class BaseEngine : IEngine
   private static Dictionary<string, EngineTask> NewTaskSet() => new(StringComparer.OrdinalIgnoreCase);
 
   private static Dictionary<string, EngineTask> NewTaskSet(Dictionary<string, EngineTask> copyOf, string name, EngineTask task) =>
-    new(copyOf, StringComparer.OrdinalIgnoreCase) { [name] = task };
+    new(copyOf, StringComparer.OrdinalIgnoreCase) { { name, task } };
 
   /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
@@ -939,6 +939,7 @@ public abstract partial class BaseEngine : IEngine
   protected EngineTask CreateTask(string name, Func<CancellationToken, Task> workAsync,
       bool requiredForRunning = true)
   {
+    CheckNameFree(name);
     var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _linkedCts.Token, TimeProvider);
     return AddTask(name, task);
   }
@@ -956,8 +957,31 @@ public abstract partial class BaseEngine : IEngine
   /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Action<CancellationToken> workAsync, bool requiredForRunning = true)
   {
+    CheckNameFree(name);
     var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _linkedCts.Token, TimeProvider);
     return AddTask(name, task);
+  }
+
+  /// <summary>
+  /// Throws if the engine already has a task named <paramref name="name"/> (ignoring case): in the set being built during
+  /// a set-up, or in the current set after it. Called under <see cref="_taskSetChange"/>.
+  /// </summary>
+  private void ThrowIfNameInUse(string name)
+  {
+    if ((_buildingTaskSet ?? _taskSet).TryGetValue(name, out var existing))
+      throw new ArgumentException($"Engine '{EngineName}' already has a task named '{existing.Name}', so '{name}' cannot be added (task names ignore case).", nameof(name));
+  }
+
+  /// <summary>
+  /// Refuses a name already in use before a task is built for it, so a refused task holds no token registration.
+  /// <see cref="AddTask"/> checks again, as the one that counts.
+  /// </summary>
+  private void CheckNameFree(string name)
+  {
+    lock (_taskSetChange)
+    {
+      ThrowIfNameInUse(name);
+    }
   }
 
   /// <summary>
@@ -973,9 +997,7 @@ public abstract partial class BaseEngine : IEngine
   {
     lock (_taskSetChange)
     {
-      var taskSet = _buildingTaskSet ?? _taskSet;
-      if (taskSet.TryGetValue(name, out var existing))
-        throw new ArgumentException($"{LogTag}already has a task named '{existing.Name}', so '{name}' cannot be added (task names ignore case).", nameof(name));
+      ThrowIfNameInUse(name);
       if (_buildingTaskSet != null)
       {
         _buildingTaskSet.Add(name, task);
