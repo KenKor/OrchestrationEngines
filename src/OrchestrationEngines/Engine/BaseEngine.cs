@@ -933,7 +933,9 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="workAsync">Worker that defines the execution of the task.</param>
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
-  /// <returns></returns>
+  /// <returns>The task.</returns>
+  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case);
+  /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Func<CancellationToken, Task> workAsync,
       bool requiredForRunning = true)
   {
@@ -949,7 +951,9 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="workAsync">Worker that defines the execution of the task.</param>
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
-  /// <returns></returns>
+  /// <returns>The task.</returns>
+  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case);
+  /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Action<CancellationToken> workAsync, bool requiredForRunning = true)
   {
     var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _linkedCts.Token, TimeProvider);
@@ -959,16 +963,22 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Adds a task that this engine maintains.
   /// </summary>
-  /// <param name="name"></param>
-  /// <param name="task"></param>
-  /// <returns></returns>
+  /// <param name="name">Name the task is identified by; names ignore case.</param>
+  /// <param name="task">The task.</param>
+  /// <returns>The task.</returns>
+  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case),
+  /// in the set being built during a set-up, or in the current set after it. The set is left unchanged: putting the
+  /// task in place of the existing one would leave that one wired as a dependency but never started.</exception>
   protected EngineTask AddTask(string name, EngineTask task)
   {
     lock (_taskSetChange)
     {
+      var taskSet = _buildingTaskSet ?? _taskSet;
+      if (taskSet.TryGetValue(name, out var existing))
+        throw new ArgumentException($"{LogTag}already has a task named '{existing.Name}', so '{name}' cannot be added (task names ignore case).", nameof(name));
       if (_buildingTaskSet != null)
       {
-        _buildingTaskSet[name] = task;
+        _buildingTaskSet.Add(name, task);
       }
       else
       {
