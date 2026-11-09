@@ -310,6 +310,12 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
   registered on a work's cancellation token that throws is logged too, and the stop, cancellation or time-out goes
   ahead
 
+To wait for one task, `EnsureTaskReadyAsync(taskName)` starts it (and what it depends on) if needed and returns once
+it has completed with success. If it ended otherwise (`Failed`, `TimedOut`, `DependencyFailed`, `RecoveryFailed` or
+`Cancelled`) it throws an `EngineTaskNotReadyException` with the task's name, its final state and its fail reason; when
+the task's work (or recovery) threw, that exception is the inner exception. An unknown task name throws an
+`ArgumentException`. `EnsureReadyAsync(taskName)` and `EnsureTasksReadyAsync` still only wait.
+
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
 engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A start replaces the
 task set; the previous set's tasks that have not completed (a background monitor, tasks someone started or waits on) are
@@ -370,6 +376,12 @@ The coordinator is intentionally conservative: once shutdown starts, it does not
 
 Its readiness follows the required engines only: an engine registered as not required for running may still be
 loading, or have failed, while the coordinator is `Running`.
+
+`EnsureEngineTaskReadyAsync(engineName, taskName)` does the same for one engine's task, starting the coordinator if
+needed. It waits for the engine to start first (its kick-start, which ends once the engine is `Ready` or failed), so a
+task that completes early is reported once the engine is `Ready`. An engine that could not be created or started is
+reported by the mechanic's task that failed: its creation task, named after the engine, or its kick-start task. An
+unknown engine name throws an `ArgumentException`.
 
 #### Generation switch
 

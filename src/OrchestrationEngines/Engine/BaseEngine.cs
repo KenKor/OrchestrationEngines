@@ -844,6 +844,22 @@ public abstract partial class BaseEngine : IEngine
     return true;
   }
 
+  /// <inheritdoc/>
+  public virtual async Task EnsureTaskReadyAsync(string taskName)
+  {
+    if (taskName == null)
+      throw new ArgumentNullException(nameof(taskName));
+    // Look the task up after a prepared restart, in the set that replaced the current one.
+    await WaitForRestartAsync().ConfigureAwait(false);
+    if (!_tasks.TryGetValue(taskName, out var task))
+      throw new ArgumentException($"The engine has no task '{taskName}'.", nameof(taskName));
+    await EnsureReadyAsync(task).ConfigureAwait(false);
+    // Read once: the exception reports the state that was looked at.
+    var state = task.State;
+    if (state != EngineTaskState.CompletedWithSuccess)
+      throw EngineTaskNotReadyException.For(task, state);
+  }
+
   /// <summary>
   /// Waits for all task identified by <paramref name="taskName"/> and its dependencies to complete, including optional ones.
   /// </summary>

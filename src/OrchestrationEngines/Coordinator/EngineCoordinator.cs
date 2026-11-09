@@ -923,6 +923,69 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
+  /// Waits until the task <paramref name="taskName"/> of the engine <paramref name="engineName"/> has completed with
+  /// success, starting the coordinator if it has not been started yet.
+  /// </summary>
+  /// <remarks>
+  /// It first waits for the engine to start (its kick-start, which ends once the engine is Ready or has failed), since
+  /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
+  /// </remarks>
+  /// <param name="engineName">The name of the engine (compared ignoring case).</param>
+  /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
+  /// <param name="token">Cancels the caller's wait; the engine and its tasks go on.</param>
+  /// <exception cref="ArgumentException">No engine of that name is registered, or the engine has no such task.</exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The task ended without success; or the engine could not be created or started, and then the exception names the
+  /// mechanic's task that failed (its creation task, named after the engine, or its kick-start task) instead.
+  /// </exception>
+  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
+  {
+    if (engineName == null)
+      throw new ArgumentNullException(nameof(engineName));
+    // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
+    if (Successor is { } replaced)
+    {
+      await replaced.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+      return;
+    }
+
+    await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+    var mechanic = Mechanic;
+    // The engine is created by the mechanic's creation task (which bears its name) and started by its kick-start task,
+    // which sets its tasks up; neither may have run yet. The kick-start completes once the engine is Ready, or fails.
+    var kickStartName = engineName + EngineKickStartTask.PostFix;
+    if (!mechanic.Tasks.ContainsKey(kickStartName))
+      throw new ArgumentException($"No engine '{engineName}' is registered.", nameof(engineName));
+    EngineTaskNotReadyException notStarted = null;
+    try
+    {
+      await mechanic.EnsureTaskReadyAsync(kickStartName).WaitAsync(token).ConfigureAwait(false);
+    }
+    catch (EngineTaskNotReadyException ex)
+    {
+      notStarted = ex;
+    }
+
+    // Not created: report the creation task, which says why.
+    if (!mechanic.Engines.TryGetValue(engineName, out var engine))
+    {
+      await mechanic.EnsureTaskReadyAsync(engineName).WaitAsync(token).ConfigureAwait(false);
+      throw notStarted ?? new EngineTaskNotReadyException(engineName, EngineTaskState.Failed, "The engine was not created.");
+    }
+
+    // An engine that started and then faulted has its tasks, and the task answers for itself. One created but never
+    // started (its context failed) has none: report the kick-start rather than an unknown task.
+    try
+    {
+      await engine.EnsureTaskReadyAsync(taskName).WaitAsync(token).ConfigureAwait(false);
+    }
+    catch (ArgumentException) when (notStarted != null && taskName != null)
+    {
+      throw notStarted;
+    }
+  }
+
+  /// <summary>
   /// Initiates application shutdown and waits for completion.
   /// </summary>
   /// <remarks>

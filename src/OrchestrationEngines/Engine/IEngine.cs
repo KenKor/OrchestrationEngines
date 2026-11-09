@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -138,6 +139,18 @@ public interface IEngine
   /// False if none of the tasks were not found.
   /// </returns>
   Task<bool> EnsureTasksReadyAsync(string[] taskNames);
+
+  /// <summary>
+  /// Starts the task named <paramref name="taskName"/> and the tasks it depends on if they have not started, and waits
+  /// until it has completed with success.
+  /// </summary>
+  /// <param name="taskName">The name of the task (compared ignoring case).</param>
+  /// <exception cref="ArgumentException">The engine has no task of that name.</exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The task ended Failed (or one of its kinds: TimedOut, DependencyFailed, RecoveryFailed) or Cancelled. It carries
+  /// the task's name, its final state and its fail reason, and the work's exception as inner exception if it threw.
+  /// </exception>
+  Task EnsureTaskReadyAsync(string taskName);
 
   /// <summary>
   /// Requests the engine to stop execution.
