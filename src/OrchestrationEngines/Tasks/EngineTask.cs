@@ -256,6 +256,16 @@ public partial class EngineTask
   public string FailReason { get; private set; }
 
   /// <summary>
+  /// The exception the work or the recovery threw when the task last failed, or null (a time-out, a cancellation, a
+  /// failed dependency). Cleared when the work or its recovery succeeds, and by a reset.
+  /// </summary>
+  /// <remarks>
+  /// The task holds the exception, and what it refers to, until then: an exception that carries large objects or
+  /// resources keeps them alive while the task stays failed.
+  /// </remarks>
+  public Exception FailException { get; private set; }
+
+  /// <summary>
   /// Whether the task ended because it was cancelled (or because a task it depends on was), not because it failed.
   /// </summary>
   public bool WasCancelled { get; private set; }
@@ -1121,6 +1131,7 @@ public partial class EngineTask
       RequestCancellation();
 
       FailReason = null;
+      FailException = null;
       RunStartedAtUtc = null;
       RunEndedAtUtc = null;
 #if DEBUG
@@ -1255,15 +1266,20 @@ public partial class EngineTask
   /// Whether to cancel the run's token first (a time-out). Only for a current run: after a reset the token belongs to
   /// the next run.
   /// </param>
+  /// <param name="exception">The exception the work or recovery threw, to record first (see <see cref="FailException"/>).</param>
   /// <returns>False if the run is stale and nothing was fired.</returns>
   private async Task<bool> FireIfCurrentAsync(int run, EngineTaskTrigger trigger, string reason = "", string failReason = null,
-    bool cancelRun = false)
+    bool cancelRun = false, Exception exception = null)
   {
     await _triggerLock.WaitAsync().ConfigureAwait(false);
     try
     {
       if (run != CurrentRun)
         return false;
+
+      // The run's exception, or none once it (or its recovery) succeeded: a recovered task does not keep the exception.
+      if (exception != null || trigger is EngineTaskTrigger.Succeed or EngineTaskTrigger.SucceedRecovery)
+        FailException = exception;
 
       if (trigger == EngineTaskTrigger.Cancel)
         FailReason = failReason ?? CancellationReason();
@@ -1505,7 +1521,7 @@ public partial class EngineTask
       LogWorkFailed(Logger, ex, ex.Message);
 
       // Fail with reason; may transition to Recovering depending on RecoveryHelper.
-      await FireIfCurrentAsync(run, EngineTaskTrigger.Fail, ex.Message).ConfigureAwait(false);
+      await FireIfCurrentAsync(run, EngineTaskTrigger.Fail, ex.Message, exception: ex).ConfigureAwait(false);
     }
   }
 
@@ -1579,7 +1595,7 @@ public partial class EngineTask
     catch (Exception ex)
     {
       LogRecoveryFailed(Logger, ex, ex.Message);
-      await FireIfCurrentAsync(run, EngineTaskTrigger.FailRecovery, ex.Message).ConfigureAwait(false);
+      await FireIfCurrentAsync(run, EngineTaskTrigger.FailRecovery, ex.Message, exception: ex).ConfigureAwait(false);
     }
   }
 

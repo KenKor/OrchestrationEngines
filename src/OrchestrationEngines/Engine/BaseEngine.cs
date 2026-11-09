@@ -844,6 +844,41 @@ public abstract partial class BaseEngine : IEngine
     return true;
   }
 
+  /// <inheritdoc/>
+  public virtual async Task EnsureTaskReadyAsync(string taskName, CancellationToken token = default)
+  {
+    if (taskName == null)
+      throw new ArgumentNullException(nameof(taskName));
+    // The task an earlier pass waited for, which a restart or reset ended.
+    EngineTask ended = null;
+    while (true)
+    {
+      // Look the task up after a prepared restart, in the set that replaced the current one.
+      await WaitForRestartAsync().WaitAsync(token).ConfigureAwait(false);
+      if (!_tasks.TryGetValue(taskName, out var task))
+      {
+        // The restart's set has no such task (its set-up failed, or no longer creates it): the task that was waited
+        // for ended, and that is the answer. Only a name never found is unknown.
+        if (ended != null)
+          throw EngineTaskNotReadyException.For(ended, ended.State);
+        throw new ArgumentException($"The engine has no task '{taskName}'.", nameof(taskName));
+      }
+      await EnsureReadyAsync(task, token).ConfigureAwait(false);
+      // Read once: the exception reports the state that was looked at.
+      var state = task.State;
+      if (state == EngineTaskState.CompletedWithSuccess)
+        return;
+      // A restart prepared meanwhile ended the task (Cancelled) and replaces it, or a reset made it run again: the
+      // answer is the next run's, so look again.
+      if (!state.IsCompleted() || RestartPending || !_tasks.TryGetValue(taskName, out var current) || current != task)
+      {
+        ended = task;
+        continue;
+      }
+      throw EngineTaskNotReadyException.For(task, state);
+    }
+  }
+
   /// <summary>
   /// Waits for all task identified by <paramref name="taskName"/> and its dependencies to complete, including optional ones.
   /// </summary>

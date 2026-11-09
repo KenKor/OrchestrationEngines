@@ -44,7 +44,7 @@ public partial class EngineCoordinator : IDisposable
   private readonly Lock _sync = new();
 
   // The engines a running generation switch stopped early, as it rebuilds them from scratch, with the next generation
-  // once it has started (null if it did not start); null when no such switch runs. See GetEngineWhenReadyAsync.
+  // once it has started (null if it did not start); null when no such switch runs. See NextGenerationAsync.
   private RebuildingSwitch _rebuildingSwitch;
 
   // Declarative configuration describing all engines and their dependencies.
@@ -923,6 +923,70 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
+  /// Waits until the task <paramref name="taskName"/> of the engine <paramref name="engineName"/> has completed with
+  /// success, starting the coordinator if it has not been started yet.
+  /// </summary>
+  /// <remarks>
+  /// It first waits for the engine to start (its kick-start, which ends once the engine is Ready or has failed), since
+  /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
+  /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
+  /// reports it as unknown (<see cref="ArgumentException"/>).
+  /// </remarks>
+  /// <param name="engineName">The name of the engine (compared ignoring case).</param>
+  /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
+  /// <param name="token">Cancels the caller's wait; the engine and its tasks go on.</param>
+  /// <exception cref="ArgumentException">No engine of that name is registered, or the engine has no such task.</exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The task ended without success; or the engine could not be created or started, and then the exception names the
+  /// mechanic's task that failed (its creation task, named after the engine, or its kick-start task) instead.
+  /// </exception>
+  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
+  {
+    if (engineName == null)
+      throw new ArgumentNullException(nameof(engineName));
+    if (taskName == null)
+      throw new ArgumentNullException(nameof(taskName));
+    // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
+    if (Successor is { } replaced)
+    {
+      await replaced.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+      return;
+    }
+
+    try
+    {
+      await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      await Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+    }
+    // The switch check is a cheap pre-check: NextGenerationAsync answers null without a switch, but only after the
+    // catch has been entered.
+    catch (Exception ex) when (ex is OperationCanceledException or EngineTaskNotReadyException { State: EngineTaskState.Cancelled }
+      && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _rebuildingSwitch) != null))
+    {
+      // A generation switch while waiting stopped this generation's engines: ask the next one, if it has the engine.
+      var next = await NextGenerationAsync(engineName, token).ConfigureAwait(false);
+      if (next == null)
+        throw;
+      await next.EnsureEngineTaskReadyAsync(engineName, taskName, token).ConfigureAwait(false);
+    }
+  }
+
+  /// <summary>
+  /// The generation that answers for <paramref name="name"/> once this one was replaced: the one it handed over to, or
+  /// the next one of a switch that rebuilds the engine (once it has started). Null if there is none.
+  /// </summary>
+  private async Task<EngineCoordinator> NextGenerationAsync(string name, CancellationToken token)
+  {
+    if (Successor is { } successor)
+      return successor;
+    // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
+    // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
+    if (Volatile.Read(ref _rebuildingSwitch) is { } rebuilding && rebuilding.Names.Contains(name))
+      return await rebuilding.Next.Task.WaitAsync(token).ConfigureAwait(false);
+    return null;
+  }
+
+  /// <summary>
   /// Initiates application shutdown and waits for completion.
   /// </summary>
   /// <remarks>
@@ -1161,20 +1225,12 @@ public partial class EngineCoordinator : IDisposable
       engine = null;
     }
 
-    // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
-    // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
-    if (engine == null && Successor == null && Volatile.Read(ref _rebuildingSwitch) is { } rebuilding &&
-        rebuilding.Names.Contains(name))
-    {
-      var next = await rebuilding.Next.Task.WaitAsync(token).ConfigureAwait(false);
-      return next == null ? null : await next.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
-    }
-
-    // Replaced by a generation switch while waiting: this generation stopped its engines, ask the next one. An engine
-    // that the switch released is not found there, and gives null.
-    return engine ?? (Successor is { } successor
-      ? await successor.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false)
-      : null);
+    // Replaced by a generation switch while waiting: this generation stopped its engines, ask the next one (see
+    // NextGenerationAsync). An engine that the switch released is not found there, and gives null.
+    if (engine != null)
+      return engine;
+    var next = await NextGenerationAsync(name, token).ConfigureAwait(false);
+    return next == null ? null : await next.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
   }
 
   /// <summary>
