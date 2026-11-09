@@ -30,8 +30,9 @@ public class EngineTaskTest
 
   private sealed class TestTaskException(EngineTask et) : EngineTaskException(et, "The task cannot go on.");
 
-  private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null) =>
-    new(name, workAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None, clock);
+  private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null,
+    CancellationToken engineToken = default) =>
+    new(name, workAsync, requiredForRunning: true, NullLogger.Instance, engineToken, clock);
 
   private static async Task RunToEndAsync(EngineTask task)
   {
@@ -172,22 +173,43 @@ public class EngineTaskTest
   }
 
   /// <summary>
-  /// Verifies that stopping a task that has a time-out while its synchronous work runs ends it in Cancelled, not in
-  /// TimedOut: the stop cancels the time-out's wait, which is not the time running out.
+  /// Verifies that a task with a time-out whose engine is stopped before the time-out passes ends Cancelled, not
+  /// TimedOut: whether its work ignores the token (and goes on) or honours it.
   /// </summary>
-  [Fact]
-  public async Task EngineTask_StoppedDuringTimedWork_EndsInCancelledNotTimedOut()
+  /// <remarks>
+  /// The stop cancels the time-out's delay too. The work ends only once the test has checked the task, so the cancelled
+  /// delay always finishes the race first, and the guard that tells a stop from a time-out is what decides the state.
+  /// Work that ended first would be reported as cancelled on its own, guard or not.
+  /// </remarks>
+  /// <param name="workHonoursToken">Whether the work observes its token (and ends cancelled), or ignores it.</param>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task EngineTask_WithTimeOut_EngineStoppedBeforeIt_EndsCancelledNotTimedOut(bool workHonoursToken)
   {
     var clock = new ManualTimeProvider();
     using var engineStop = new CancellationTokenSource();
     using var workGate = new ManualResetEventSlim();
     try
     {
-      var task = new EngineTask("Load", _ =>
+      var task = NewTask("Load", async token =>
       {
-        workGate.Wait(MustComplete);
-        return Task.CompletedTask;
-      }, requiredForRunning: true, NullLogger.Instance, engineStop.Token, clock).SetTimeOut(TimeSpan.FromMinutes(90));
+        if (!workHonoursToken)
+        {
+          // Synchronous work, as task bodies often are.
+          workGate.Wait(MustComplete);
+          return;
+        }
+        try
+        {
+          await Task.Delay(Timeout.Infinite, token);
+        }
+        catch (OperationCanceledException)
+        {
+          workGate.Wait(MustComplete);
+          throw;
+        }
+      }, clock, engineStop.Token).SetTimeOut(TimeSpan.FromMinutes(90));
       await task.FireAsync(EngineTaskTrigger.Start);
       await WaitUntilAsync(() => clock.WaitingTimers == 1, "the time-out must run while the work does");
 
@@ -202,67 +224,6 @@ public class EngineTaskTest
     {
       workGate.Set();
     }
-  }
-
-  /// <summary>
-  /// Verifies that a task with a time-out, whose work honours its token, ends Cancelled and not TimedOut when the engine
-  /// is stopped before the time-out passes.
-  /// </summary>
-  [Fact]
-  public async Task EngineTask_WithTimeOut_EngineCancelledBeforeIt_EndsCancelled()
-  {
-    var clock = new ManualTimeProvider();
-    using var engineStop = new CancellationTokenSource();
-    var task = new EngineTask("Load", token => Task.Delay(Timeout.Infinite, token), requiredForRunning: true,
-      NullLogger.Instance, engineStop.Token, clock).SetTimeOut(TimeSpan.FromMinutes(90));
-    await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the time-out must run while the work does");
-
-    engineStop.Cancel();
-    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-
-    task.State.Should().Be(EngineTaskState.Cancelled);
-    task.FailReason.Should().Be("Cancelled because the engine was stopped.");
-  }
-
-  /// <summary>
-  /// Verifies that a run whose work ends inside a reset (on the reset's own thread, from a callback on its token,
-  /// between the cancel and the next run) does not cancel the next run: its outcome is stale and dropped.
-  /// </summary>
-  /// <remarks>
-  /// The first run's work ends cancelled from a <c>token.Register</c> callback. The task completion source runs its
-  /// continuations synchronously, so the work's outcome reaches the task while the reset still holds it.
-  /// </remarks>
-  [Fact]
-  public async Task EngineTask_ResetWhileRunning_WorkEndingInsideTheReset_DoesNotCancelTheNextRun()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var runs = 0;
-    var firstRunStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var secondRunGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var task = NewTask("Load", token =>
-    {
-      if (Interlocked.Increment(ref runs) > 1)
-        return secondRunGate.Task;
-      // Synchronous continuations: the cancel ends the work inline, inside the reset.
-      var ended = new TaskCompletionSource();
-      token.Register(() => ended.TrySetCanceled(token));
-      firstRunStarted.TrySetResult();
-      return ended.Task;
-    });
-    await task.FireAsync(EngineTaskTrigger.Start);
-    await firstRunStarted.Task.WaitAsync(MustComplete, ct);
-
-    await task.FireAsync(EngineTaskTrigger.Reset);
-    await task.FireAsync(EngineTaskTrigger.Start);
-    // Give the first run's stale outcome time to reach the task while the next run is still running.
-    await Task.Delay(100, ct);
-    task.State.Should().Be(EngineTaskState.Running, "the first run's cancellation belongs to a run that was reset");
-    secondRunGate.SetResult();
-    await task.InnerTask.WaitAsync(MustComplete, ct);
-
-    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
-    runs.Should().Be(2);
   }
 
   /// <summary>

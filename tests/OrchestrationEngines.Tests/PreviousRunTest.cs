@@ -297,4 +297,50 @@ public class PreviousRunTest
     engine.State.Should().Be(EngineState.Ready);
     engine.Loads.Should().Be(1);
   }
+
+  /// <summary>
+  /// Verifies that a run whose work ends inside a reset (on the reset's own thread, from a callback on its token,
+  /// between the cancel and the next run) does not cancel the next run: its outcome is stale and dropped.
+  /// </summary>
+  /// <remarks>
+  /// The first run's work ends cancelled from a <c>token.Register</c> callback. The task completion source runs its
+  /// continuations synchronously, so the work's outcome reaches the task while the reset still holds it.
+  /// </remarks>
+  [Fact]
+  public async Task EngineTask_ResetWhileRunning_WorkEndingInsideTheReset_DoesNotCancelTheNextRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var runs = 0;
+    var firstRunStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var secondRunGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var task = new EngineTask("Load", token =>
+    {
+      if (Interlocked.Increment(ref runs) > 1)
+        return secondRunGate.Task;
+      // Synchronous continuations: the cancel ends the work inline, inside the reset.
+      var ended = new TaskCompletionSource();
+      token.Register(() => ended.TrySetCanceled(token));
+      firstRunStarted.TrySetResult();
+      return ended.Task;
+    }, requiredForRunning: true, NullLogger.Instance, CancellationToken.None);
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await firstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    try
+    {
+      await task.FireAsync(EngineTaskTrigger.Reset);
+      await task.FireAsync(EngineTaskTrigger.Start);
+      // The stale outcome queued on the trigger lock inside the reset, so it has been handled already; this is margin.
+      await Task.Delay(MustStayPending, ct);
+      task.State.Should().Be(EngineTaskState.Running, "the first run's cancellation belongs to a run that was reset");
+    }
+    finally
+    {
+      secondRunGate.TrySetResult();
+    }
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    runs.Should().Be(2);
+  }
 }
