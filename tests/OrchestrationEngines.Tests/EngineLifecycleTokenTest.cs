@@ -41,10 +41,36 @@ public class EngineLifecycleTokenTest
   /// <summary>
   /// A task that shows its current token source.
   /// </summary>
-  private sealed class ProbeTask(Func<CancellationToken, Task> workAsync)
-    : EngineTask("Probe", workAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
+  private sealed class ProbeTask(Func<CancellationToken, Task> workAsync, CancellationToken engineToken = default)
+    : EngineTask("Probe", workAsync, requiredForRunning: true, NullLogger.Instance, engineToken)
   {
     public CancellationTokenSource Source => _linkedCts;
+  }
+
+  /// <summary>
+  /// One <see cref="ProbeTask"/> whose work completes at once; a new one for each set.
+  /// </summary>
+  private sealed class ProbeEngine : BaseEngine
+  {
+    public ProbeEngine() : base(NullLogger.Instance) => Context = new NoContext();
+
+    public ProbeTask Probe { get; private set; }
+
+    protected override void SetUpTasks() =>
+      Probe = (ProbeTask)AddTask("Probe", new ProbeTask(_ => Task.CompletedTask, CancellationToken));
+  }
+
+  private static bool IsDisposed(CancellationToken token)
+  {
+    try
+    {
+      _ = token.WaitHandle;
+      return false;
+    }
+    catch (ObjectDisposedException)
+    {
+      return true;
+    }
   }
 
   /// <summary>
@@ -112,6 +138,51 @@ public class EngineLifecycleTokenTest
   }
 
   /// <summary>
+  /// Verifies that the token source of a task whose set a restart replaced is disposed once its run has ended, and that
+  /// the new set's task runs.
+  /// </summary>
+  [Fact]
+  public async Task Restart_DisposesTheReplacedSetsTokenSources()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new ProbeEngine();
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    var replaced = engine.Probe;
+    var replacedToken = replaced.Source.Token;
+
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.Probe.Should().NotBeSameAs(replaced);
+    SpinWait.SpinUntil(() => IsDisposed(replacedToken), MustComplete).Should().BeTrue(
+      "the replaced task's source is released once its run has ended");
+    IsDisposed(engine.Probe.Source.Token).Should().BeFalse();
+    engine.State.Should().Be(EngineState.Ready);
+  }
+
+  /// <summary>
+  /// Verifies that stopping an engine disposes its token source, while its token still reports the cancellation.
+  /// </summary>
+  [Fact]
+  public async Task StopAsync_DisposesTheEnginesTokenSource()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new CountingEngine();
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    await engine.StopAsync().WaitAsync(MustComplete, ct);
+
+    IsDisposed(engine.CancellationToken).Should().BeTrue();
+    engine.CancellationToken.IsCancellationRequested.Should().BeTrue();
+    engine.IsCancellationRequested.Should().BeTrue();
+    await FluentActions.Awaiting(() => engine.StopAsync().WaitAsync(MustComplete, ct)).Should().NotThrowAsync(
+      "a second stop does not cancel the disposed source");
+  }
+
+  /// <summary>
   /// Verifies that a reset, then another reset and a cancel, never cancel a disposed source.
   /// </summary>
   [Fact]
@@ -176,20 +247,16 @@ public class EngineLifecycleTokenTest
   /// <summary>
   /// One required task whose work runs until it is cancelled.
   /// </summary>
-  private sealed class HangingEngine : BaseEngine
+  private sealed class HangingEngine(TaskCompletionSource<bool> running) : BaseEngine(NullLogger.Instance)
   {
-    private readonly TaskCompletionSource<bool> _running;
-
-    public HangingEngine(TaskCompletionSource<bool> running) : base(NullLogger.Instance)
+    protected override void SetUpTasks()
     {
-      _running = running;
       Context = new NoContext();
+      CreateTask("Hang", async token =>
+      {
+        running.TrySetResult(true);
+        await Task.Delay(Timeout.Infinite, token);
+      });
     }
-
-    protected override void SetUpTasks() => CreateTask("Hang", async token =>
-    {
-      _running.TrySetResult(true);
-      await Task.Delay(Timeout.Infinite, token);
-    });
   }
 }

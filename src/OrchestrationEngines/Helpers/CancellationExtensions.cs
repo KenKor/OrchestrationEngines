@@ -16,16 +16,24 @@ internal static partial class CancellationExtensions
   /// caller carries on with the state change that the cancellation belongs to.
   /// </summary>
   /// <remarks>
-  /// Only a callback's exception is swallowed. Cancelling a disposed source still throws
-  /// <see cref="ObjectDisposedException"/>: the library never cancels a source it has disposed, so that is a bug to see.
+  /// A source that is cancelled already is left alone: a second cancel would do nothing, and the library disposes a
+  /// source only once it is cancelled (a replaced task source, a stopped engine's). One cancelled and disposed by
+  /// another thread between that check and the cancel is left alone too. Cancelling a disposed source that was never
+  /// cancelled still throws <see cref="ObjectDisposedException"/>, which is a bug to see.
   /// </remarks>
   /// <param name="source">The token source to cancel.</param>
   /// <param name="logger">Where a callback's exception is logged.</param>
   public static void CancelBestEffort(this CancellationTokenSource source, ILogger logger)
   {
+    if (source.IsCancellationRequested)
+      return;
     try
     {
       source.Cancel();
+    }
+    catch (ObjectDisposedException) when (source.IsCancellationRequested)
+    {
+      // Cancelled and disposed meanwhile (a reset that replaced it, a stop): its callbacks have run already.
     }
     catch (AggregateException ex)
     {

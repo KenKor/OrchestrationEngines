@@ -381,19 +381,9 @@ public partial class EngineTask
   /// </remarks>
   protected void RequestCancellation()
   {
-    // A source that is cancelled already is not cancelled again: it may have been replaced and disposed meanwhile
-    // (see CreateToken), and a second cancel would do nothing anyway.
-    var source = _linkedCts;
-    if (source.IsCancellationRequested)
-      return;
-    try
-    {
-      source.CancelBestEffort(Logger);
-    }
-    catch (ObjectDisposedException) when (source != Volatile.Read(ref _linkedCts))
-    {
-      // Cancelled and replaced by a reset in between: its work has been told to stop already.
-    }
+    // A cancelled source may have been replaced and disposed meanwhile (see CreateToken); CancelBestEffort leaves it
+    // alone.
+    _linkedCts.CancelBestEffort(Logger);
   }
 
   /// <summary>

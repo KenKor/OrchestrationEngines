@@ -314,7 +314,9 @@ Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks tha
 engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A start replaces the
 task set; the previous set's tasks that have not completed (a background monitor, tasks someone started or waits on) are
 ended first: they go to Cancelled, which releases their waiters, and never run again. The new set's tasks start once the
-work of the replaced set has stopped, so the two sets' work never runs at the same time.
+work of the replaced set has stopped, so the two sets' work never runs at the same time. Once its work has ended, each task of the replaced set has its token cancelled (a completed task's too, so work it
+left running stops) and its token source disposed; a token whose source is disposed still reports cancellation, but
+its `WaitHandle` throws `ObjectDisposedException`. The same holds for a task's token after a reset or a recovery.
 
 ---
 

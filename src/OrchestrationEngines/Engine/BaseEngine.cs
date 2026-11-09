@@ -241,9 +241,8 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   protected virtual void RequestCancellation()
   {
-    // Once cancelled, the source may have been disposed by a stop (see StopAsync).
-    if (!IsCancellationRequested)
-      _linkedCts.CancelBestEffort(Logger);
+    // Once cancelled, the source may have been disposed by a stop (see StopAsync); CancelBestEffort leaves it alone.
+    _linkedCts.CancelBestEffort(Logger);
   }
 
   // ---------------------------------------------------------------------
@@ -548,6 +547,10 @@ public abstract partial class BaseEngine : IEngine
   {
     try
     {
+      // A stop that came in while the previous set was ending (see EndPreviousThenStartAsync): the engine is not set up
+      // again, so a derived engine does not build tasks or load data after it has released its resources.
+      if (IsCancellationRequested)
+        return;
       // Create all tasks and dependencies, in a set of their own that replaces the current one at once.
       LogSettingUpTasks();
       // The work of the set that is replaced can still be running: its tasks were ended (or timed out), which cancels
@@ -589,7 +592,6 @@ public abstract partial class BaseEngine : IEngine
           afterFailedSetUp = _setUpFailed;
           _setUpFailed = false;
         }
-        ReleaseTokens(replacedTasks);
       }
       catch (Exception ex)
       {
@@ -608,9 +610,9 @@ public abstract partial class BaseEngine : IEngine
           Volatile.Write(ref _taskSet, NewTaskSet());
           _setUpFailed = true;
         }
-        // The tasks built before the failure never ran.
-        ReleaseTokens(unpublished.Values);
-        ReleaseTokens(replacedTasks);
+        // The tasks built before the failure never ran. (An overlapping set-up may have published the set already.)
+        if (unpublished != null)
+          ReleaseTokens(unpublished.Values);
         // A stop during the set-up (which may be why it threw) leaves the engine Stopped, as ComputeState would say.
         if (IsCancellationRequested)
         {
@@ -623,6 +625,11 @@ public abstract partial class BaseEngine : IEngine
         }
         throw;
       }
+      finally
+      {
+        // Published over, or replaced by an empty set: the replaced set is gone either way.
+        ReleaseTokens(replacedTasks);
+      }
 
       // Fire the start trigger for those that we're started yet.
       // Fix (EngineStatusEventTest): publish Starting before the tasks run. The state was otherwise only
@@ -630,8 +637,9 @@ public abstract partial class BaseEngine : IEngine
       // watching EngineStatusChanged never saw it start. Publishing it after the triggers (from a recompute) is not
       // enough: a task that ends before the recompute makes it compute Ready at once, and Starting is skipped again.
       // So is a start after a failed set-up, which left the engine Faulted.
+      // Decided under the state gate, so a stop that came in meanwhile is not overwritten with Starting.
       if (State == EngineState.Created || afterFailedSetUp)
-        State = EngineState.Starting;
+        SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Starting);
       await TriggerStartCoreAsync().ConfigureAwait(false);
     }
     finally
@@ -822,10 +830,13 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Waits for all task identified by <paramref name="task"/> and its dependencies to complete, including optional ones.
   /// </summary>
-  /// <param name="task"></param>
-  /// <param name="token"></param>
+  /// <param name="task">The task to wait for.</param>
+  /// <param name="token">Ends the wait when cancelled (it then throws <see cref="OperationCanceledException"/>); the
+  /// tasks run on.</param>
   public virtual async Task EnsureReadyAsync(EngineTask task, CancellationToken token = default)
   {
+    // A wait that is cancelled already starts nothing.
+    token.ThrowIfCancellationRequested();
     // After a prepared restart a task of the replaced set has ended; the caller looks the task up again.
     await WaitForRestartAsync().WaitAsync(token).ConfigureAwait(false);
     var allTasks = task.GetThisAndAllDependsOn();
@@ -836,9 +847,19 @@ public abstract partial class BaseEngine : IEngine
         // var completionTasks = task // We do not need to get its dependencies, since the tasks already have that stored in them.
         .Where(t => !t.IsCompleted)
         .Select(t => t.InnerTask).ToArray();
+    if (completionTasks.Length == 0)
+      return;
     LogWaitingForTask(task);
-    // Cancelling the token ends the wait only; the tasks run on.
-    await Task.WhenAll(completionTasks).WaitAsync(token).ConfigureAwait(false);
+    if (!token.CanBeCanceled)
+    {
+      await Task.WhenAll(completionTasks).ConfigureAwait(false);
+      return;
+    }
+    // Cancelling the token ends the wait only; the tasks run on. Each task is waited for in turn (a task's latch never
+    // faults), so a cancelled wait leaves nothing attached to them: a WhenAll would stay attached until every task
+    // completed, once per cancelled wait.
+    foreach (var completion in completionTasks)
+      await completion.WaitAsync(token).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -950,8 +971,8 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Sets the engine to Created for the next start, or to Stopped if it has been stopped meanwhile. Decided under the
-  /// state gate, so a concurrent stop's Stopped is not overwritten.
+  /// Sets the engine to Created for the next start, or to Stopped if it has been stopped meanwhile (the first rule of
+  /// <see cref="ComputeState"/>). Decided under the state gate, so a concurrent stop's Stopped is not overwritten.
   /// </summary>
   private void SetCreatedUnlessStopped() =>
     SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Created);
@@ -990,9 +1011,7 @@ public abstract partial class BaseEngine : IEngine
   public void CancelAll()
   {
     LogCancellingAllTasks();
-    // Once cancelled, the source may have been disposed by a stop (see StopAsync).
-    if (!IsCancellationRequested)
-      _linkedCts.CancelBestEffort(Logger);
+    RequestCancellation();
   }
 
   /// <summary>
