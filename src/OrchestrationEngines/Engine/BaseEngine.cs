@@ -231,7 +231,7 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Backing field for <see cref="State"/>.
   /// </summary>
-  public EngineState _state = EngineState.Created;
+  private EngineState _state = EngineState.Created;
 
   /// <summary>
   /// <inheritdoc/>
