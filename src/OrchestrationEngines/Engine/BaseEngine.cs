@@ -67,12 +67,23 @@ public abstract partial class BaseEngine : IEngine
 
   // Fix (NameCaseTest): task names were compared case-sensitively, so a lookup in another case did not find the task.
   // Every task set (this one, the one a set-up builds and the copy AddTask makes) now ignores case.
-  private Dictionary<string, EngineTask> _taskSet = new(StringComparer.OrdinalIgnoreCase);
+  private Dictionary<string, EngineTask> _taskSet = NewTaskSet();
+
+  private static Dictionary<string, EngineTask> NewTaskSet() => new(StringComparer.OrdinalIgnoreCase);
+
+  private static Dictionary<string, EngineTask> NewTaskSet(Dictionary<string, EngineTask> copyOf, string name, EngineTask task) =>
+    new(copyOf, StringComparer.OrdinalIgnoreCase) { [name] = task };
 
   /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
   /// </summary>
   private Dictionary<string, EngineTask> _buildingTaskSet;
+
+  /// <summary>
+  /// True from a set-up that failed until the next set is published: no task set was built, and the engine is Faulted
+  /// (see <see cref="ComputeState"/>). Written under <see cref="_taskSetChange"/>.
+  /// </summary>
+  private volatile bool _setUpFailed;
 
   private readonly Lock _taskSetChange = new();
 
@@ -356,6 +367,10 @@ public abstract partial class BaseEngine : IEngine
   /// cancellation: the engine is Faulted if any required task failed, and Stopped
   /// only if required tasks were cancelled and none failed.
   /// </para>
+  /// <para>
+  /// An engine whose last set-up failed has no tasks and is Faulted. An override that does not call this method must
+  /// handle that case itself, or such an engine counts as Ready.
+  /// </para>
   /// </remarks>
   protected virtual EngineState ComputeState()
   {
@@ -363,6 +378,9 @@ public abstract partial class BaseEngine : IEngine
     // is Stopped whatever its tasks say (a background task's late cancellation must not flip it back to Ready).
     if (IsCancellationRequested)
       return EngineState.Stopped;
+    // No task set could be built (see SetUpAndStartAsync): with no tasks the engine would otherwise count as Ready.
+    if (_setUpFailed)
+      return EngineState.Faulted;
 
     var bestState = EngineState.Created;
     var allAreCompletedSuccessfully = true;
@@ -439,9 +457,11 @@ public abstract partial class BaseEngine : IEngine
   /// Validates that no EngineTask depends on itself.
   /// </summary>
   /// <exception cref="CyclicEngineTaskDependencyException"></exception>
-  public void CheckForCyclicDependecies()
+  public void CheckForCyclicDependecies() => CheckForCyclicDependecies(_tasks.Values);
+
+  private static void CheckForCyclicDependecies(IEnumerable<EngineTask> tasks)
   {
-    foreach (var t in _tasks.Values)
+    foreach (var t in tasks)
     {
       t.CheckForCyclicDependecies();
     }
@@ -477,11 +497,25 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Makes the tasks of the next task set run only once <paramref name="work"/> has ended, as they wait for the work of
   /// the set they replace: for work outside this engine that builds on the same data, such as that of a previous engine
-  /// whose data this engine takes over. Used by the next start only.
+  /// whose data this engine takes over. Used by the next start only. Adds to the work already waited for (such as the
+  /// work a failed set-up handed on) rather than replacing it.
   /// </summary>
   /// <param name="work">The work to wait for.</param>
   /// <remarks>Called before <see cref="StartAsync"/>.</remarks>
-  protected void StartAfter(Task work) => Volatile.Write(ref _inheritedWork, work);
+  protected void StartAfter(Task work) => InheritWork(work);
+
+  /// <summary>
+  /// Adds <paramref name="work"/> to the work the next task set waits for (see <see cref="StartAfter"/>).
+  /// </summary>
+  private void InheritWork(Task work)
+  {
+    Task current;
+    do
+    {
+      current = Volatile.Read(ref _inheritedWork);
+    }
+    while (Interlocked.CompareExchange(ref _inheritedWork, current == null ? work : Task.WhenAll(current, work), current) != current);
+  }
 
   private async Task SetUpAndStartAsync()
   {
@@ -492,20 +526,31 @@ public abstract partial class BaseEngine : IEngine
       // The work of the set that is replaced can still be running: its tasks were ended (or timed out), which cancels
       // their work but cannot stop it. The new set's tasks start once it has ended, since they build on the same data.
       // So does work outside this engine that builds on it (see StartAfter).
-      var inheritedWork = Interlocked.Exchange(ref _inheritedWork, null) ?? Task.CompletedTask;
-      var replacedWork = Task.WhenAll(_tasks.Values.Select(t => t.LatestRunEnded).Append(inheritedWork));
+      // Only work still running is waited for, and a single piece is passed on as is, so that retries after failed
+      // set-ups do not wrap it deeper each time.
+      var pending = _tasks.Values.Select(t => t.LatestRunEnded)
+        .Append(Interlocked.Exchange(ref _inheritedWork, null))
+        .Where(work => work is { IsCompleted: false })
+        .ToList();
+      var replacedWork = pending.Count switch
+      {
+        0 => Task.CompletedTask,
+        1 => pending[0],
+        _ => Task.WhenAll(pending),
+      };
       lock (_taskSetChange)
       {
-        _buildingTaskSet = new(StringComparer.OrdinalIgnoreCase);
+        _buildingTaskSet = NewTaskSet();
       }
+      bool afterFailedSetUp;
       try
       {
         SetUpTasks();
-      }
-      finally
-      {
         lock (_taskSetChange)
         {
+          // Before the set is published: the tasks of a cyclic set would wait for each other for good, and so would
+          // everyone waiting for them.
+          CheckForCyclicDependecies(_buildingTaskSet.Values);
           if (!replacedWork.IsCompleted)
           {
             foreach (var task in _buildingTaskSet.Values)
@@ -513,18 +558,45 @@ public abstract partial class BaseEngine : IEngine
           }
           Volatile.Write(ref _taskSet, _buildingTaskSet);
           _buildingTaskSet = null;
+          afterFailedSetUp = _setUpFailed;
+          _setUpFailed = false;
         }
       }
-
-      // Check if cyclic dependencies have been introduced.
-      CheckForCyclicDependecies();
+      catch (Exception ex)
+      {
+        // The set could not be built: none of it is published, and the set it replaces is gone too (its tasks were
+        // ended). The engine is Faulted until a start builds a set; a prepared restart can start it again (see
+        // PrepareRestartAsync).
+        lock (_taskSetChange)
+        {
+          _buildingTaskSet = null;
+          // The work the next set must wait for is still running: hand it on to that set, before a start can see the
+          // failure and build it.
+          if (!replacedWork.IsCompleted)
+            InheritWork(replacedWork);
+          Volatile.Write(ref _taskSet, NewTaskSet());
+          _setUpFailed = true;
+        }
+        // A stop during the set-up (which may be why it threw) leaves the engine Stopped, as ComputeState would say.
+        if (IsCancellationRequested)
+        {
+          State = EngineState.Stopped;
+        }
+        else
+        {
+          LogSetUpFailed(ex);
+          State = EngineState.Faulted;
+        }
+        throw;
+      }
 
       // Fire the start trigger for those that we're started yet.
       // Fix (EngineStatusEventTest): publish Starting before the tasks run. The state was otherwise only
       // recomputed when a task ended, so an engine went from Created straight to Ready (or Faulted) and a host
       // watching EngineStatusChanged never saw it start. Publishing it after the triggers (from a recompute) is not
       // enough: a task that ends before the recompute makes it compute Ready at once, and Starting is skipped again.
-      if (State == EngineState.Created)
+      // So is a start after a failed set-up, which left the engine Faulted.
+      if (State == EngineState.Created || afterFailedSetUp)
         State = EngineState.Starting;
       await TriggerStartCoreAsync().ConfigureAwait(false);
     }
@@ -807,7 +879,8 @@ public abstract partial class BaseEngine : IEngine
   private async Task PrepareRestartAsync(Func<EngineTask, bool> needsRestart)
   {
     var tasks = _tasks.Values.ToArray();
-    if (!tasks.Any(needsRestart))
+    // An engine whose set-up failed has no tasks, but must be started again all the same.
+    if (!_setUpFailed && !tasks.Any(needsRestart))
       return;
     Interlocked.CompareExchange(ref _restart, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), null);
     LogEndingTasksBeforeRestart();
@@ -900,7 +973,7 @@ public abstract partial class BaseEngine : IEngine
       else
       {
         // Outside a set-up the published set is not changed: copy it.
-        Volatile.Write(ref _taskSet, new Dictionary<string, EngineTask>(_taskSet, StringComparer.OrdinalIgnoreCase) { [name] = task });
+        Volatile.Write(ref _taskSet, NewTaskSet(_taskSet, name, task));
       }
     }
     if (task.RequiredForRunning)
@@ -1056,6 +1129,9 @@ public abstract partial class BaseEngine : IEngine
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Setting up tasks and dependencies...")]
   private partial void LogSettingUpTasks();
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "Setting up tasks and dependencies failed; the engine is Faulted.")]
+  private partial void LogSetUpFailed(Exception exception);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Firing start triggers. Now wait for all tasks to reach a ready state...")]
   private partial void LogFiringStartTriggers();
