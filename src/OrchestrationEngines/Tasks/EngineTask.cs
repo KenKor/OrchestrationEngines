@@ -39,7 +39,7 @@ public partial class EngineTask
   // ---------------------------
 
   /// <summary>
-  /// Lazily created Stateless state machine. Access via <see cref="StateMachine"/>.
+  /// Stateless state machine, created on first touch and replaced on each reset. Access via <see cref="StateMachine"/>.
   /// </summary>
   private StateMachine<EngineTaskState, EngineTaskTrigger> _machine;
 
@@ -49,7 +49,7 @@ public partial class EngineTask
   private readonly SemaphoreSlim _triggerLock = new(1, 1);
 
   /// <summary>
-  /// Guards the lazy creation of <see cref="_machine"/>. The first touch of a pristine task is genuinely
+  /// Guards the lazy creation of <see cref="_machine"/> and its replacement on a reset. The first touch of a pristine task is genuinely
   /// concurrent — an unlocked <c>State</c> read (TriggerStartAsync's snapshot, the engine's ComputeState,
   /// the monitor loop) can race a dependency's CompleteDependency callback firing into the same task from
   /// a pool thread. See <see cref="StateMachine"/>.
@@ -603,6 +603,15 @@ public partial class EngineTask
   }
 
   /// <summary>
+  /// Replaces the machine on a reset, under the init lock and with a fence (see <see cref="CreateStateMachine"/>).
+  /// </summary>
+  private void ReplaceStateMachine()
+  {
+    lock (_machineInitLock)
+      Volatile.Write(ref _machine, CreateStateMachine());
+  }
+
+  /// <summary>
   /// Adds a dependency edge: this task depends on <paramref name="parent"/>.
   /// </summary>
   /// <remarks>
@@ -675,10 +684,10 @@ public partial class EngineTask
   /// Builds the state machine definition for this task.
   /// </summary>
   /// <remarks>
-  /// This defines lifecycle transitions and the behavior of dependency triggers. The machine is constructed once
-  /// and kept for the lifetime of the EngineTask object.
-  ///
-  /// Reset behavior: public reset recreates the machine after clearing per-run state.
+  /// This defines lifecycle transitions and the behavior of dependency triggers. The machine is built on first touch
+  /// and again on each reset, after the per-run state is cleared. Both run under the init lock, so the machine and
+  /// this method's side effects (the parameterized-trigger fields) are replaced together, and the machine is published
+  /// with a fence: a reader of <see cref="State"/> without a lock sees the old machine or the new one, fully built.
   /// </remarks>
   protected virtual StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
   {
@@ -1179,7 +1188,7 @@ public partial class EngineTask
     try
     {
       await OnResetEnteredAsync().ConfigureAwait(false);
-      _machine = CreateStateMachine();
+      ReplaceStateMachine();
     }
     finally
     {
