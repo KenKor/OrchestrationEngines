@@ -270,7 +270,7 @@ public class RestartPolicyEnforcerTest
   public void RestartPolicy_Presets_LimitTheRestartsInARow()
   {
     RestartPolicy.Default.MaxConsecutiveRestarts.Should().Be(5);
-    RestartPolicy.Cricical.MaxConsecutiveRestarts.Should().Be(3);
+    RestartPolicy.Critical.MaxConsecutiveRestarts.Should().Be(3);
     RestartPolicy.External.MaxConsecutiveRestarts.Should().Be(10);
     RestartPolicy.Unlimited.MaxConsecutiveRestarts.Should().Be(0);
     new RestartPolicy().MaxConsecutiveRestarts.Should().Be(0);
