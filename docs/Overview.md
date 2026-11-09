@@ -107,13 +107,13 @@ classDiagram
         StartAsync()
         StopAsync()
         EnsureReadyAsync()
+        EngineStatusChanged
     }
     class BaseEngine {
         <<abstract>>
         #SetUpTasks()
         #CreateTask()
         #ReleaseResources()
-        EngineStatusChanged
     }
     class EngineTask {
         State
@@ -304,6 +304,12 @@ Engines:
 - do not manage their own startup ordering
 - do not directly manage dependencies
 - expose lifecycle methods (`StartAsync`, `EnsureReadyAsync`, `StopAsync`)
+- announce each change of their state with `EngineStatusChanged`, so a host subscribes through `IEngine`. On a change
+  to `Faulted`, the event's `Error` says why, and is never null: an `EngineTaskNotReadyException` for the required task
+  whose failure faulted the engine (the one that failed first; its name, final state and `FailReason`, with the
+  exception its work or recovery threw as the inner exception, none for a time-out or cancellation). An engine Faulted
+  without a failed task carries the exception its set-up threw, or an `InvalidOperationException` saying why. For
+  every other state `Error` is null.
 - observe a cancellation token
 
 Concrete engines typically inherit from **`BaseEngine`**, which:

@@ -71,6 +71,15 @@ public interface IEngine
   EngineState State { get; }
 
   /// <summary>
+  /// Raised when <see cref="State"/> changes, in the order of the changes.
+  /// </summary>
+  /// <remarks>
+  /// On a change to <see cref="EngineState.Faulted"/>, <see cref="EngineStatusEventArgs.Error"/> says why; for every
+  /// other state it is null.
+  /// </remarks>
+  event EventHandler<EngineStatusEventArgs> EngineStatusChanged;
+
+  /// <summary>
   /// Logger scoped to this engine instance.
   /// </summary>
   ILogger Logger { get; }

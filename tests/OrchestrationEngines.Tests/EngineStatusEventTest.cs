@@ -41,8 +41,7 @@ public class EngineStatusEventTest
   }
 
   /// <summary>
-  /// Records the status events of the engines it is attached to, in the order they arrived. The event lives on
-  /// BaseEngine, not on IEngine, so a host binds to the concrete engines.
+  /// Records the status events of the engines it is attached to, in the order they arrived.
   /// </summary>
   private sealed class StatusLog
   {
