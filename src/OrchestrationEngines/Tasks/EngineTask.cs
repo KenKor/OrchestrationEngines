@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using OrchestrationEngines.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Logger;
 using OrchestrationEngines.Restarter;
@@ -375,11 +376,12 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// Cancelling the task does not guarantee the underlying work stops immediately; work delegates must respect the token.
-  /// Until the work has stopped, the task's next run waits (see <see cref="StartRun"/>).
+  /// Until the work has stopped, the task's next run waits (see <see cref="StartRun"/>). A callback registered on the
+  /// token that throws is logged, and the cancellation goes ahead.
   /// </remarks>
   protected void RequestCancellation()
   {
-    _linkedCts.Cancel();
+    _linkedCts.CancelBestEffort(Logger);
   }
 
   /// <summary>
@@ -856,7 +858,7 @@ public partial class EngineTask
           RecoveryHelper?.Reset();
 
           // Notify dependents.
-          CompletedStateReached?.Invoke(this);
+          Raise(CompletedStateReached, nameof(CompletedStateReached));
 
           // Release awaiters waiting on lifecycle completion.
           _completionTcs.TrySetResult(true);
@@ -997,8 +999,30 @@ public partial class EngineTask
     else
       LogEnteredFailed(Logger, FailReason);
 #endif
-    FailedStateReached?.Invoke(this);
+    Raise(FailedStateReached, nameof(FailedStateReached));
     _completionTcs.TrySetResult(true);
+  }
+
+  /// <summary>
+  /// Calls each subscriber of a terminal-state event in turn. A subscriber that throws is logged and does not keep the
+  /// subscribers after it, among them the tasks that depend on this one, from being called, nor this task's latch
+  /// (<see cref="InnerTask"/>) from completing.
+  /// </summary>
+  private void Raise(Action<EngineTask> handlers, string eventName)
+  {
+    if (handlers == null)
+      return;
+    foreach (Action<EngineTask> handler in handlers.GetInvocationList())
+    {
+      try
+      {
+        handler(this);
+      }
+      catch (Exception ex)
+      {
+        LogSubscriberFailed(Logger, ex, eventName);
+      }
+    }
   }
 
   /// <summary>
@@ -1046,7 +1070,7 @@ public partial class EngineTask
 
     try
     {
-      try { RequestCancellation(); } catch { /* best effort */ }
+      RequestCancellation();
 
       FailReason = null;
       RunStartedAtUtc = null;
@@ -1539,6 +1563,9 @@ public partial class EngineTask
 
   [LoggerMessage(Level = LogLevel.Warning, Message = "Unhandled trigger {Trigger} in state {State}, ignoring.")]
   private static partial void LogUnhandledTrigger(ILogger logger, EngineTaskTrigger trigger, EngineTaskState state);
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "A subscriber to {EventName} threw; the other subscribers were still called.")]
+  private static partial void LogSubscriberFailed(ILogger logger, Exception exception, string eventName);
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Could not fire {Trigger} after dependency '{Dependency}' ended.")]
   private static partial void LogDependencyCallbackFailed(ILogger logger, Exception exception, EngineTaskTrigger trigger, string dependency);

@@ -968,7 +968,7 @@ public partial class EngineCoordinator : IDisposable
     lock (_sync)
     {
       // Cancel any pending operations.
-      _linkedCts.Cancel();
+      _linkedCts.CancelBestEffort(_applicationLogger);
       // Fire shutdown if not already stopping.
       if (State >= EngineCoordinatorState.Stopping) return;
       AppMachine.Fire(EngineCoordinatorTrigger.StartShutdown);
