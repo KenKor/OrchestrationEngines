@@ -26,9 +26,10 @@ jobs:
           # Full history and tags, for versioning from git tags (see docs/Releasing.md).
           fetch-depth: 0
 
+      # The newest SDK of the 10.0.1xx band, the band global.json allows: the one Linux distributions ship and update.
       - uses: actions/setup-dotnet@v6
         with:
-          global-json-file: global.json
+          dotnet-version: 10.0.1xx
 
       - name: Restore
         run: dotnet restore
