@@ -30,7 +30,8 @@ public class IndependentNetworksTest
 
   private static void Register(EngineCoordinator coordinator, string name, IEngine engine) =>
     coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
 
   /// <summary>
   /// Verifies that a network is returned when an independent network in the same coordinator failed to load.

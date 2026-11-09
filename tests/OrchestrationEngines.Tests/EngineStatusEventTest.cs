@@ -64,7 +64,8 @@ public class EngineStatusEventTest
   {
     log.Attach(name, engine);
     var descriptor = coordinator.RegisterEngine(name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
     if (dependsOn != null)
       descriptor.AddDependsOn(dependsOn);
   }

@@ -146,7 +146,8 @@ public class GenerationSwitchEdgeCaseTest
     var logger = new FakeLogger();
     var coordinator = new EngineCoordinator("Switch", logger, useDispatcher: false);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()))
-      .SetRestartFactory((input, _) => Task.FromResult(input.PreviousEngine));
+      .SetRestartFactory((input, _) => Task.FromResult(input.PreviousEngine))
+      .WithoutRestarts();
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)

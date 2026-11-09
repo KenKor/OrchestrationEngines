@@ -338,7 +338,8 @@ public class EnsureTaskReadyTest
   {
     var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine("Mixed", create, requiredForRunning: false)
-      .SetContextFactory(contextFactory ?? (_ => Task.FromResult<IEngineContext>(new NoContext())));
+      .SetContextFactory(contextFactory ?? (_ => Task.FromResult<IEngineContext>(new NoContext())))
+      .WithoutRestarts();
     return coordinator;
   }
 

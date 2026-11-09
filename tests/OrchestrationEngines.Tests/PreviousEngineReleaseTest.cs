@@ -65,7 +65,8 @@ public class PreviousEngineReleaseTest
   {
     var descriptor = new EngineDescriptor(name, _ => Task.FromResult<IEngine>(new TakingOverEngine()), required, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRestartFactory((input, _) => Task.FromResult(next(input.PreviousEngine)));
+      .SetRestartFactory((input, _) => Task.FromResult(next(input.PreviousEngine)))
+      .WithoutRestarts();
     return builtOn == null ? descriptor : descriptor.AddDependsOn(builtOn);
   }
 

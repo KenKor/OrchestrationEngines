@@ -39,18 +39,41 @@ public class EngineDescriptorRecoveryTest
   }
 
   /// <summary>
-  /// Verifies that each lifecycle task gets an enforcer of its own when the descriptor's recovery was set from a policy.
+  /// Verifies that each lifecycle task gets an enforcer of its own when the descriptor's recovery was set from a policy,
+  /// or comes from its default <see cref="EngineDescriptor.RestartPolicy"/> alone.
   /// </summary>
-  [Fact]
-  public void EngineDescriptor_SetRecoveryHelperFromPolicy_EachLifecycleTaskHasItsOwnEnforcer()
+  [Theory]
+  [InlineData(true)]
+  [InlineData(false)]
+  public void EngineDescriptor_RecoveryFromAPolicy_EachLifecycleTaskHasItsOwnEnforcer(bool setRecoveryHelper)
   {
-    var descriptor = new EngineDescriptor("Network", Factory).SetRecoveryHelper(RestartPolicy.Default);
+    var descriptor = new EngineDescriptor("Network", Factory);
+    if (setRecoveryHelper)
+      descriptor.SetRecoveryHelper(RestartPolicy.Default);
 
     var helpers = LifecycleTasks(descriptor).Select(t => t.RecoveryHelper).ToArray();
 
     helpers.Should().AllBeOfType<RestartPolicyEnforcer>();
     helpers.Distinct().Should().HaveCount(3);
-    helpers.Should().NotContain(descriptor.RecoveryHelper);
+    if (setRecoveryHelper)
+      helpers.Should().NotContain(descriptor.RecoveryHelper);
+  }
+
+  /// <summary>
+  /// Verifies that an invalid <see cref="EngineDescriptor.RestartPolicy"/> throws when it is set, not when the engine is
+  /// started, and that null (no recovery) is accepted.
+  /// </summary>
+  [Fact]
+  public void EngineDescriptor_RestartPolicy_InvalidThrowsWhenSet()
+  {
+    var descriptor = new EngineDescriptor("Network", Factory);
+
+    var set = () => descriptor.RestartPolicy = new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(30) };
+
+    set.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(RestartPolicy.MaxBackoff));
+    descriptor.RestartPolicy.Should().Be(RestartPolicy.Default, "a rejected policy leaves the previous one");
+    descriptor.RestartPolicy = null;
+    LifecycleTasks(descriptor).Should().OnlyContain(t => t.RecoveryHelper == null);
   }
 
   /// <summary>

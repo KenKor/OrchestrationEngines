@@ -115,7 +115,8 @@ public class RebuiltEngineSwitchTest
         firstAtReplacement = first.State;
         return Task.FromResult<IEngine>(new DataEngine());
       })
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     first.State.Should().Be(EngineState.Faulted);
 

@@ -68,7 +68,7 @@ public class EngineKickStartTask : EngineTask
             engineDescriptor.Name + PostFix,
             async _ => await Task.CompletedTask.ConfigureAwait(false), // Placeholder; replaced immediately.
             engineDescriptor.RequiredForRunning,
-            Logger is null ? null : new StartFailureLogger(Logger, canRestart: engineDescriptor.RecoveryHelper != null),
+            Logger is null ? null : new StartFailureLogger(Logger, canRestart: engineDescriptor.HasRecovery),
             token)
     {
         Descriptor = engineDescriptor;

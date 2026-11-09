@@ -33,7 +33,8 @@ public class EngineCoordinatorLifecycleTest
 
   private static EngineDescriptor Descriptor(string name, IEngine engine) =>
     new EngineDescriptor(name, _ => Task.FromResult(engine), requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
 
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
