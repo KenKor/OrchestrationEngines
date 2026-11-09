@@ -205,6 +205,67 @@ public class EngineTaskTest
   }
 
   /// <summary>
+  /// Verifies that a task with a time-out, whose work honours its token, ends Cancelled and not TimedOut when the engine
+  /// is stopped before the time-out passes.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_WithTimeOut_EngineCancelledBeforeIt_EndsCancelled()
+  {
+    var clock = new ManualTimeProvider();
+    using var engineStop = new CancellationTokenSource();
+    var task = new EngineTask("Load", token => Task.Delay(Timeout.Infinite, token), requiredForRunning: true,
+      NullLogger.Instance, engineStop.Token, clock).SetTimeOut(TimeSpan.FromMinutes(90));
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the time-out must run while the work does");
+
+    engineStop.Cancel();
+    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+
+    task.State.Should().Be(EngineTaskState.Cancelled);
+    task.FailReason.Should().Be("Cancelled because the engine was stopped.");
+  }
+
+  /// <summary>
+  /// Verifies that a run whose work ends inside a reset (on the reset's own thread, from a callback on its token,
+  /// between the cancel and the next run) does not cancel the next run: its outcome is stale and dropped.
+  /// </summary>
+  /// <remarks>
+  /// The first run's work ends cancelled from a <c>token.Register</c> callback. The task completion source runs its
+  /// continuations synchronously, so the work's outcome reaches the task while the reset still holds it.
+  /// </remarks>
+  [Fact]
+  public async Task EngineTask_ResetWhileRunning_WorkEndingInsideTheReset_DoesNotCancelTheNextRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var runs = 0;
+    var firstRunStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var secondRunGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var task = NewTask("Load", token =>
+    {
+      if (Interlocked.Increment(ref runs) > 1)
+        return secondRunGate.Task;
+      // Synchronous continuations: the cancel ends the work inline, inside the reset.
+      var ended = new TaskCompletionSource();
+      token.Register(() => ended.TrySetCanceled(token));
+      firstRunStarted.TrySetResult();
+      return ended.Task;
+    });
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await firstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    await task.FireAsync(EngineTaskTrigger.Reset);
+    await task.FireAsync(EngineTaskTrigger.Start);
+    // Give the first run's stale outcome time to reach the task while the next run is still running.
+    await Task.Delay(100, ct);
+    task.State.Should().Be(EngineTaskState.Running, "the first run's cancellation belongs to a run that was reset");
+    secondRunGate.SetResult();
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    runs.Should().Be(2);
+  }
+
+  /// <summary>
   /// Verifies that a task with a recovery policy that timed out runs again with a fresh token: the time-out
   /// cancelled the token of the first run, and the second run must not start cancelled.
   /// </summary>
