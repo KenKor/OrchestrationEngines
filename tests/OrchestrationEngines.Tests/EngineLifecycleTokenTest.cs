@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -228,6 +229,78 @@ public class EngineLifecycleTokenTest
   }
 
   /// <summary>
+  /// Verifies that a cancel of the engine's parent token while a reset waits for a task to end (here: the task's
+  /// transition into Cancelled is held) releases the restart: a wait until the engine is ready ends without a stop,
+  /// and the engine is Stopped.
+  /// </summary>
+  [Fact]
+  public async Task ResetAllTasksAsync_ParentCancelledWhileTasksEnd_ReleasesTheRestart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    using var ending = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    var engine = new HeldEndEngine(ending, release, parent.Token);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    // On a pool thread: the held transition blocks the thread that runs it.
+    var reset = Task.Run(() => engine.ResetAllTasksAsync(), ct);
+    await Task.Run(() => ending.Wait(MustComplete, ct), ct);
+
+    parent.Cancel();
+    release.Set();
+    await reset.WaitAsync(MustComplete, ct);
+
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.State.Should().Be(EngineState.Stopped);
+  }
+
+  /// <summary>
+  /// Verifies that giving up a prepared restart of an engine whose parent token was cancelled leaves it Stopped, with
+  /// no fault cause, while a live engine is still Faulted with the reason.
+  /// </summary>
+  [Fact]
+  public async Task AbandonRestart_AfterAParentCancel_LeavesTheEngineStoppedWithoutAFaultCause()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token);
+    var published = new List<EngineStatusEventArgs>();
+    engine.EngineStatusChanged += (_, e) => published.Add(e);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    parent.Cancel();
+
+    engine.AbandonRestart("its kick-start was cancelled");
+
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.State.Should().Be(EngineState.Stopped);
+    published.Should().NotContain(e => e.State == EngineState.Faulted);
+    published.Should().OnlyContain(e => e.Error == null);
+  }
+
+  /// <summary>
+  /// Verifies that giving up a prepared restart of a live engine makes it Faulted, with the reason as its cause.
+  /// </summary>
+  [Fact]
+  public async Task AbandonRestart_OnALiveEngine_FaultsItWithTheReason()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new CountingEngine();
+    var published = new List<EngineStatusEventArgs>();
+    engine.EngineStatusChanged += (_, e) => published.Add(e);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+
+    engine.AbandonRestart("its kick-start failed");
+
+    engine.State.Should().Be(EngineState.Faulted);
+    published.Single(e => e.State == EngineState.Faulted).Error.Message.Should().Contain("its kick-start failed");
+    await engine.StopAsync().WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
   /// Verifies that a reset, then another reset and a cancel, never cancel a disposed source.
   /// </summary>
   [Fact]
@@ -287,6 +360,40 @@ public class EngineLifecycleTokenTest
       .Should().ThrowAsync<OperationCanceledException>();
     task.State.Should().Be(EngineTaskState.Running);
     await engine.StopAsync().WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// A task that, once its work runs, holds its transition into a failed or cancelled state until the test releases it.
+  /// </summary>
+  private sealed class HeldEndTask(ManualResetEventSlim ending, ManualResetEventSlim release, CancellationToken engineToken)
+    : EngineTask("Held", token => Task.Delay(System.Threading.Timeout.Infinite, token), requiredForRunning: true, NullLogger.Instance,
+      engineToken)
+  {
+    protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
+    {
+      ending.Set();
+      release.Wait(MustComplete);
+      base.OnFailedEntered(reasonFromTrigger, cancelled);
+    }
+  }
+
+  /// <summary>
+  /// One required <see cref="HeldEndTask"/>.
+  /// </summary>
+  private sealed class HeldEndEngine : BaseEngine
+  {
+    private readonly ManualResetEventSlim _ending;
+    private readonly ManualResetEventSlim _release;
+
+    public HeldEndEngine(ManualResetEventSlim ending, ManualResetEventSlim release, CancellationToken token)
+      : base(NullLogger.Instance, token)
+    {
+      _ending = ending;
+      _release = release;
+      Context = new NoContext();
+    }
+
+    protected override void SetUpTasks() => AddTask("Held", new HeldEndTask(_ending, _release, CancellationToken));
   }
 
   /// <summary>
