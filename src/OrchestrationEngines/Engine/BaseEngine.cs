@@ -1283,11 +1283,10 @@ public abstract partial class BaseEngine : IEngine
     ArmRestart();
     LogEndingTasksBeforeRestart();
     await Task.WhenAll(tasks.Select(t => t.EndAsync())).ConfigureAwait(false);
-    // Cancelled meanwhile other than by StopAsync (a parent token, CancelAll): stopping is final and the engine has no
-    // restart to wait for. Released first, since the state is not recomputed while a restart is pending.
-    if (IsCancellationRequested)
-      CompleteRestart();
     SetUnlessStopped(EngineState.Created);
+    // Cancelled meanwhile other than by StopAsync (a parent token, CancelAll): see ReleaseRestartIfCancelled. Checked
+    // after the state decision, so a cancel between the two is not missed.
+    ReleaseRestartIfCancelled();
   }
 
   /// <summary>
@@ -1297,6 +1296,16 @@ public abstract partial class BaseEngine : IEngine
   private void ArmRestart()
   {
     Interlocked.CompareExchange(ref _restart, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), null);
+    ReleaseRestartIfCancelled();
+  }
+
+  /// <summary>
+  /// Releases the prepared restart if the engine is cancelled: stopping is final, so a cancelled engine has no restart
+  /// to wait for, also when the cancel came from its parent token or <see cref="CancelAll"/> and not from
+  /// <see cref="StopAsync"/>.
+  /// </summary>
+  private void ReleaseRestartIfCancelled()
+  {
     if (IsCancellationRequested)
       CompleteRestart();
   }
@@ -1320,11 +1329,12 @@ public abstract partial class BaseEngine : IEngine
 
   /// <summary>
   /// Gives up a prepared restart that will not be carried out (see <see cref="PrepareRestartAsync"/>): the engine is
-  /// Faulted (Stopped if it was cancelled, since stopping is final), and whoever waits for the restart is released and finds the ended task set.
+  /// Faulted, and whoever waits for the restart is released and finds the ended task set.
   /// </summary>
   /// <remarks>
   /// For the one that prepared the restart and then cannot start the engine again, such as a kick-start whose context
   /// task failed after it was reset. Without this, every wait until the engine is ready waited until the engine stopped.
+  /// A cancelled engine is Stopped instead, without a fault cause, since stopping is final.
   /// </remarks>
   /// <param name="reason">Why the engine is not started again, for logging.</param>
   public void AbandonRestart(string reason)
@@ -1332,15 +1342,9 @@ public abstract partial class BaseEngine : IEngine
     if (!RestartPending)
       return;
     LogRestartAbandoned(reason);
-    // Stopping is final: a cancelled engine is Stopped, not Faulted. The restart is released first, since the state is
-    // not recomputed while it is pending.
-    if (IsCancellationRequested)
-    {
-      CompleteRestart();
-      RecomputeStateSynchronized();
-      return;
-    }
-    SetStateSynchronized(() => EngineState.Faulted,
+    // Stopping is final: a cancelled engine is Stopped, not Faulted, and has no fault cause. Decided under the state
+    // gate, so a cancel that comes meanwhile is not overwritten.
+    SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Faulted,
       new InvalidOperationException($"Engine '{EngineName}' is not started again: {reason}"));
     CompleteRestart();
   }

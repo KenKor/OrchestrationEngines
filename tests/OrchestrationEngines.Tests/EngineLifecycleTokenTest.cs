@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -263,7 +264,7 @@ public class EngineLifecycleTokenTest
     var ct = TestContext.Current.CancellationToken;
     using var parent = new CancellationTokenSource();
     var engine = new CountingEngine(parent.Token);
-    var published = new System.Collections.Generic.List<EngineStatusEventArgs>();
+    var published = new List<EngineStatusEventArgs>();
     engine.EngineStatusChanged += (_, e) => published.Add(e);
     await engine.StartAsync().WaitAsync(MustComplete, ct);
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
@@ -286,8 +287,8 @@ public class EngineLifecycleTokenTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = new CountingEngine();
-    Exception error = null;
-    engine.EngineStatusChanged += (_, e) => error = e.State == EngineState.Faulted ? e.Error : error;
+    var published = new List<EngineStatusEventArgs>();
+    engine.EngineStatusChanged += (_, e) => published.Add(e);
     await engine.StartAsync().WaitAsync(MustComplete, ct);
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
     await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
@@ -295,8 +296,7 @@ public class EngineLifecycleTokenTest
     engine.AbandonRestart("its kick-start failed");
 
     engine.State.Should().Be(EngineState.Faulted);
-    error.Should().NotBeNull();
-    error.Message.Should().Contain("its kick-start failed");
+    published.Single(e => e.State == EngineState.Faulted).Error.Message.Should().Contain("its kick-start failed");
     await engine.StopAsync().WaitAsync(MustComplete, ct);
   }
 
