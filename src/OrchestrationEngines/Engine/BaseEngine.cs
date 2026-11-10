@@ -1285,7 +1285,7 @@ public abstract partial class BaseEngine : IEngine
     await Task.WhenAll(tasks.Select(t => t.EndAsync())).ConfigureAwait(false);
     SetUnlessStopped(EngineState.Created);
     // Cancelled meanwhile other than by StopAsync (a parent token, CancelAll): see ReleaseRestartIfCancelled. Checked
-    // after the state decision, so a cancel between the two is not missed.
+    // after the state decision, which it then redoes, so a cancel between the two is not missed.
     ReleaseRestartIfCancelled();
   }
 
@@ -1306,8 +1306,12 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   private void ReleaseRestartIfCancelled()
   {
-    if (IsCancellationRequested)
-      CompleteRestart();
+    if (!IsCancellationRequested)
+      return;
+    CompleteRestart();
+    // Released first: the state is not recomputed while a restart is pending, and a cancel that came after the caller
+    // decided the state would otherwise leave it as it was, since the tasks have ended and nothing recomputes it later.
+    RecomputeStateSynchronized();
   }
 
   /// <summary>
@@ -1347,6 +1351,8 @@ public abstract partial class BaseEngine : IEngine
     SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Faulted,
       new InvalidOperationException($"Engine '{EngineName}' is not started again: {reason}"));
     CompleteRestart();
+    // A cancel that came after the gate decided Faulted: stopping is final, so the engine is Stopped.
+    ReleaseRestartIfCancelled();
   }
 
   /// <summary>
