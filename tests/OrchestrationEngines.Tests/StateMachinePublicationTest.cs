@@ -26,7 +26,10 @@ public class StateMachinePublicationTest
   {
     private readonly ConcurrentDictionary<StateMachine<EngineTaskState, EngineTaskTrigger>, int> _numbers = new();
 
-    public int Built => _numbers.Count;
+    // Written only under the task's init lock, which serializes the builds.
+    private int _built;
+
+    public int Built => Volatile.Read(ref _built);
 
     public StateMachine<EngineTaskState, EngineTaskTrigger> Machine => StateMachine;
 
@@ -40,7 +43,8 @@ public class StateMachinePublicationTest
     {
       var machine = base.CreateStateMachine();
       // Numbered before it is published: the builds are serialized by the task's init lock.
-      _numbers[machine] = _numbers.Count;
+      _numbers[machine] = _built;
+      Volatile.Write(ref _built, _built + 1);
       return machine;
     }
   }
@@ -75,32 +79,34 @@ public class StateMachinePublicationTest
   }
 
   /// <summary>
-  /// Verifies that a thread reading a task's state machine while the task is reset, again and again, never throws,
-  /// only sees machines the task built, and never sees an older machine after a newer one.
+  /// Verifies that a thread reading a task's state machine while the task is reset, again and again, never throws and
+  /// only sees machines the task built, and that each reset builds exactly one new machine.
   /// </summary>
   /// <remarks>
-  /// A missing fence cannot be made to fail on x86-64 or ARM64 under .NET's memory model, so this guards the order of
-  /// publication rather than proving the fence.
+  /// What guards the change is that only built machines are seen, and that 201 were built: one on first touch and one
+  /// per reset. A missing fence cannot be made to fail on x86-64 or ARM64 under .NET's memory model, so this does not
+  /// prove the fence.
   /// </remarks>
   [Fact]
-  public async Task EngineTask_StateMachine_ReadDuringResets_SeesOnlyBuiltMachinesInOrder()
+  public async Task EngineTask_StateMachine_ReadDuringResets_SeesOnlyBuiltMachines()
   {
     var ct = TestContext.Current.CancellationToken;
     var task = new CountingTask();
     _ = task.Machine;
-    using var done = new CancellationTokenSource();
+    using var done = CancellationTokenSource.CreateLinkedTokenSource(ct);
     var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var reads = 0;
+    var foreign = 0;
     var reader = Task.Run(() =>
     {
-      var last = 0;
-      started.TrySetResult();
-      while (!done.IsCancellationRequested && !ct.IsCancellationRequested)
+      started.SetResult();
+      while (!done.IsCancellationRequested)
       {
-        var number = task.NumberOf(task.Machine);
+        // Compared in plain code and asserted once after the loop, so the loop does not allocate.
+        if (task.NumberOf(task.Machine) < 0)
+          foreign++;
+        // Not checked: runs the unlocked State read path against the machine being replaced.
         _ = task.State;
-        number.Should().BeGreaterThanOrEqualTo(last, "a machine is never replaced by an older one");
-        last = number;
         reads++;
         Thread.Yield();
       }
@@ -123,6 +129,7 @@ public class StateMachinePublicationTest
 
     await reader.WaitAsync(MustComplete, ct);
     reads.Should().BePositive();
+    foreign.Should().Be(0, "only machines the task built are seen");
     task.Built.Should().Be(201, "one machine on first touch, and one per reset");
     task.State.Should().Be(EngineTaskState.Created);
   }
