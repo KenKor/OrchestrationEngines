@@ -41,11 +41,12 @@ public enum EngineState
   Stopped,
 
   /// <summary>
-  /// The engine encountered an unrecoverable fault.
+  /// The engine's start failed.
   /// </summary>
   /// <remarks>
-  /// Engines in this state are considered terminal and require reset/recreation
-  /// before they can be used again.
+  /// Final once the engine's restart policy gives up (or when it has none): the engine then needs a reset or a new
+  /// instance before it can be used again. Between the attempts of a start that the policy retries, the engine can be
+  /// Faulted, and then Starting again.
   /// </remarks>
   Faulted
 }

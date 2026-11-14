@@ -175,7 +175,7 @@ classDiagram
     EngineContextWithDependencies o-- IEngine : underlying engines
     EngineTask ..> IRestartPolicyEnforcer : recovery
     RestartPolicy ..> IRestartPolicyEnforcer : GetEnforcer()
-    EngineDescriptor ..> RestartPolicy : RestartPolicy, SetRecoveryHelper()
+    EngineDescriptor ..> RestartPolicy : RestartPolicy, SetRestartPolicy()
     note for IReplacesPreviousEngine "Optional: implemented by an engine that takes over\nwhat its predecessor loaded in a generation switch"
 ```
 
@@ -255,8 +255,9 @@ Recovery and restarts:
   not cancelled) goes to `Recovering`, waits, and runs its work again. Its state message says why.
 - `RestartPolicy` limits the restarts: at most `MaxRestartsInWindow` within `Window`, and at most
   `MaxConsecutiveRestarts` in a row without a successful run, however long each attempt takes (the window alone never
-  gives up on slow failures). The wait between restarts doubles from `InitialBackoff` up to `MaxBackoff`. A success or a
-  reset starts counting again.
+  gives up on slow failures). The wait between restarts doubles from `InitialBackoff` up to `MaxBackoff`; a `Jitter`
+  from 0 (the default) to 1 shortens each wait by that share of a random fraction, so engines that failed together do
+  not all restart at once. A success or a reset starts counting again. The settings are fixed once the policy is made.
 - A task that starts while one of its dependencies has failed ends `DependencyFailed` at once.
 
 Resets:
@@ -383,16 +384,17 @@ Its responsibilities:
 The mechanic itself is an engine and participates in the same lifecycle model.
 
 An engine's lifecycle tasks (creation, context, kick-start) recover by the descriptor's `RestartPolicy`, which is
-`RestartPolicy.Default` unless the host sets another. A recovery helper that is set (`SetRecoveryHelper`) wins over it,
-and `RestartPolicy = null` turns recovery off. So an engine whose load fails is retried with backoff, and each attempt
-is logged. An engine whose start failed reports `Faulted` between attempts, and is started again (with a new task set,
+`RestartPolicy.Default` unless the host sets another (`SetRestartPolicy` sets it too). A recovery helper that is set
+(`SetRecoveryHelper`, an enforcer or a delegate) wins over it, and `RestartPolicy = null` turns recovery off. So an
+engine whose load fails is retried with backoff, and each attempt is logged. An engine whose start failed reports `Faulted` between attempts, and is started again (with a new task set,
 see below) for the next one; `Faulted` is final only once the policy gives up, which a lookup sees (it waits
 for the retries, and then gets null). With `RestartPolicy.Default` (five restarts in a row, the wait doubling from 1 s
 up to 10 s) a permanent error is given up on after about 25 seconds and six attempts. A host that needs a failed load
 to fault for good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation
 switch that waits until the next generation is ready keeps the previous generation (and the engine handed over) until
 the retries have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, a
-context refresh, another switch) wait as well.
+context refresh, another switch, and the lookups and readiness waits that start the coordinator: `GetEngineAsync`,
+`EnsureReadyAsync` and `EnsureEngineTaskReadyAsync`) wait as well.
 
 When the descriptor's recovery retries an engine's kick-start, the engine is started again with a new task set if it
 is `Faulted`, or `Stopped` by one of its own tasks being cancelled from outside while the engine itself is live. Until

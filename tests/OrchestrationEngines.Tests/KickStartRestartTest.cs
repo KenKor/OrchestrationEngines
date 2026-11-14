@@ -7,6 +7,7 @@ using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Restarter;
 using Xunit;
+using static OrchestrationEngines.Tests.TestRestartPolicies;
 
 namespace OrchestrationEngines.Tests;
 
@@ -19,14 +20,6 @@ public class KickStartRestartTest
 {
   private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private const string Name = "E";
-
-  private static RestartPolicy NoWait(int maxRestarts) => new()
-  {
-    MaxRestartsInWindow = maxRestarts,
-    Window = TimeSpan.FromMinutes(10),
-    InitialBackoff = TimeSpan.Zero,
-    MaxBackoff = TimeSpan.Zero,
-  };
 
   /// <summary>
   /// An engine with one load task, whose work the test decides per load, counting its starts and loads.
@@ -54,7 +47,7 @@ public class KickStartRestartTest
     var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRecoveryHelper(NoWait(maxRestarts: 5));
+      .SetRestartPolicy(NoWait(maxRestarts: 5));
     return coordinator;
   }
 
@@ -89,7 +82,7 @@ public class KickStartRestartTest
     var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRecoveryHelper(new RestartPolicy
+      .SetRestartPolicy(new RestartPolicy
       {
         MaxRestartsInWindow = 5,
         Window = TimeSpan.FromMinutes(10),
@@ -182,7 +175,7 @@ public class KickStartRestartTest
     var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRecoveryHelper(NoWait(maxRestarts: 5));
+      .SetRestartPolicy(NoWait(maxRestarts: 5));
 
     var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
     var deadline = DateTime.UtcNow + MustComplete;

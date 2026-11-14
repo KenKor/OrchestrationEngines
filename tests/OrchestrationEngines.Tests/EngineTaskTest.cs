@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
+using static OrchestrationEngines.Tests.TestRestartPolicies;
 
 namespace OrchestrationEngines.Tests;
 
@@ -16,17 +17,6 @@ namespace OrchestrationEngines.Tests;
 public class EngineTaskTest
 {
   private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
-  /// <summary>
-  /// A restart policy that never waits between restarts, so tests do not depend on the backoff.
-  /// </summary>
-  private static RestartPolicy NoWait(int maxRestarts) => new()
-  {
-    MaxRestartsInWindow = maxRestarts,
-    Window = TimeSpan.FromMinutes(10),
-    InitialBackoff = TimeSpan.Zero,
-    MaxBackoff = TimeSpan.Zero,
-  };
 
   private sealed class TestTaskException(EngineTask et) : EngineTaskException(et, "The task cannot go on.");
 

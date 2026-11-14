@@ -131,36 +131,12 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// </para>
   ///
   /// <para>
-  /// An enforcer keeps the restart count of the task it recovers. When it was set from a policy
-  /// (<see cref="SetRecoveryHelper(RestartPolicy)"/>), each lifecycle task of the engine gets an enforcer of its own
-  /// (see <see cref="CreateRecoveryHelper"/>); an enforcer set directly is shared by those tasks.
-  /// </para>
-  ///
-  /// <para>
-  /// When none is set, the lifecycle tasks recover by <see cref="RestartPolicy"/> instead.
+  /// An enforcer keeps the restart count of the task it recovers, and one that is set here is shared by the engine's
+  /// lifecycle tasks. It wins over <see cref="RestartPolicy"/>, from which each lifecycle task gets an enforcer of its
+  /// own (see <see cref="CreateRecoveryHelper"/>); when none is set, the tasks recover by that policy.
   /// </para>
   /// </remarks>
-  public IRestartPolicyEnforcer RecoveryHelper
-  {
-    get => _recoveryHelper;
-    set
-    {
-      _recoveryHelper = value;
-      // Set directly: the tasks share this enforcer, whatever policy was set before.
-      RecoveryPolicy = null;
-    }
-  }
-
-  private IRestartPolicyEnforcer _recoveryHelper;
-
-  /// <summary>
-  /// The policy that <see cref="RecoveryHelper"/> was created from with <see cref="SetRecoveryHelper(RestartPolicy)"/>,
-  /// or null when the enforcer was set directly.
-  /// </summary>
-  /// <remarks>
-  /// Setting <see cref="RecoveryHelper"/> clears it, so a copy sets it after that property.
-  /// </remarks>
-  internal RestartPolicy RecoveryPolicy { get; set; }
+  public IRestartPolicyEnforcer RecoveryHelper { get; set; }
 
   /// <summary>
   /// Indicates whether this engine must be Ready before the application
@@ -186,13 +162,11 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// </para>
   ///
   /// <para>
-  /// The policy is checked when it is set, so an invalid one throws here. A policy changed after it was set (its
-  /// properties have setters) is checked only when the engine is started.
+  /// The policy is checked when it is set, so an invalid one throws here; its settings cannot change after that.
   /// </para>
   ///
   /// <para>
-  /// A <see cref="RecoveryHelper"/> that is set (also through <see cref="SetRecoveryHelper(RestartPolicy)"/>) wins
-  /// over this policy.
+  /// A <see cref="RecoveryHelper"/> that is set wins over this policy.
   /// </para>
   /// </remarks>
   /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is negative, or its
@@ -328,15 +302,17 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   }
 
   /// <summary>
-  /// Assigns a restart policy to this engine.
+  /// Sets the restart policy of the engine's lifecycle tasks (<see cref="RestartPolicy"/>); null for no recovery.
   /// </summary>
   /// <remarks>
   /// Each lifecycle task of the engine gets an enforcer of its own from this policy (see <see cref="CreateRecoveryHelper"/>).
+  /// A <see cref="RecoveryHelper"/> that is set wins over it.
   /// </remarks>
-  public EngineDescriptor SetRecoveryHelper(RestartPolicy policy)
+  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy cannot be enforced (see
+  /// <see cref="RestartPolicy.Validate"/>).</exception>
+  public EngineDescriptor SetRestartPolicy(RestartPolicy policy)
   {
-    RecoveryHelper = policy.GetEnforcer();
-    RecoveryPolicy = policy;
+    RestartPolicy = policy;
     return this;
   }
 
@@ -344,21 +320,20 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// Returns the recovery enforcer for one of the engine's lifecycle tasks (creation, context, kick-start).
   /// </summary>
   /// <remarks>
-  /// A new one for each task when <see cref="RecoveryHelper"/> was set from a policy, since an enforcer keeps the restart
-  /// count of one task: shared, the tasks added up each other's restarts, and a task that completed reset the count of
-  /// the others. Otherwise the enforcer that was set directly, shared, as there is no telling how to create another.
-  /// Without either, a new one from <see cref="RestartPolicy"/>, or null (no recovery) when that is null.
+  /// The <see cref="RecoveryHelper"/> that is set, shared, as there is no telling how to create another. Without one, a
+  /// new one from <see cref="RestartPolicy"/> for each task, since an enforcer keeps the restart count of one task:
+  /// shared, the tasks added up each other's restarts, and a task that completed reset the count of the others. Null
+  /// (no recovery) when neither is set.
   /// </remarks>
   /// <param name="timeProvider">The clock of the task, for an enforcer created from the policy.</param>
   internal IRestartPolicyEnforcer CreateRecoveryHelper(TimeProvider timeProvider) =>
-    RecoveryPolicy?.GetEnforcer(timeProvider) ?? RecoveryHelper ?? RestartPolicy?.GetEnforcer(timeProvider);
+    RecoveryHelper ?? RestartPolicy?.GetEnforcer(timeProvider);
 
   /// <summary>
   /// Whether the engine's lifecycle tasks recover from a failure (see <see cref="CreateRecoveryHelper"/>).
   /// </summary>
   /// <remarks>
-  /// Keep in step with <see cref="CreateRecoveryHelper"/>, which it restates without creating an enforcer; it leaves out
-  /// <see cref="RecoveryPolicy"/>, which is only ever set together with <see cref="RecoveryHelper"/>.
+  /// Keep in step with <see cref="CreateRecoveryHelper"/>, which it restates without creating an enforcer.
   /// </remarks>
   internal bool HasRecovery => RecoveryHelper != null || RestartPolicy != null;
 
@@ -408,10 +383,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
            (RestartFromPrevious == other.RestartFromPrevious || RestartFromPrevious != null && RestartFromPrevious.Equals(other.RestartFromPrevious)) &&
            RequiredForRunning == other.RequiredForRunning &&
            (ContextFactory == other.ContextFactory || ContextFactory != null && ContextFactory.Equals(other.ContextFactory)) &&
-           // An enforcer created from a policy holds runtime state; the policy is the configuration.
-           (RecoveryPolicy != null || other.RecoveryPolicy != null
-             ? Equals(RecoveryPolicy, other.RecoveryPolicy)
-             : RecoveryHelper == other.RecoveryHelper || RecoveryHelper != null && Equals(RecoveryHelper, other.RecoveryHelper)) &&
+           (RecoveryHelper == other.RecoveryHelper || RecoveryHelper != null && Equals(RecoveryHelper, other.RecoveryHelper)) &&
            (RestartPolicy == other.RestartPolicy || RestartPolicy != null && RestartPolicy.Equals(other.RestartPolicy)) &&
            DependsOn.SetEquals(other.DependsOn);
   }
@@ -440,7 +412,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     hash.Add(EngineFactory);
     hash.Add(RestartFromPrevious);
     hash.Add(ContextFactory);
-    hash.Add((object)RecoveryPolicy ?? RecoveryHelper);
+    hash.Add(RecoveryHelper);
     hash.Add(RequiredForRunning);
     hash.Add(RestartPolicy);
     // Fix (EngineDescriptorEqualityTest): by content, in a fixed order, as Equals now compares them; it was by reference.

@@ -675,8 +675,6 @@ public partial class EngineCoordinator : IDisposable
     {
       ContextFactory = source.ContextFactory,
       RecoveryHelper = source.RecoveryHelper,
-      // After RecoveryHelper, whose setter clears it: the next generation's tasks get enforcers of their own.
-      RecoveryPolicy = source.RecoveryPolicy,
       RestartPolicy = source.RestartPolicy,
       RestartFromPrevious = source.RestartFromPrevious,
       // Keep the registered factory, also when the engine factory is a handover (see Handover).

@@ -40,6 +40,23 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   private readonly TimeProvider _timeProvider;
 
   /// <summary>
+  /// The random source of the jitter: a fraction in [0, 1).
+  /// </summary>
+  private readonly Func<double> _nextRandom;
+
+#if NET6_0_OR_GREATER
+  private static double NextSharedRandom() => Random.Shared.NextDouble();
+#else
+  // Random is not thread-safe, and enforcers of many tasks draw from it at once.
+  private static readonly Random SharedRandom = new();
+
+  private static double NextSharedRandom()
+  {
+    lock (SharedRandom) return SharedRandom.NextDouble();
+  }
+#endif
+
+  /// <summary>
   /// Gets the timestamps (UTC) of recorded restart attempts used to enforce the restart-rate limit.
   /// </summary>
   /// <remarks>
@@ -89,12 +106,25 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// <item><c>Window</c> may be 0 (disables windowing) but must not be negative.</item>
   /// <item><c>InitialBackoff</c> must not be negative.</item>
   /// <item><c>MaxBackoff</c> must be greater than or equal to <c>InitialBackoff</c>.</item>
+  /// <item><c>Jitter</c> must be in 0..1.</item>
   /// </list>
   /// </remarks>
   public RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider = null)
+    : this(policy, timeProvider, NextSharedRandom)
+  {
+  }
+
+  /// <summary>
+  /// Initializes a new instance with the random source of the jitter, which tests fix.
+  /// </summary>
+  /// <param name="policy">The restart policy configuration to enforce.</param>
+  /// <param name="timeProvider">The clock; <see cref="TimeProvider.System"/> when <c>null</c>.</param>
+  /// <param name="nextRandom">Returns a fraction in [0, 1) for each wait.</param>
+  internal RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider, Func<double> nextRandom)
   {
     _policy = policy ?? throw new ArgumentNullException(nameof(policy));
     _timeProvider = timeProvider ?? TimeProvider.System;
+    _nextRandom = nextRandom ?? throw new ArgumentNullException(nameof(nextRandom));
     _policy.Validate();
     CurrentBackoff = _policy.InitialBackoff;
   }
@@ -143,8 +173,8 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// older timestamps may be pruned based on the configured window, and the rate limit is enforced.
   /// </para>
   /// <para>
-  /// The delay is computed using the current backoff and then the backoff is updated (doubling) for the
-  /// next invocation. The delay itself is applied outside the internal lock to avoid blocking other operations.
+  /// The delay is computed using the current backoff, shortened by <see cref="RestartPolicy.Jitter"/>, and then the
+  /// backoff is updated (doubling, without the jitter) for the next invocation. The delay itself is applied outside the internal lock to avoid blocking other operations.
   /// </para>
   /// </remarks>
   public async Task Invoke(EngineTask et, CancellationToken token)
@@ -185,9 +215,12 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
         throw EngineTaskLimitExceededException.ForConsecutiveRestarts(et, _policy.MaxConsecutiveRestarts);
       }
 
-      // Exponential backoff update for next time
+      // Exponential backoff update for next time, from the backoff without the jitter.
       CurrentBackoff = NextBackoff(delayToApply, _policy.MaxBackoff);
     }
+
+    if (_policy.Jitter > 0)
+      delayToApply = TimeSpan.FromTicks((long)(delayToApply.Ticks * (1 - _policy.Jitter * _nextRandom())));
 
     // Check if this task was canceled in the mean time.
     if (token.IsCancellationRequested) throw new TaskCanceledException();

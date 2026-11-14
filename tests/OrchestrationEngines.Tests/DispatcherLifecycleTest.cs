@@ -187,7 +187,7 @@ public class DispatcherLifecycleTest
     var coordinator = CreateCoordinator(useDispatcher: true);
     coordinator.RegisterEngine("Failing", _ =>
         Task.FromResult<IEngine>(new FailingEngine(() => Interlocked.Increment(ref attempts))))
-      .SetRecoveryHelper(new RestartPolicy
+      .SetRestartPolicy(new RestartPolicy
       {
         MaxRestartsInWindow = 2,
         Window = TimeSpan.Zero,

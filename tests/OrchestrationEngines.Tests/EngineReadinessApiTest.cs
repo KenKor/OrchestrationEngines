@@ -236,7 +236,7 @@ public class EngineReadinessApiTest
     var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), logger, useDispatcher: false);
     var descriptor = coordinator.RegisterEngine("E", _ => Task.FromResult<IEngine>(new FailsOnceEngine()));
     if (mayRestart)
-      descriptor.SetRecoveryHelper(new RestartPolicy
+      descriptor.SetRestartPolicy(new RestartPolicy
       {
         MaxRestartsInWindow = 3,
         Window = TimeSpan.FromMinutes(10),
