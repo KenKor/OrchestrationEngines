@@ -47,23 +47,6 @@ public class TaskSetSetUpFailureTest
     }
   }
 
-  /// <summary>
-  /// A logger that runs an action when the engine logs that its set-up failed.
-  /// </summary>
-  private sealed class OnSetUpFailedLogger(Action onSetUpFailed) : ILogger
-  {
-    public IDisposable BeginScope<TState>(TState state) where TState : notnull => null;
-
-    public bool IsEnabled(LogLevel logLevel) => true;
-
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception,
-      Func<TState, Exception, string> formatter)
-    {
-      if (formatter(state, exception).Contains(SetUpFailedMessage))
-        onSetUpFailed();
-    }
-  }
-
   private const string SetUpFailedMessage = "Setting up tasks and dependencies failed";
 
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
@@ -119,10 +102,12 @@ public class TaskSetSetUpFailureTest
     {
       SetUp = e =>
       {
+        // Created first, so the walk enters the cycle through it.
+        var front = e.Make("Front");
         var cycle = Enumerable.Range(0, length).Select(i => e.Make($"C{i}")).ToArray();
         for (var i = 0; i < length; i++)
           cycle[i].AddDependsOn(cycle[(i + 1) % length]);
-        e.Make("Front").AddDependsOn(cycle[0]);
+        front.AddDependsOn(cycle[0]);
       }
     };
 
@@ -130,6 +115,26 @@ public class TaskSetSetUpFailureTest
 
     start.Should().BeOfType<CyclicEngineTaskDependencyException>()
       .Which.Message.Should().MatchRegex("'C[0-9]+'", "the task named is on the cycle, not the one in front of it");
+    engine.State.Should().Be(EngineState.Faulted);
+  }
+
+  /// <summary>
+  /// Verifies that the check also finds a cycle among tasks outside the set that a task of the set depends on: such a
+  /// task would wait for good. Without the fix, the check only found a cycle through a task of the set itself.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_CycleOutsideTheSet_IsFound()
+  {
+    var other = new SetUpEngine();
+    var x = other.Make("X");
+    var y = other.Make("Y").AddDependsOn(x);
+    x.AddDependsOn(y);
+    var engine = new SetUpEngine { SetUp = e => e.Make("Front").AddDependsOn(x) };
+
+    var start = await Record.ExceptionAsync(() => engine.StartAsync());
+
+    start.Should().BeOfType<CyclicEngineTaskDependencyException>()
+      .Which.Message.Should().MatchRegex("'[XY]'");
     engine.State.Should().Be(EngineState.Faulted);
   }
 
@@ -363,7 +368,7 @@ public class TaskSetSetUpFailureTest
   public async Task StartAsync_StoppedWhileTheFailureIsLogged_IsStopped()
   {
     SetUpEngine engine = null;
-    engine = new SetUpEngine(new OnSetUpFailedLogger(() => engine.StopAsync().GetAwaiter().GetResult()))
+    engine = new SetUpEngine(new OnMessageLogger(SetUpFailedMessage, () => engine.StopAsync().GetAwaiter().GetResult()))
     {
       SetUp = _ => throw new InvalidOperationException("The set-up fails."),
     };

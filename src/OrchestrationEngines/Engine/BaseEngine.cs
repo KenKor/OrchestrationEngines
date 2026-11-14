@@ -581,53 +581,7 @@ public abstract partial class BaseEngine : IEngine
   /// Validates that no EngineTask depends on itself.
   /// </summary>
   /// <exception cref="CyclicEngineTaskDependencyException"></exception>
-  public void CheckForCyclicDependecies() => CheckForCyclicDependecies(_tasks.Values);
-
-  /// <summary>
-  /// Validates that no task of <paramref name="tasks"/>, or a task they depend on, directly or not, depends on itself.
-  /// </summary>
-  /// <remarks>
-  /// One depth-first walk over all of them (three colours), linear in the tasks and their dependencies, where a check per
-  /// task would walk the shared dependencies again for every task. The walk follows <see cref="EngineTask.DependsOn"/>
-  /// beyond <paramref name="tasks"/>, and keeps its own stack, so a long chain cannot overflow the call stack.
-  /// </remarks>
-  /// <exception cref="CyclicEngineTaskDependencyException">A cycle is found; the task in it is one on the cycle.</exception>
-  private static void CheckForCyclicDependecies(IEnumerable<EngineTask> tasks)
-  {
-    // Absent: not visited yet. False: on the current path. True: done, and no cycle can be reached from it.
-    var done = new Dictionary<EngineTask, bool>();
-    var path = new Stack<(EngineTask Task, IEnumerator<EngineTask> DependsOn)>();
-    foreach (var root in tasks)
-    {
-      if (done.ContainsKey(root))
-        continue;
-      done[root] = false;
-      path.Push((root, root.DependsOn.GetEnumerator()));
-      while (path.Count > 0)
-      {
-        var (task, dependsOn) = path.Peek();
-        if (!dependsOn.MoveNext())
-        {
-          dependsOn.Dispose();
-          done[task] = true;
-          path.Pop();
-          continue;
-        }
-        var dependency = dependsOn.Current;
-        if (!done.TryGetValue(dependency, out var isDone))
-        {
-          done[dependency] = false;
-          path.Push((dependency, dependency.DependsOn.GetEnumerator()));
-        }
-        else if (!isDone)
-        {
-          foreach (var (_, open) in path)
-            open.Dispose();
-          throw new CyclicEngineTaskDependencyException(dependency);
-        }
-      }
-    }
-  }
+  public void CheckForCyclicDependecies() => EngineTask.CheckForCycles(_tasks.Values);
 
   /// <inheritdoc/>
   public virtual Task StartAsync()
@@ -662,10 +616,11 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Work outside this engine that the next task set waits for (see <see cref="StartAfter"/>), or null. Flat, without
-  /// duplicates, so that retries after failed set-ups do not grow it. Guarded by <see cref="_taskSetChange"/>.
+  /// Work outside this engine, or left by a failed set-up, that the next task set waits for (see
+  /// <see cref="StartAfter"/>). Flat, so that retries after failed set-ups do not wrap it deeper each time. Guarded by
+  /// <see cref="_taskSetChange"/>.
   /// </summary>
-  private List<Task> _inheritedWork;
+  private readonly HashSet<Task> _inheritedWork = [];
 
   /// <summary>
   /// Makes the tasks of the next task set run only once <paramref name="work"/> has ended, as they wait for the work of
@@ -685,17 +640,12 @@ public abstract partial class BaseEngine : IEngine
   {
     lock (_taskSetChange)
     {
-      _inheritedWork?.RemoveAll(w => w.IsCompleted);
+      _inheritedWork.RemoveWhere(static w => w.IsCompleted);
       foreach (var w in work)
       {
-        if (w is not { IsCompleted: false })
-          continue;
-        _inheritedWork ??= new List<Task>();
-        if (!_inheritedWork.Contains(w))
+        if (w is { IsCompleted: false })
           _inheritedWork.Add(w);
       }
-      if (_inheritedWork is { Count: 0 })
-        _inheritedWork = null;
     }
   }
 
@@ -735,12 +685,9 @@ public abstract partial class BaseEngine : IEngine
       List<Task> pending;
       lock (_taskSetChange)
       {
-        pending = replacedTasks.Select(t => t.LatestRunEnded)
-          .Concat((IEnumerable<Task>)_inheritedWork ?? [])
-          .Where(work => work is { IsCompleted: false })
-          .Distinct()
-          .ToList();
-        _inheritedWork = null;
+        InheritWork(replacedTasks.Select(t => t.LatestRunEnded));
+        pending = [.. _inheritedWork];
+        _inheritedWork.Clear();
         _buildingTaskSet = NewTaskSet();
       }
       var replacedWork = WhenAllPending(pending);
@@ -752,7 +699,7 @@ public abstract partial class BaseEngine : IEngine
         {
           // Before the set is published: the tasks of a cyclic set would wait for each other for good, and so would
           // everyone waiting for them.
-          CheckForCyclicDependecies(_buildingTaskSet.Values);
+          EngineTask.CheckForCycles(_buildingTaskSet.Values);
           if (!replacedWork.IsCompleted)
           {
             foreach (var task in _buildingTaskSet.Values)
