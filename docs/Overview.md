@@ -215,7 +215,10 @@ Key properties:
 
 - contexts are **composed**, not mutated
 - dependency engines are exposed via context
-- invalidation replaces the entire context and triggers restart
+- invalidation replaces the entire context and triggers restart: `InvalidateContextForEngineAsync` resets the
+  engine's context task and every task that depends on it as `ResetTasksAsync` does (dependents first, then started
+  again); on a coordinator that is shut down it throws: an `OperationCanceledException` with the dispatcher (the
+  default), whose queue no longer takes work, and an `InvalidOperationException` without it
 
 Important implementations:
 
@@ -283,8 +286,9 @@ Resets:
   on running on a dependency that is being reset; until its reset, a task whose run was ended ignores its dependencies'
   outcomes. Then it puts the tasks back in Created, dependencies first, so no started task of the set starts again (by a
   caller, or by a dependency's run) on a dependency of the set that is still to be reset. A task whose reset throws is
-  cancelled, so nothing waits on it for good. A reset does not wait for the work it cancels: work that ignores its
-  token goes on until it checks.
+  cancelled, so nothing waits on it for good. The other tasks are reset anyway, started again and the engine state
+  recomputed, as after a reset that succeeds; then the caller gets the reset's exception (and a start that fails too
+  is logged). A reset does not wait for the work it cancels: work that ignores its token goes on until it checks.
 
 Time: every task has a `TimeProvider` (its time-out, its run times, the backoff of a policy set with `SetRecovery`);
 `BaseEngine.TimeProvider` passes one to the tasks an engine creates. Tests pass a clock they advance themselves.

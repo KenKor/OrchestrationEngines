@@ -930,31 +930,23 @@ public partial class MechanicEngine : BaseEngine
   /// <param name="engineName">The engine name.</param>
   /// <remarks>
   /// <para>
-  /// This forces affected EngineTasks (context and kick-start) back to
-  /// their initial state so that context can be recomputed and engines
-  /// restarted in dependency order.
+  /// This resets the engine's context task and every task that depends on it (the kick-starts reset their engines), so
+  /// that the context is computed again and the engines restarted in dependency order. It goes through
+  /// <see cref="BaseEngine.ResetTasksAsync"/>: dependents first, then started again, and the mechanic's state recomputed.
   /// </para>
   /// </remarks>
+  /// <exception cref="ArgumentException">The mechanic has no engine named <paramref name="engineName"/>.</exception>
+  /// <exception cref="InvalidOperationException">The mechanic is stopped, so its tasks would not run again.</exception>
   public Task InvalidateContextForEngineAsync(string engineName)
   {
-    // 1. Find the context task. This is the one responsible for retrieving the context.
+    // The context task is the one that computes the engine's context. Checked here, though ResetTasksAsync checks too,
+    // so an unknown engine is reported by its own name (and the parameter's), not as a task of the mechanic.
     var taskName = engineName + EngineContextTask.PostFix;
-    if (!_tasks.TryGetValue(taskName, out var contextTask))
+    if (!_tasks.ContainsKey(taskName))
       throw new ArgumentException($"Cannot get task for engine '{engineName}'", nameof(engineName));
 
-    // 2. Find all dependent tasks.
-    var depTasks = GetThisAndAllDependents(contextTask);
-
-    // 3. Note that the kick-start tasks will reset their engine.
-
-    // 4. Reset all these tasks, so they will be executed again, starting 
-    var resetTasks = depTasks
-        .Select(t => t.FireAsync(EngineTaskTrigger.Reset))
-        .ToArray();
     LogWaitingForResetOfEngines(Logger, engineName);
-    // We go back to the initial state; however, the engine have been created by the creation tasks already.
-    State = EngineState.Starting;
-    return Task.WhenAll(resetTasks);
+    return ResetTasksAsync(new[] { taskName }, resetDependentTasks: true);
   }
 
   /// <summary>

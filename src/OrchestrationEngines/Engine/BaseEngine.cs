@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -812,6 +813,11 @@ public abstract partial class BaseEngine : IEngine
   /// or by a dependency's run completing) on a dependency of the set that is still to be reset. A task of the set that
   /// is still Created is only started after the passes.
   /// </para>
+  ///
+  /// <para>
+  /// When a task's reset throws, the tasks are still started and the state recomputed as above, and then the reset's
+  /// exception is rethrown. If starting them throws as well, that is logged, and the reset's exception is the one thrown.
+  /// </para>
   /// </remarks>
   /// <param name="tasks">The tasks.</param>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks of the engine that depend on one of
@@ -840,7 +846,32 @@ public abstract partial class BaseEngine : IEngine
     // Ordered before any reset, so a cycle throws with nothing reset.
     var levels = DependentsFirst(toReset);
     LogFiringResetTriggers();
-    await ResetInTwoPassesAsync(levels).ConfigureAwait(false);
+    // A reset that throws (an OnResetEnteredAsync override) leaves the other tasks reset, in Created: they are started
+    // and the state recomputed anyway, and only then is the reset's failure rethrown (#58, items 3 and 23).
+    ExceptionDispatchInfo resetFailure = null;
+    try
+    {
+      await ResetInTwoPassesAsync(levels).ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+      resetFailure = ExceptionDispatchInfo.Capture(ex);
+    }
+
+    try
+    {
+      await StartAfterResetAsync(notStarted, resetTasks, startAgain).ConfigureAwait(false);
+    }
+    catch (Exception ex) when (resetFailure != null)
+    {
+      // The reset's failure is the one the caller gets.
+      LogStartAfterFailedResetFailed(ex);
+    }
+    resetFailure?.Throw();
+  }
+
+  private async Task StartAfterResetAsync(EngineTask[] notStarted, EngineTask[] resetTasks, bool startAgain)
+  {
     await TriggerStartCoreAsync(notStarted).ConfigureAwait(false);
     if (!startAgain)
       return;
@@ -1479,8 +1510,7 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Complete list of tasks that this tasks depends on,
-  /// directly or indirectly, including this task.
+  /// <paramref name="task"/> and every task of the engine that depends on it, directly or indirectly.
   /// </summary>
   /// <param name="task">The task.</param>
   public IReadOnlyCollection<EngineTask> GetThisAndAllDependents(EngineTask task)
@@ -1603,6 +1633,9 @@ public abstract partial class BaseEngine : IEngine
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Firing reset triggers. Now wait for all tasks to reach a ready state...")]
   private partial void LogFiringResetTriggers();
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "Starting the tasks after a failed reset failed too; the reset's failure is rethrown.")]
+  private partial void LogStartAfterFailedResetFailed(Exception exception);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Waiting on ensuring ready of all states that are required for running.")]
   private partial void LogWaitingForRequiredTasks();
