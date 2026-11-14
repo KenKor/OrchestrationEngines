@@ -468,6 +468,37 @@ public class ResetTasksTest
     aReset.Should().BeTrue("A is reset after its dependents, also when one of their resets fails");
   }
 
+  /// <summary>
+  /// Verifies that when one task's reset throws, the tasks whose reset succeeded run again and the engine state is
+  /// recomputed, and the caller still gets the exception (#58, items 3 and 23).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_OneResetThrows_StartsTheOthersAgainAndRecomputes()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await ReadyAsync(new GraphEngine(T("A"), T("B", "A"), T("C", "B"), T("D")));
+    var states = new ConcurrentQueue<EngineState>();
+    engine.EngineStatusChanged += (_, e) => states.Enqueue(e.State);
+    engine.OnReset = name =>
+    {
+      if (name == "D")
+        throw new InvalidOperationException("D's reset failed.");
+    };
+
+    var act = () => engine.ResetTasksAsync(["A", "D"], resetDependentTasks: true);
+
+    (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("D's reset failed.");
+    // Started by the reset itself: a lookup such as EnsureTaskReadyAsync would start them on its own.
+    new[] { "A", "B", "C" }.Should().NotContain(n => engine.Tasks[n].State == EngineTaskState.Created);
+    SpinWait.SpinUntil(() => engine.Tasks["C"].IsCompleted, MustComplete).Should().BeTrue();
+    new[] { engine.Runs("A"), engine.Runs("B"), engine.Runs("C") }.Should().Equal(2, 2, 2);
+    // D had completed, so its failed reset leaves it as it was (#58 item 21), and the engine is Ready again. The reset
+    // took it through Starting, as one that succeeds does: before, nothing published a state at all.
+    SpinWait.SpinUntil(() => engine.State == EngineState.Ready, MustComplete).Should().BeTrue();
+    states.Should().Equal(EngineState.Starting, EngineState.Ready);
+    await engine.StopAsync();
+  }
+
   private static EngineCoordinator CoordinatorWith(IEngine engine)
   {
     var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
