@@ -487,8 +487,8 @@ public partial class EngineCoordinator : IDisposable
     var rebuiltFromScratch = new List<string>();
     var runtimeDescriptors = new List<EngineDescriptor>(candidateList.Length);
 
-    // Copy every candidate before the next coordinator is created: a candidate that cannot be copied (a version below
-    // 0, which its setter does not check) throws here, and then there is no next coordinator to dispose (#59, 7a).
+    // Copy every candidate before the next coordinator is created: a candidate that cannot be copied (a null engine
+    // factory, which its setter does not check) throws here, and then there is no next coordinator to dispose (#59, 7a).
     foreach (var candidate in candidateList)
     {
       var name = candidate.Name;

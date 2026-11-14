@@ -42,9 +42,17 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <item>to derive EngineTask names,</item>
   /// <item>to express dependencies between engines.</item>
   /// </list>
-  /// Names are compared case-insensitively.
+  /// Names are compared case-insensitively. It is set when the descriptor is made (the constructor or an object
+  /// initializer), and cannot be null.
   /// </remarks>
-  public string Name { get; set; }
+  /// <exception cref="ArgumentNullException">An object initializer sets it to null.</exception>
+  public string Name
+  {
+    get => _name;
+    init => _name = value ?? throw new ArgumentNullException(nameof(Name));
+  }
+
+  private readonly string _name;
 
   /// <summary>
   /// Integer version of the engine definition.
@@ -52,9 +60,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <remarks>
   /// Bumping this value indicates that a generation-switch operation should
   /// restart this engine (and its dependents) instead of treating it as
-  /// unchanged. Version comparison is intentionally simple (integer inequality).
+  /// unchanged. Version comparison is intentionally simple (integer inequality). It is zero or greater, and set by
+  /// the constructor or <see cref="SetVersion"/>.
   /// </remarks>
-  public int Version { get; set; } = 1;
+  public int Version { get; private set; } = 1;
 
   /// <summary>
   /// Factory used to create a <em>fresh</em> engine instance.
@@ -218,13 +227,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
       bool requiredForRunning = false,
       int version = 1)
   {
-    if (version < 0)
-      throw new ArgumentOutOfRangeException(nameof(version), "Version must be zero or greater.");
-
+    SetVersion(version);
     Name = name ?? throw new ArgumentNullException(nameof(name));
     EngineFactory = createEngineFactory ?? throw new ArgumentException(nameof(createEngineFactory));
     RequiredForRunning = requiredForRunning;
-    Version = version;
   }
 
   /// <summary>
