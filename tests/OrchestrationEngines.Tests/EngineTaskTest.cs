@@ -149,7 +149,8 @@ public class EngineTaskTest
   public async Task EngineTask_SynchronousWorkTimesOut_EndsInTimedOut()
   {
     var clock = new ManualTimeProvider();
-    using var workGate = new ManualResetEventSlim();
+    // Not disposed: the armed time-out does not prove the work has reached the gate yet, so it may do so after the test.
+    var workGate = new ManualResetEventSlim();
     try
     {
       var task = NewTask("Load", _ =>

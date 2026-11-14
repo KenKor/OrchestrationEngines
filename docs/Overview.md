@@ -357,11 +357,13 @@ after a stop.
 
 Cancellation handlers must not block. On .NET Framework (the `netstandard2.0` build), the code after a cancelled
 `await` in a task's work (its `catch (OperationCanceledException)`, for example) can run inline on the thread that
-stops the coordinator, engine or task: inside the library's `Cancel()`, and under a library lock. A handler that blocks
-there holds up the stop, and one that waits for a thread that needs the coordinator, engine or task being stopped can
-deadlock it. Make `await Task.Yield()` the first statement of such a handler, so the rest runs on another thread. A
-callback registered with `token.Register(...)` runs synchronously on the cancelling thread on every target, so it must
-not block either.
+cancels the task's token: the one that stops the coordinator, engine or task, or the library's own on a time-out or a
+reset. It then runs inside the library's `Cancel()`, and under a library lock. A handler that blocks there holds up the
+stop (or the time-out's grace), and one that waits for something that needs the coordinator, engine or task being
+stopped can deadlock it. Do any blocking part of such a handler in `await Task.Run(...)`. `await Task.Yield()` alone is
+not enough: it lets `Cancel()` return, but on a thread with a `SynchronizationContext`, such as a WPF or WinForms UI
+thread, it runs the rest of the handler later on that same thread. A callback registered with `token.Register(...)`
+runs synchronously on the cancelling thread on every target, so it must not block either.
 
 ---
 
