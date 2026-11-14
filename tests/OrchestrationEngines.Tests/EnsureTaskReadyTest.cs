@@ -74,19 +74,18 @@ public class EnsureTaskReadyTest
     }
   }
 
-  private static async Task<RerunEngine> WaitingOnTheFirstRunAsync(CancellationToken ct)
+  private static async Task<TEngine> StartedEngineAsync<TEngine>(TEngine engine, CancellationToken ct)
+    where TEngine : BaseEngine
   {
-    var engine = new RerunEngine { Context = new NoContext() };
+    engine.Context = new NoContext();
     await engine.StartAsync().WaitAsync(MustComplete, ct);
     return engine;
   }
 
-  private static async Task<MixedEngine> StartedEngineAsync(CancellationToken ct)
-  {
-    var engine = new MixedEngine { Context = new NoContext() };
-    await engine.StartAsync().WaitAsync(MustComplete, ct);
-    return engine;
-  }
+  private static Task<MixedEngine> StartedEngineAsync(CancellationToken ct) => StartedEngineAsync(new MixedEngine(), ct);
+
+  private static Task<RerunEngine> WaitingOnTheFirstRunAsync(CancellationToken ct) =>
+    StartedEngineAsync(new RerunEngine(), ct);
 
   /// <summary>
   /// Verifies that waiting for a task that completes with success returns.
@@ -97,7 +96,7 @@ public class EnsureTaskReadyTest
     var ct = TestContext.Current.CancellationToken;
     var engine = await StartedEngineAsync(ct);
 
-    await engine.EnsureTaskReadyAsync("load").WaitAsync(MustComplete, ct);
+    await engine.EnsureTaskReadyAsync("load", ct).WaitAsync(MustComplete, ct);
 
     engine.Tasks["Load"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
   }
@@ -223,18 +222,48 @@ public class EnsureTaskReadyTest
 
     await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
     engine.FailSetUp = true;
-    try
-    {
-      await engine.StartAsync().WaitAsync(MustComplete, ct);
-    }
-    catch (InvalidOperationException)
-    {
-      // How a failed set-up surfaces from StartAsync is not what this test is about.
-    }
+    var start = await Record.ExceptionAsync(() => engine.StartAsync().WaitAsync(MustComplete, ct));
 
+    start.Should().BeOfType<InvalidOperationException>();
     var thrown = await wait.Awaiting(w => w.WaitAsync(MustComplete, ct)).Should().ThrowAsync<EngineTaskNotReadyException>();
     thrown.Which.TaskName.Should().Be("Load");
     thrown.Which.State.Should().Be(EngineTaskState.Cancelled);
+  }
+
+  /// <summary>
+  /// Verifies that the overload without a token has the same answers: an ArgumentException for a name the engine does
+  /// not have.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureReadyAsyncByName_UnknownName_ThrowsArgumentException()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await StartedEngineAsync(ct);
+
+    var thrown = await engine.Awaiting(e => e.EnsureReadyAsync("Missing").WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<ArgumentException>();
+
+    thrown.Which.ParamName.Should().Be("taskName");
+  }
+
+  /// <summary>
+  /// Verifies that the overload without a token follows a restart during the wait to the next run, as
+  /// EnsureTaskReadyAsync does.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureReadyAsyncByName_RestartDuringTheWait_AnswersWithTheNextRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = await WaitingOnTheFirstRunAsync(ct);
+    var wait = engine.EnsureReadyAsync("Load");
+    await engine.FirstRunStarted.Task.WaitAsync(MustComplete, ct);
+
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+
+    await wait.WaitAsync(MustComplete, ct);
+    engine.Runs.Should().Be(2);
+    engine.Tasks["Load"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
   }
 
   /// <summary>
@@ -298,8 +327,8 @@ public class EnsureTaskReadyTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = await StartedEngineAsync(ct);
-    await engine.EnsureReadyAsync("Broken").WaitAsync(MustComplete, ct);
     var broken = engine.Tasks["Broken"];
+    await engine.EnsureReadyAsync(broken, ct).WaitAsync(MustComplete, ct);
     broken.FailException.Should().BeSameAs(MixedEngine.Thrown);
 
     await broken.FireAsync(EngineTaskTrigger.Reset);
@@ -440,6 +469,146 @@ public class EnsureTaskReadyTest
       .Should().ThrowAsync<ArgumentException>();
 
     thrown.Which.ParamName.Should().Be("engineName");
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// An engine that creates its task in its constructor, outside a set-up, and counts the runs of its work.
+  /// </summary>
+  private sealed class ConstructedTasksEngine : BaseEngine
+  {
+    private int _renders;
+
+    public ConstructedTasksEngine() : base(NullLogger.Instance) =>
+      CreateTask("render", _ =>
+      {
+        Interlocked.Increment(ref _renders);
+        return Task.CompletedTask;
+      });
+
+    public int Renders => Volatile.Read(ref _renders);
+
+    // Not reached: the context fails before the engine starts.
+    protected override void SetUpTasks()
+    {
+    }
+  }
+
+  /// <summary>
+  /// Verifies that an engine that has tasks before it ever started (created in its constructor), and whose context
+  /// failed, is reported by its kick-start, and the wait does not run the task's work without a context.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_NotStartedEngineWithTasks_ThrowsForTheKickStart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new ConstructedTasksEngine();
+    var coordinator = CoordinatorWith(engine, _ => throw new InvalidOperationException("No context."));
+
+    var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "render", ct).WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<EngineTaskNotReadyException>();
+
+    thrown.Which.TaskName.Should().Be("Mixed" + EngineKickStartTask.PostFix);
+    engine.Renders.Should().Be(0);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// An engine whose one task "Load" waits until it is cancelled when <paramref name="hangs"/>, and otherwise
+  /// completes.
+  /// </summary>
+  private sealed class GenerationEngine(bool hangs) : BaseEngine(NullLogger.Instance)
+  {
+    public TaskCompletionSource LoadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    protected override void SetUpTasks() => CreateTask("Load", token =>
+    {
+      LoadStarted.TrySetResult();
+      return hangs ? Task.Delay(Timeout.Infinite, token) : Task.CompletedTask;
+    });
+  }
+
+  /// <summary>
+  /// Verifies that a coordinator's wait for an engine's task, during which a generation switch stops this generation's
+  /// engine, answers with the next generation's task.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_GenerationSwitchDuringTheWait_AnswersWithTheNextGeneration()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var first = new GenerationEngine(hangs: true);
+    var second = new GenerationEngine(hangs: false);
+    var created = 0;
+    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Gen", _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : second),
+        requiredForRunning: false)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var wait = coordinator.EnsureEngineTaskReadyAsync("Gen", "Load", ct);
+    await first.LoadStarted.Task.WaitAsync(MustComplete, ct);
+
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      .WaitAsync(MustComplete, ct);
+    try
+    {
+      await wait.WaitAsync(MustComplete, ct);
+
+      second.Tasks["Load"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
+      first.Tasks["Load"].State.Should().NotBe(EngineTaskState.CompletedWithSuccess);
+    }
+    finally
+    {
+      await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
+  }
+
+  /// <summary>
+  /// An engine whose one task "Load" fails on its first run and completes on the next, counting its runs.
+  /// </summary>
+  private sealed class FailsOnceEngine() : BaseEngine(NullLogger.Instance)
+  {
+    private int _loads;
+
+    public int Loads => Volatile.Read(ref _loads);
+
+    protected override void SetUpTasks() => CreateTask("Load", _ =>
+      Interlocked.Increment(ref _loads) == 1
+        ? throw new LoadException("The database was not reachable.")
+        : Task.CompletedTask);
+  }
+
+  /// <summary>
+  /// Verifies that a coordinator's wait for an engine's task, while the kick-start waits to start the Faulted engine
+  /// again under the descriptor's restart policy, answers with the task's run after that retry.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_DuringAKickStartRetry_AnswersWithTheRetriedRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new FailsOnceEngine();
+    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Retried", _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .SetRestartPolicy(new RestartPolicy
+      {
+        MaxRestartsInWindow = 5,
+        Window = TimeSpan.FromMinutes(10),
+        InitialBackoff = TimeSpan.FromSeconds(1),
+        MaxBackoff = TimeSpan.FromSeconds(1),
+      });
+    _ = coordinator.StartAsync();
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (engine.State != EngineState.Faulted)
+    {
+      DateTime.UtcNow.Should().BeBefore(deadline, "the first load must fail");
+      await Task.Delay(10, ct);
+    }
+
+    await coordinator.EnsureEngineTaskReadyAsync("Retried", "Load", ct).WaitAsync(MustComplete, ct);
+
+    engine.Loads.Should().Be(2);
+    engine.Tasks["Load"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }

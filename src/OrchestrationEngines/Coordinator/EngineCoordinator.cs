@@ -653,12 +653,13 @@ public partial class EngineCoordinator : IDisposable
   {
     try
     {
-      // The kick-start depends on the engine's creation and context tasks; a retry keeps it from completing.
-      await Mechanic.EnsureReadyAsync(name + EngineKickStartTask.PostFix).ConfigureAwait(false);
+      // The kick-start depends on the engine's creation and context tasks; a retry keeps it from completing, and a
+      // reset of it is followed to its next run.
+      await Mechanic.EnsureReadyAsync(EngineKickStartTask.KickStartName(name)).ConfigureAwait(false);
     }
     catch (Exception ex)
     {
-      // The generation did not start: nothing will start the engine either.
+      // The kick-start gave up, or the generation did not start: nothing will start the engine either.
       LogHandoverWaitFailed(ex, name);
     }
 
@@ -1008,8 +1009,8 @@ public partial class EngineCoordinator : IDisposable
       await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       await onMechanic().ConfigureAwait(false);
     }
-    // The switch check is a cheap pre-check: NextGenerationAsync answers null without a switch, but only after the
-    // catch has been entered.
+    // Pre-check the switch in the filter, so an exception with no switch behind it is not caught; NextGenerationAsync
+    // confirms it.
     catch (Exception ex) when (ex is OperationCanceledException or EngineTaskNotReadyException { State: EngineTaskState.Cancelled }
       && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _rebuildingSwitch) != null))
     {
@@ -1366,7 +1367,7 @@ public partial class EngineCoordinator : IDisposable
   [LoggerMessage(Level = LogLevel.Debug, Message = "'{CoordinatorName}': Coordinator transition {Source} --{Trigger}--> {Destination}")]
   private partial void LogTransition(string coordinatorName, EngineCoordinatorState source, EngineCoordinatorTrigger trigger, EngineCoordinatorState destination);
 
-  [LoggerMessage(Level = LogLevel.Debug, Message = "Could not wait for the kick-start of engine '{EngineName}'; letting go of the engine it replaces.")]
+  [LoggerMessage(Level = LogLevel.Debug, Message = "The kick-start of engine '{EngineName}' did not complete with success, or could not be waited for; letting go of the engine it replaces.")]
   private partial void LogHandoverWaitFailed(Exception exception, string engineName);
 
   [LoggerMessage(Level = LogLevel.Warning, Message = "'{CoordinatorName}': Stopping the generation this switch replaced failed; the switch has succeeded.")]

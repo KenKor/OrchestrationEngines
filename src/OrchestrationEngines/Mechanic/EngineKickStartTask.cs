@@ -35,6 +35,11 @@ public class EngineKickStartTask : EngineTask
     public const string PostFix = "{+-}";
 
     /// <summary>
+    /// The name of the kick-start task of the engine named <paramref name="engineName"/>.
+    /// </summary>
+    internal static string KickStartName(string engineName) => engineName + PostFix;
+
+    /// <summary>
     /// Descriptor defining how the engine should be launched.
     /// </summary>
     public EngineDescriptor Descriptor { get; }
@@ -65,7 +70,7 @@ public class EngineKickStartTask : EngineTask
         ILogger Logger,
         CancellationToken token)
         : base(
-            engineDescriptor.Name + PostFix,
+            KickStartName(engineDescriptor.Name),
             async _ => await Task.CompletedTask.ConfigureAwait(false), // Placeholder; replaced immediately.
             engineDescriptor.RequiredForRunning,
             Logger is null ? null : new StartFailureLogger(Logger, canRestart: engineDescriptor.HasRecovery),
