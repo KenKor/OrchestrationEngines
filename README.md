@@ -3,6 +3,9 @@
 A dependency-aware engine orchestration library for .NET. It starts, monitors and restarts a set of interdependent runtime engines in a controlled order.
 
 The library is published as a NuGet package. It targets `netstandard2.0` (so it runs on .NET Framework 4.8) and `net10.0`.
+On .NET Framework, the code after a cancelled `await` in an engine's work can run inline on the thread that stops it,
+under a library lock, so a cancellation handler must not block: start it with `await Task.Yield()` (see
+[Overview](docs/Overview.md), on stopping).
 
 ## Repository layout
 

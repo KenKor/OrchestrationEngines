@@ -355,6 +355,14 @@ source disposed; a token whose source is disposed still reports cancellation, bu
 `ObjectDisposedException`. The same holds for a task's token after a reset or a recovery, and for the engine's token
 after a stop.
 
+Cancellation handlers must not block. On .NET Framework (the `netstandard2.0` build), the code after a cancelled
+`await` in a task's work (its `catch (OperationCanceledException)`, for example) can run inline on the thread that
+stops the coordinator, engine or task: inside the library's `Cancel()`, and under a library lock. A handler that blocks
+there holds up the stop, and one that waits for a thread that needs the coordinator, engine or task being stopped can
+deadlock it. Make `await Task.Yield()` the first statement of such a handler, so the rest runs on another thread. A
+callback registered with `token.Register(...)` runs synchronously on the cancelling thread on every target, so it must
+not block either.
+
 ---
 
 ### 5. Mechanic Engine

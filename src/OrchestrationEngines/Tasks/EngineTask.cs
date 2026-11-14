@@ -336,7 +336,9 @@ public partial class EngineTask
   /// Creates a task backed by an asynchronous delegate.
   /// </summary>
   /// <param name="name">Stable name used for identification and logging.</param>
-  /// <param name="workAsync">Work to execute in Running state.</param>
+  /// <param name="workAsync">
+  /// Work to execute in Running state. Its handling of its token's cancellation must not block (see the remarks).
+  /// </param>
   /// <param name="requiredForRunning">Whether this task is required for the engine/application to be "running".</param>
   /// <param name="logger">Logger sink. Wrapped (see <see cref="PrefixLogger"/>) so every message is tagged with <paramref name="name"/>.</param>
   /// <param name="engineToken">Engine/coordinator level cancellation token.</param>
@@ -344,6 +346,14 @@ public partial class EngineTask
   /// The clock for the time-out, the run times and the recovery backoff; <see cref="TimeProvider.System"/> when
   /// <c>null</c>. Tests pass a clock they advance themselves.
   /// </param>
+  /// <remarks>
+  /// On .NET Framework (the <c>netstandard2.0</c> build), the code after a cancelled <c>await</c> in
+  /// <paramref name="workAsync"/> (its <c>catch (OperationCanceledException)</c>, for example) can run inline on the
+  /// thread that stops the coordinator, engine or task: inside the library's <c>Cancel()</c>, and under a library
+  /// lock. A handler that blocks there holds up the stop, and one that waits for a thread that needs the stopped
+  /// coordinator, engine or task can deadlock it: make <c>await Task.Yield()</c> its first statement. A callback
+  /// registered with <c>token.Register(...)</c> runs synchronously on the cancelling thread on every target.
+  /// </remarks>
   public EngineTask(
       string name,
       Func<CancellationToken, Task> workAsync,
@@ -394,6 +404,10 @@ public partial class EngineTask
   /// Cancelling the task does not guarantee the underlying work stops immediately; work delegates must respect the token.
   /// Until the work has stopped, the task's next run waits (see <see cref="StartRun"/>). A callback registered on the
   /// token that throws is logged, and the cancellation goes ahead.
+  /// <para>
+  /// The token's callbacks, and on .NET Framework the work's code after a cancelled <c>await</c>, can run inline here,
+  /// under the task's lock, so they must not block (see the remarks of the constructor).
+  /// </para>
   /// </remarks>
   protected void RequestCancellation()
   {
