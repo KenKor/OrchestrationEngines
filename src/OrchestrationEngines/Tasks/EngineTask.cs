@@ -352,10 +352,10 @@ public partial class EngineTask
   /// thread that cancels the token: the one that stops the coordinator, engine or task, or the library's own on a
   /// time-out or a reset. It then runs inside the library's <c>Cancel()</c>, under a library lock. A handler that
   /// blocks there holds up that cancellation, and one that waits for the stopped coordinator, engine or task can
-  /// deadlock it: do any blocking part in <c>await Task.Run(...)</c>. <c>await Task.Yield()</c> lets the cancellation
-  /// return, but on a thread with a <see cref="SynchronizationContext"/> (a UI thread) it runs the rest of the handler
-  /// on that thread. A callback registered with <c>token.Register(...)</c> runs synchronously on the cancelling thread
-  /// on every target.
+  /// deadlock it: make <c>await Task.Yield()</c> its first statement, so the cancellation returns before the rest runs.
+  /// On a thread with a <see cref="SynchronizationContext"/> (a UI thread) the rest then runs later on that thread, so
+  /// do any blocking part in <c>await Task.Run(...)</c>. A callback registered with <c>token.Register(...)</c> runs
+  /// synchronously on the cancelling thread on every target.
   /// </remarks>
   public EngineTask(
       string name,
@@ -407,8 +407,8 @@ public partial class EngineTask
   /// Cancelling the task does not guarantee the underlying work stops immediately; work delegates must respect the token.
   /// Until the work has stopped, the task's next run waits (see <see cref="StartRun"/>). A callback registered on the
   /// token that throws is logged, and the cancellation goes ahead. The token's callbacks, and on .NET Framework the
-  /// work's code after a cancelled <c>await</c>, run inline here, under the task's lock, so they must not block (see the
-  /// remarks of the constructor).
+  /// work's code after a cancelled <c>await</c>, can run inline here, under the task's lock, so they must not block (see
+  /// the remarks of the constructor).
   /// </remarks>
   protected void RequestCancellation()
   {

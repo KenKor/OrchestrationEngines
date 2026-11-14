@@ -4,7 +4,7 @@ A dependency-aware engine orchestration library for .NET. It starts, monitors an
 
 The library is published as a NuGet package. It targets `netstandard2.0` (so it runs on .NET Framework 4.8) and `net10.0`.
 Cancellation handlers in an engine's work must not block: on .NET Framework they can run inline on the thread that
-stops it, under a library lock (see [Overview](docs/Overview.md), on stopping).
+stops it, under a library lock, so start one with `await Task.Yield()` (see [Overview](docs/Overview.md), on stopping).
 
 ## Repository layout
 
