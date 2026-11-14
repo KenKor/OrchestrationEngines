@@ -939,7 +939,8 @@ public partial class MechanicEngine : BaseEngine
   /// <exception cref="InvalidOperationException">The mechanic is stopped, so its tasks would not run again.</exception>
   public Task InvalidateContextForEngineAsync(string engineName)
   {
-    // The context task is the one that computes the engine's context.
+    // The context task is the one that computes the engine's context. Checked here, though ResetTasksAsync checks too,
+    // so an unknown engine is reported by its own name (and the parameter's), not as a task of the mechanic.
     var taskName = engineName + EngineContextTask.PostFix;
     if (!_tasks.ContainsKey(taskName))
       throw new ArgumentException($"Cannot get task for engine '{engineName}'", nameof(engineName));

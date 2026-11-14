@@ -494,8 +494,9 @@ public class ResetTasksTest
     new[] { engine.Runs("A"), engine.Runs("B"), engine.Runs("C") }.Should().Equal(2, 2, 2);
     // D had completed, so its failed reset leaves it as it was (#58 item 21), and the engine is Ready again. The reset
     // took it through Starting, as one that succeeds does: before, nothing published a state at all.
-    SpinWait.SpinUntil(() => engine.State == EngineState.Ready, MustComplete).Should().BeTrue();
+    SpinWait.SpinUntil(() => states.Count == 2, MustComplete).Should().BeTrue("the engine publishes Starting, then Ready");
     states.Should().Equal(EngineState.Starting, EngineState.Ready);
+    engine.State.Should().Be(EngineState.Ready);
     await engine.StopAsync();
   }
 

@@ -1510,8 +1510,7 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Complete list of tasks that this tasks depends on,
-  /// directly or indirectly, including this task.
+  /// <paramref name="task"/> and every task of the engine that depends on it, directly or indirectly.
   /// </summary>
   /// <param name="task">The task.</param>
   public IReadOnlyCollection<EngineTask> GetThisAndAllDependents(EngineTask task)

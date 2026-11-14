@@ -1160,7 +1160,9 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/>.</exception>
   /// <exception cref="InvalidOperationException">The coordinator is shut down, so the engines would not start
-  /// again.</exception>
+  /// again, and it runs without a dispatcher (<c>useDispatcher: false</c>).</exception>
+  /// <exception cref="OperationCanceledException">The coordinator is shut down and runs with a dispatcher (the
+  /// default): its queue no longer takes work. Or <paramref name="token"/> was cancelled.</exception>
   public Task InvalidateContextForEngineAsync(string name, CancellationToken token = default)
     => DispatchAsync(() => InvalidateContextForEngineAsyncInt(name), token);
 
@@ -1170,12 +1172,34 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="name">Name of the engine whose context should be invalidated.</param>
   /// <remarks>
   /// Fires an application-level invalidate trigger and delegates to the mechanic to invalidate the
-  /// engine context and dependent engines.
+  /// engine context and dependent engines. A coordinator that was Running returns to Running at once when the
+  /// required engines are still Ready afterwards (an optional engine's invalidation, or one the mechanic rejected).
   /// </remarks>
-  public Task InvalidateContextForEngineAsyncInt(string name)
+  public async Task InvalidateContextForEngineAsyncInt(string name)
   {
-    lock (_sync) AppMachine.Fire(EngineCoordinatorTrigger.InvalidateContext);
-    return Mechanic.InvalidateContextForEngineAsync(name);
+    bool invalidating;
+    lock (_sync)
+    {
+      invalidating = State == EngineCoordinatorState.Running;
+      AppMachine.Fire(EngineCoordinatorTrigger.InvalidateContext);
+    }
+
+    try
+    {
+      await Mechanic.InvalidateContextForEngineAsync(name).ConfigureAwait(false);
+    }
+    finally
+    {
+      // An invalidation that leaves every required task completed (an optional engine's, or one the mechanic
+      // rejected) causes no mechanic status change that would bring the coordinator back, so return to Running here,
+      // as RefreshEngineContextAsyncInt does. A required engine that loads again keeps the required tasks open, and
+      // its own Ready event brings the coordinator back.
+      lock (_sync)
+      {
+        if (invalidating && State == EngineCoordinatorState.Initializing && _mechanic?.IsRequiredCompletedWithSuccess() == true)
+          AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
+      }
+    }
   }
 
   /// <summary>
