@@ -119,7 +119,9 @@ public class GenerationSwitchShutdownTest
     var ct = TestContext.Current.CancellationToken;
     var replaced = new StopFailingEngine(new InvalidOperationException("The stop failed."));
     var logged = 0;
-    var logger = new OnMessageLogger("generation this switch replaced", () => Interlocked.Increment(ref logged));
+    var engineLogged = 0;
+    var logger = new OnMessageLogger("generation this switch replaced", () => Interlocked.Increment(ref logged),
+      new OnMessageLogger($"Engine {Name} failed to stop", () => Interlocked.Increment(ref engineLogged)));
     var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger, useDispatcher: false);
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
@@ -130,7 +132,29 @@ public class GenerationSwitchShutdownTest
     next.Should().NotBeNull().And.BeSameAs(coordinator.Successor);
     next.Engines[Name].Should().NotBeSameAs(replaced);
     coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
-    Volatile.Read(ref logged).Should().Be(1);
+    Volatile.Read(ref logged).Should().Be(1, "the switch says the failure was the replaced generation's");
+    Volatile.Read(ref engineLogged).Should().Be(1, "the mechanic names the engine that failed to stop");
+  }
+
+  /// <summary>
+  /// Verifies that a logging provider that throws on the failed stop's log lines does not make a switch that has
+  /// succeeded throw: its caller still gets the next generation.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_RestartWithDefinitions_ReplacedEngineThrowsOnStopAndTheLoggerThrows_ReturnsTheNextGeneration()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var replaced = new StopFailingEngine(new InvalidOperationException("The stop failed."));
+    var logger = new OnMessageLogger("failed", () => throw new InvalidOperationException("The logging provider failed."));
+    var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger, useDispatcher: false);
+    coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      .WaitAsync(MustComplete, ct);
+
+    next.Should().NotBeNull().And.BeSameAs(coordinator.Successor);
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
   }
 
   /// <summary>

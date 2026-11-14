@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -561,7 +562,14 @@ public partial class EngineCoordinator : IDisposable
     {
       // The next generation is live: the switch has succeeded, and its caller needs the new coordinator. The mechanic
       // logged the failed stop with the engine named; say that it was the replaced generation's.
-      LogReplacedGenerationStopFailed(_coordinatorName, ex.Message);
+      try
+      {
+        LogReplacedGenerationStopFailed(ex, _coordinatorName);
+      }
+      catch (Exception)
+      {
+        // A logging provider that throws must not make the switch fail after all.
+      }
     }
 
     return nextCoordinator;
@@ -1107,19 +1115,31 @@ public partial class EngineCoordinator : IDisposable
       AppMachine.Fire(EngineCoordinatorTrigger.StartShutdown);
     }
 
+    ExceptionDispatchInfo stopFailure = null;
     try
     {
       if (_mechanic != null)
         await _mechanic.StopAsync().ConfigureAwait(false);
     }
-    finally
+    catch (Exception ex)
     {
-      // A failed stop still ends the shutdown: nothing else would move the coordinator on from Stopping.
-      lock (_sync)
+      stopFailure = ExceptionDispatchInfo.Capture(ex);
+    }
+
+    // A failed stop still ends the shutdown: nothing else would move the coordinator on from Stopping.
+    lock (_sync)
+    {
+      try
       {
         AppMachine.Fire(EngineCoordinatorTrigger.CompleteShutdown);
       }
+      catch (Exception) when (stopFailure != null)
+      {
+        // A logging provider that threw on the transition (the state has already changed): the stop's failure is the
+        // one to report.
+      }
     }
+    stopFailure?.Throw();
   }
 
   /// <summary>
@@ -1337,6 +1357,6 @@ public partial class EngineCoordinator : IDisposable
   [LoggerMessage(Level = LogLevel.Debug, Message = "Could not wait for the kick-start of engine '{EngineName}'; letting go of the engine it replaces.")]
   private partial void LogHandoverWaitFailed(Exception exception, string engineName);
 
-  [LoggerMessage(Level = LogLevel.Warning, Message = "'{CoordinatorName}': Stopping the generation this switch replaced failed ({Reason}); the switch has succeeded.")]
-  private partial void LogReplacedGenerationStopFailed(string coordinatorName, string reason);
+  [LoggerMessage(Level = LogLevel.Warning, Message = "'{CoordinatorName}': Stopping the generation this switch replaced failed; the switch has succeeded.")]
+  private partial void LogReplacedGenerationStopFailed(Exception exception, string coordinatorName);
 }

@@ -164,6 +164,28 @@ public class StopOrderTest
   }
 
   /// <summary>
+  /// Verifies that a logging provider that throws on the shutdown's last transition does not hide the engine's stop
+  /// failure: the shutdown still throws that failure, and the coordinator is <see cref="EngineCoordinatorState.Stopped"/>.
+  /// </summary>
+  [Fact]
+  public async Task Shutdown_EngineThrowsOnStopAndTheTransitionLogThrows_ThrowsTheStopFailure()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var failure = new InvalidOperationException("stop failed");
+    var a = new RecordingEngine("A", new ConcurrentQueue<string>()) { StopFailure = failure };
+    a.Gate.SetResult();
+    var coordinator = CreateCoordinator(
+      new OnMessageLogger("CompleteShutdown", () => throw new InvalidOperationException("The logging provider failed.")));
+    Register(coordinator, a, "A");
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var shutdown = () => coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    (await shutdown.Should().ThrowAsync<InvalidOperationException>()).Which.Should().BeSameAs(failure);
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+  }
+
+  /// <summary>
   /// Verifies that a logger that throws on the failed stop's log line neither keeps the dependency running nor hides
   /// the stop's failure.
   /// </summary>
