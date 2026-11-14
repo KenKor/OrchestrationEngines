@@ -215,7 +215,9 @@ Key properties:
 
 - contexts are **composed**, not mutated
 - dependency engines are exposed via context
-- invalidation replaces the entire context and triggers restart
+- invalidation replaces the entire context and triggers restart: `InvalidateContextForEngineAsync` resets the
+  engine's context task and every task that depends on it as `ResetTasksAsync` does (dependents first, then started
+  again); on a coordinator that is shut down it throws an `InvalidOperationException`
 
 Important implementations:
 
