@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Restarter;
@@ -25,7 +28,7 @@ public class TaskSetSetUpFailureTest
   /// </summary>
   private sealed class SetUpEngine : BaseEngine
   {
-    public SetUpEngine() : base(NullLogger.Instance) => Context = new NoContext();
+    public SetUpEngine(ILogger logger = null) : base(logger ?? NullLogger.Instance) => Context = new NoContext();
 
     public Action<SetUpEngine> SetUp { get; set; }
 
@@ -43,6 +46,25 @@ public class TaskSetSetUpFailureTest
       SetUp(this);
     }
   }
+
+  /// <summary>
+  /// A logger that runs an action when the engine logs that its set-up failed.
+  /// </summary>
+  private sealed class OnSetUpFailedLogger(Action onSetUpFailed) : ILogger
+  {
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception,
+      Func<TState, Exception, string> formatter)
+    {
+      if (formatter(state, exception).Contains(SetUpFailedMessage))
+        onSetUpFailed();
+    }
+  }
+
+  private const string SetUpFailedMessage = "Setting up tasks and dependencies failed";
 
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
@@ -81,6 +103,61 @@ public class TaskSetSetUpFailureTest
     engine.Tasks.Should().BeEmpty("no part of a set that failed its check may be published");
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
     engine.State.Should().Be(EngineState.Faulted);
+  }
+
+  /// <summary>
+  /// Verifies that the set's check finds a cycle of any length, a task that depends on itself included, and names a
+  /// task on the cycle, also when the cycle is reached only through a task in front of it.
+  /// </summary>
+  [Theory]
+  [InlineData(1)]
+  [InlineData(2)]
+  [InlineData(3)]
+  public async Task StartAsync_CycleOfAnyLength_IsFoundAndNamesATaskOnIt(int length)
+  {
+    var engine = new SetUpEngine
+    {
+      SetUp = e =>
+      {
+        var cycle = Enumerable.Range(0, length).Select(i => e.Make($"C{i}")).ToArray();
+        for (var i = 0; i < length; i++)
+          cycle[i].AddDependsOn(cycle[(i + 1) % length]);
+        e.Make("Front").AddDependsOn(cycle[0]);
+      }
+    };
+
+    var start = await Record.ExceptionAsync(() => engine.StartAsync());
+
+    start.Should().BeOfType<CyclicEngineTaskDependencyException>()
+      .Which.Message.Should().MatchRegex("'C[0-9]+'", "the task named is on the cycle, not the one in front of it");
+    engine.State.Should().Be(EngineState.Faulted);
+  }
+
+  /// <summary>
+  /// Verifies that tasks that share dependencies without a cycle (a diamond, and a long chain under it) pass the check.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_SharedDependenciesWithoutACycle_PassTheCheck()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new SetUpEngine
+    {
+      SetUp = e =>
+      {
+        var bottom = e.Make("Bottom");
+        var below = bottom;
+        for (var i = 0; i < 200; i++)
+          below = e.Make($"Chain{i}").AddDependsOn(below);
+        var left = e.Make("Left").AddDependsOn(below);
+        var right = e.Make("Right").AddDependsOn(below);
+        e.Make("Top").AddDependsOn(left).AddDependsOn(right);
+      }
+    };
+
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Ready);
   }
 
   /// <summary>
@@ -167,39 +244,14 @@ public class TaskSetSetUpFailureTest
   }
 
   /// <summary>
-  /// Verifies that the work a failed set-up's set had to wait for is waited for by the next set. Without the fix, the
-  /// failed set-up dropped it, and the next set ran next to that work.
+  /// Verifies that the work a failed set-up's set had to wait for is waited for by the next set, also when StartAfter
+  /// gives more work before the retry: that work is added to the handed-on work, not put in its place. Without the
+  /// fixes, the failed set-up dropped the work, or StartAfter overwrote it, and the next set ran next to it.
   /// </summary>
-  [Fact]
-  public async Task StartAsync_AfterAFailedSetUp_TheNextSetStillWaitsForTheInheritedWork()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var inherited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var ran = 0;
-    var engine = new SetUpEngine { SetUp = Cyclic };
-    engine.WaitFor(inherited.Task);
-    (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<CyclicEngineTaskDependencyException>();
-
-    engine.SetUp = e => e.Make("A", _ =>
-    {
-      Interlocked.Increment(ref ran);
-      return Task.CompletedTask;
-    });
-    await engine.StartAsync();
-    await Task.Delay(200, ct);
-    Volatile.Read(ref ran).Should().Be(0, "the inherited work has not ended yet");
-
-    inherited.SetResult();
-    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
-    Volatile.Read(ref ran).Should().Be(1);
-  }
-
-  /// <summary>
-  /// Verifies that work given with StartAfter before the retry is added to the work a failed set-up handed on, not put
-  /// in its place. Without the fix, StartAfter overwrote it, and the next set ran next to the handed-on work.
-  /// </summary>
-  [Fact]
-  public async Task StartAsync_StartAfterOnTheRetry_StillWaitsForTheHandedOnWork()
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task StartAsync_AfterAFailedSetUp_TheNextSetStillWaitsForTheHandedOnWork(bool startAfterOnTheRetry)
   {
     var ct = TestContext.Current.CancellationToken;
     var handedOn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -213,12 +265,70 @@ public class TaskSetSetUpFailureTest
       Interlocked.Increment(ref ran);
       return Task.CompletedTask;
     });
-    engine.WaitFor(Task.CompletedTask);
+    if (startAfterOnTheRetry)
+      engine.WaitFor(Task.CompletedTask);
     await engine.StartAsync();
     await Task.Delay(200, ct);
     Volatile.Read(ref ran).Should().Be(0, "the handed-on work has not ended yet");
 
     handedOn.SetResult();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    Volatile.Read(ref ran).Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that StartAfter ignores null, also once a failed set-up has handed on work, as it did before work could
+  /// be handed on. Without the fix, it threw there, since the null was combined with the handed-on work.
+  /// </summary>
+  [Fact]
+  public async Task StartAfter_Null_AfterAFailedSetUp_IsIgnored()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var handedOn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = new SetUpEngine { SetUp = Cyclic };
+    engine.WaitFor(handedOn.Task);
+    (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<CyclicEngineTaskDependencyException>();
+
+    engine.Invoking(e => e.WaitFor(null)).Should().NotThrow();
+
+    engine.SetUp = Valid;
+    await engine.StartAsync();
+    handedOn.SetResult();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.State.Should().Be(EngineState.Ready);
+  }
+
+  /// <summary>
+  /// Verifies that the same work given more than once, and work that has already ended, are waited for once, and that
+  /// the next set still waits for all work that is still running.
+  /// </summary>
+  [Fact]
+  public async Task StartAfter_SameWorkRepeatedOverRetries_TheNextSetWaitsForAllOfIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var ran = 0;
+    var engine = new SetUpEngine { SetUp = Cyclic };
+    for (var retry = 0; retry < 3; retry++)
+    {
+      engine.WaitFor(first.Task);
+      engine.WaitFor(Task.CompletedTask);
+      (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<CyclicEngineTaskDependencyException>();
+    }
+    engine.WaitFor(second.Task);
+
+    engine.SetUp = e => e.Make("A", _ =>
+    {
+      Interlocked.Increment(ref ran);
+      return Task.CompletedTask;
+    });
+    await engine.StartAsync();
+    first.SetResult();
+    await Task.Delay(200, ct);
+    Volatile.Read(ref ran).Should().Be(0, "the second piece of work has not ended yet");
+
+    second.SetResult();
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
     Volatile.Read(ref ran).Should().Be(1);
   }
@@ -242,6 +352,66 @@ public class TaskSetSetUpFailureTest
     (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<OperationCanceledException>();
 
     engine.State.Should().Be(EngineState.Stopped);
+  }
+
+  /// <summary>
+  /// Verifies that a stop that comes in after the set-up failed, but before the engine's state was decided, leaves the
+  /// engine Stopped: the stop is final. The failure log is the only call in that window, so the stop comes from there.
+  /// Without the fix, the engine was found not stopped, the stop then published Stopped, and Faulted overwrote it.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_StoppedWhileTheFailureIsLogged_IsStopped()
+  {
+    SetUpEngine engine = null;
+    engine = new SetUpEngine(new OnSetUpFailedLogger(() => engine.StopAsync().GetAwaiter().GetResult()))
+    {
+      SetUp = _ => throw new InvalidOperationException("The set-up fails."),
+    };
+    var states = new List<EngineState>();
+    engine.EngineStatusChanged += (_, e) =>
+    {
+      lock (states)
+        states.Add(e.State);
+    };
+
+    (await Record.ExceptionAsync(() => engine.StartAsync())).Should().BeOfType<InvalidOperationException>();
+
+    engine.State.Should().Be(EngineState.Stopped);
+    lock (states)
+      states.Should().NotContain(EngineState.Faulted);
+  }
+
+  /// <summary>
+  /// Verifies which set-up failures are logged and what state they leave: only a cancellation during a stop is part of
+  /// the stop, so it is not logged and the engine is Stopped. Any other failure is logged, also during a stop (which
+  /// still leaves the engine Stopped); and a cancellation without a stop is a failure like any other. Without the fix, a
+  /// real failure during a stop was not logged.
+  /// </summary>
+  [Theory]
+  [InlineData(true, true, false, EngineState.Stopped)]
+  [InlineData(true, false, true, EngineState.Stopped)]
+  [InlineData(false, true, true, EngineState.Faulted)]
+  [InlineData(false, false, true, EngineState.Faulted)]
+  public async Task StartAsync_SetUpFails_LogsUnlessItIsTheStopsCancellation(
+    bool stop, bool cancellation, bool logged, EngineState expected)
+  {
+    var logger = new FakeLogger();
+    var engine = new SetUpEngine(logger)
+    {
+      SetUp = e =>
+      {
+        if (stop)
+          e.StopAsync().GetAwaiter().GetResult();
+        throw cancellation ? new OperationCanceledException() : new InvalidOperationException("The set-up fails.");
+      }
+    };
+
+    await Record.ExceptionAsync(() => engine.StartAsync());
+
+    engine.State.Should().Be(expected);
+    logger.Collector.GetSnapshot()
+      .Any(r => r.Level == LogLevel.Error && r.Message.Contains(SetUpFailedMessage))
+      .Should().Be(logged);
   }
 
   /// <summary>

@@ -583,11 +583,49 @@ public abstract partial class BaseEngine : IEngine
   /// <exception cref="CyclicEngineTaskDependencyException"></exception>
   public void CheckForCyclicDependecies() => CheckForCyclicDependecies(_tasks.Values);
 
+  /// <summary>
+  /// Validates that no task of <paramref name="tasks"/>, or a task they depend on, directly or not, depends on itself.
+  /// </summary>
+  /// <remarks>
+  /// One depth-first walk over all of them (three colours), linear in the tasks and their dependencies, where a check per
+  /// task would walk the shared dependencies again for every task. The walk follows <see cref="EngineTask.DependsOn"/>
+  /// beyond <paramref name="tasks"/>, and keeps its own stack, so a long chain cannot overflow the call stack.
+  /// </remarks>
+  /// <exception cref="CyclicEngineTaskDependencyException">A cycle is found; the task in it is one on the cycle.</exception>
   private static void CheckForCyclicDependecies(IEnumerable<EngineTask> tasks)
   {
-    foreach (var t in tasks)
+    // Absent: not visited yet. False: on the current path. True: done, and no cycle can be reached from it.
+    var done = new Dictionary<EngineTask, bool>();
+    var path = new Stack<(EngineTask Task, IEnumerator<EngineTask> DependsOn)>();
+    foreach (var root in tasks)
     {
-      t.CheckForCyclicDependecies();
+      if (done.ContainsKey(root))
+        continue;
+      done[root] = false;
+      path.Push((root, root.DependsOn.GetEnumerator()));
+      while (path.Count > 0)
+      {
+        var (task, dependsOn) = path.Peek();
+        if (!dependsOn.MoveNext())
+        {
+          dependsOn.Dispose();
+          done[task] = true;
+          path.Pop();
+          continue;
+        }
+        var dependency = dependsOn.Current;
+        if (!done.TryGetValue(dependency, out var isDone))
+        {
+          done[dependency] = false;
+          path.Push((dependency, dependency.DependsOn.GetEnumerator()));
+        }
+        else if (!isDone)
+        {
+          foreach (var (_, open) in path)
+            open.Dispose();
+          throw new CyclicEngineTaskDependencyException(dependency);
+        }
+      }
     }
   }
 
@@ -624,9 +662,10 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Work outside this engine that the next task set waits for (see <see cref="StartAfter"/>), or null.
+  /// Work outside this engine that the next task set waits for (see <see cref="StartAfter"/>), or null. Flat, without
+  /// duplicates, so that retries after failed set-ups do not grow it. Guarded by <see cref="_taskSetChange"/>.
   /// </summary>
-  private Task _inheritedWork;
+  private List<Task> _inheritedWork;
 
   /// <summary>
   /// Makes the tasks of the next task set run only once <paramref name="work"/> has ended, as they wait for the work of
@@ -634,22 +673,42 @@ public abstract partial class BaseEngine : IEngine
   /// whose data this engine takes over. Used by the next start only. Adds to the work already waited for (such as the
   /// work a failed set-up handed on) rather than replacing it.
   /// </summary>
-  /// <param name="work">The work to wait for.</param>
+  /// <param name="work">The work to wait for. Null, or work that has ended, is ignored.</param>
   /// <remarks>Called before <see cref="StartAsync"/>.</remarks>
-  protected void StartAfter(Task work) => InheritWork(work);
+  protected void StartAfter(Task work) => InheritWork([work]);
 
   /// <summary>
-  /// Adds <paramref name="work"/> to the work the next task set waits for (see <see cref="StartAfter"/>).
+  /// Adds <paramref name="work"/> to the work the next task set waits for (see <see cref="StartAfter"/>), skipping work
+  /// that has ended and work that is there already, and dropping work there that has ended meanwhile.
   /// </summary>
-  private void InheritWork(Task work)
+  private void InheritWork(IEnumerable<Task> work)
   {
-    Task current;
-    do
+    lock (_taskSetChange)
     {
-      current = Volatile.Read(ref _inheritedWork);
+      _inheritedWork?.RemoveAll(w => w.IsCompleted);
+      foreach (var w in work)
+      {
+        if (w is not { IsCompleted: false })
+          continue;
+        _inheritedWork ??= new List<Task>();
+        if (!_inheritedWork.Contains(w))
+          _inheritedWork.Add(w);
+      }
+      if (_inheritedWork is { Count: 0 })
+        _inheritedWork = null;
     }
-    while (Interlocked.CompareExchange(ref _inheritedWork, current == null ? work : Task.WhenAll(current, work), current) != current);
   }
+
+  /// <summary>
+  /// The work of <paramref name="pending"/> as one task: a completed one for none, the piece itself for one, else one
+  /// that ends when all have ended.
+  /// </summary>
+  private static Task WhenAllPending(IReadOnlyList<Task> pending) => pending.Count switch
+  {
+    0 => Task.CompletedTask,
+    1 => pending[0],
+    _ => Task.WhenAll(pending),
+  };
 
   private async Task SetUpAndStartAsync()
   {
@@ -670,23 +729,21 @@ public abstract partial class BaseEngine : IEngine
       // The work of the set that is replaced can still be running: its tasks were ended (or timed out), which cancels
       // their work but cannot stop it. The new set's tasks start once it has ended, since they build on the same data.
       // So does work outside this engine that builds on it (see StartAfter).
-      // Only work still running is waited for, and a single piece is passed on as is, so that retries after failed
-      // set-ups do not wrap it deeper each time.
+      // Only work still running is waited for, and a failed set-up hands the pieces on as they are (see the catch), so
+      // that retries do not wrap them deeper each time.
       var replacedTasks = _tasks.Values.ToArray();
-      var pending = replacedTasks.Select(t => t.LatestRunEnded)
-        .Append(Interlocked.Exchange(ref _inheritedWork, null))
-        .Where(work => work is { IsCompleted: false })
-        .ToList();
-      var replacedWork = pending.Count switch
-      {
-        0 => Task.CompletedTask,
-        1 => pending[0],
-        _ => Task.WhenAll(pending),
-      };
+      List<Task> pending;
       lock (_taskSetChange)
       {
+        pending = replacedTasks.Select(t => t.LatestRunEnded)
+          .Concat((IEnumerable<Task>)_inheritedWork ?? [])
+          .Where(work => work is { IsCompleted: false })
+          .Distinct()
+          .ToList();
+        _inheritedWork = null;
         _buildingTaskSet = NewTaskSet();
       }
+      var replacedWork = WhenAllPending(pending);
       bool afterFailedSetUp;
       try
       {
@@ -719,24 +776,19 @@ public abstract partial class BaseEngine : IEngine
           _buildingTaskSet = null;
           // The work the next set must wait for is still running: hand it on to that set, before a start can see the
           // failure and build it.
-          if (!replacedWork.IsCompleted)
-            InheritWork(replacedWork);
+          InheritWork(pending);
           Volatile.Write(ref _taskSet, NewTaskSet());
           _setUpException = ex;
         }
         // The tasks built before the failure never ran. (An overlapping set-up may have published the set already.)
         if (unpublished != null)
           ReleaseTokens(unpublished.Values);
-        // A stop during the set-up (which may be why it threw) leaves the engine Stopped, as ComputeState would say.
-        if (IsCancellationRequested)
-        {
-          State = EngineState.Stopped;
-        }
-        else
-        {
+        // A cancellation by a stop is part of the stop, not a failure. Any other failure is logged, also during a stop.
+        if (!(IsCancellationRequested && ex is OperationCanceledException))
           LogSetUpFailed(ex);
-          State = EngineState.Faulted;
-        }
+        // A stop during the set-up (which may be why it threw), or one that comes in until the state is decided, leaves
+        // the engine Stopped, as ComputeState would say: decided under the state gate, so it is not overwritten.
+        SetUnlessStopped(EngineState.Faulted);
         throw;
       }
       finally
@@ -1588,7 +1640,7 @@ public abstract partial class BaseEngine : IEngine
   [LoggerMessage(Level = LogLevel.Debug, Message = "Setting up tasks and dependencies...")]
   private partial void LogSettingUpTasks();
 
-  [LoggerMessage(Level = LogLevel.Error, Message = "Setting up tasks and dependencies failed; the engine is Faulted.")]
+  [LoggerMessage(Level = LogLevel.Error, Message = "Setting up tasks and dependencies failed.")]
   private partial void LogSetUpFailed(Exception exception);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Firing start triggers. Now wait for all tasks to reach a ready state...")]
