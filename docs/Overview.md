@@ -340,6 +340,10 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
   events' handlers return `void`, so an `async` subscriber must catch what it throws after its first `await` itself. A callback
   registered on a work's cancellation token that throws is logged too, and the stop, cancellation or time-out goes
   ahead
+- releases a restart that a reset prepared as soon as the engine is cancelled (its parent token, `CancelAll`), so
+  whoever waits for it is released and the engine is `Stopped` without a start or a stop. That `Stopped` is raised on
+  the cancelling thread, inside `Cancel()`: an `EngineStatusChanged` subscriber must not block there or stop the engine
+  synchronously from there
 
 To wait for one task, `EnsureTaskReadyAsync(taskName)` starts it (and what it depends on) if needed and returns once
 it has completed with success. If it ended otherwise (`Failed`, `TimedOut`, `DependencyFailed`, `RecoveryFailed` or

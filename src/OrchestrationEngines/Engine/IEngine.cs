@@ -74,8 +74,16 @@ public interface IEngine
   /// Raised when <see cref="State"/> changes, in the order of the changes.
   /// </summary>
   /// <remarks>
+  /// <para>
   /// On a change to <see cref="EngineState.Faulted"/>, <see cref="EngineStatusEventArgs.Error"/> says why; for every
   /// other state it is null.
+  /// </para>
+  /// <para>
+  /// A subscriber runs on the thread that made the change. For a <see cref="BaseEngine"/> whose restart is prepared (a
+  /// reset), that can be the thread that cancels the engine's token or its parent token: Stopped is then raised inside
+  /// that <c>Cancel()</c>, before it returns. Do not block there, and do not stop or cancel the engine synchronously
+  /// from there; hand that off (for example with <c>Task.Run</c>).
+  /// </para>
   /// </remarks>
   event EventHandler<EngineStatusEventArgs> EngineStatusChanged;
 
