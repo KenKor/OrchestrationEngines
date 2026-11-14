@@ -443,7 +443,15 @@ public partial class EngineCoordinator : IDisposable
   /// are stopped to avoid duplicate runtime activity and token coupling to the old coordinator.
   /// </para>
   /// <para>
-  /// A failure stopping the engines rebuilt from scratch is thrown, and the next generation does not start. A failure
+  /// The engines rebuilt from scratch are stopped dependents first, as a shutdown stops them (see
+  /// <see cref="MechanicEngine.StopAsync"/>), with the order running through the engines handed over: with B → H → A,
+  /// where A and B are rebuilt and H is handed over, B stops before A. A handed-over engine is not stopped then, so one
+  /// that depends on a rebuilt engine keeps running, and may see that dependency stop, until the old generation shuts
+  /// down.
+  /// </para>
+  /// <para>
+  /// A failure stopping the engines rebuilt from scratch counts as stopped; the first is thrown once all have stopped,
+  /// and the next generation does not start. A failure
   /// shutting down the previous generation, once the new coordinator has taken over, is not: it is logged as a warning
   /// (the engine's own failure is logged as an error), the previous coordinator still ends
   /// <see cref="EngineCoordinatorState.Stopped"/>, and the new coordinator is returned.
@@ -461,6 +469,7 @@ public partial class EngineCoordinator : IDisposable
 
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
     Dictionary<string, IEngine> currentEngineByName;
+    MechanicEngine mechanic;
 
     lock (_sync)
     {
@@ -469,13 +478,14 @@ public partial class EngineCoordinator : IDisposable
 
       currentEngineByName = Engines
         .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
+      mechanic = _mechanic;
     }
 
     var versionChanged = new HashSet<string>(diff.VersionChangedEngineNames, StringComparer.OrdinalIgnoreCase);
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
     var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
     var handovers = new List<(string Name, Handover Handover)>();
-    var rebuiltFromScratch = new List<(string Name, IEngine Engine)>();
+    var rebuiltFromScratch = new List<string>();
 
     foreach (var candidate in candidateList)
     {
@@ -492,7 +502,7 @@ public partial class EngineCoordinator : IDisposable
       {
         runtimeDescriptor = CloneDescriptor(candidate);
         if (previousEngine != null)
-          rebuiltFromScratch.Add((name, previousEngine));
+          rebuiltFromScratch.Add(name);
       }
       else
       {
@@ -528,9 +538,11 @@ public partial class EngineCoordinator : IDisposable
     {
       if (rebuiltFromScratch.Count > 0)
       {
-        rebuilding = new RebuildingSwitch(rebuiltFromScratch.Select(r => r.Name));
+        rebuilding = new RebuildingSwitch(rebuiltFromScratch);
         Volatile.Write(ref _rebuildingSwitch, rebuilding);
-        await Task.WhenAll(rebuiltFromScratch.Select(r => r.Engine.StopAsync())).ConfigureAwait(false);
+        // Dependents first, through the engines handed over too (see MechanicEngine.StopEnginesAsync). A failure counts
+        // as stopped and the first is rethrown once all have stopped: the next generation does not start.
+        await mechanic.StopEnginesAsync(rebuiltFromScratch).ConfigureAwait(false);
       }
       rebuiltFromScratch = null;
 
