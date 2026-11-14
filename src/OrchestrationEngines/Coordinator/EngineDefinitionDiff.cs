@@ -121,24 +121,7 @@ public sealed class EngineDefinitionDiff
     if (versionChangedEngineNames.Count == 0)
       return Array.Empty<string>();
 
-    var dependentsByEngine = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
-    foreach (var descriptor in candidateByName.Values)
-    {
-      foreach (var dependencyName in descriptor.DependsOn)
-      {
-        if (!candidateByName.ContainsKey(dependencyName))
-          continue;
-
-        if (!dependentsByEngine.TryGetValue(dependencyName, out var dependents))
-        {
-          dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-          dependentsByEngine[dependencyName] = dependents;
-        }
-
-        dependents.Add(descriptor.Name);
-      }
-    }
+    var dependentsByEngine = EngineDependents.Of(candidateByName.Values, candidateByName.ContainsKey);
 
     var restartSet = new HashSet<string>(versionChangedEngineNames, StringComparer.OrdinalIgnoreCase);
     var queue = new Queue<string>(restartSet);

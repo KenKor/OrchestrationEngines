@@ -53,6 +53,16 @@ public partial class MechanicEngine : BaseEngine
     new(StringComparer.OrdinalIgnoreCase);
 
   /// <summary>
+  /// How long an engine may take to stop before a warning names it (only logged; the stop goes on waiting).
+  /// </summary>
+  private static readonly TimeSpan StopWarningDelay = TimeSpan.FromSeconds(30);
+
+  /// <summary>
+  /// 1 once <see cref="StopAsync"/> is about to stop the engines (see <see cref="RegisterEngine"/>).
+  /// </summary>
+  private int _stopping;
+
+  /// <summary>
   /// Registry of instantiated engines, keyed by engine name.
   /// </summary>
   /// <remarks>
@@ -100,12 +110,25 @@ public partial class MechanicEngine : BaseEngine
   /// <param name="name">The name.</param>
   /// <param name="engine">The engine.</param>
   /// <remarks>
+  /// <para>
   /// This method is intended to be called only by <see cref="EngineCreationTask"/>.
   /// Re-registration replaces any existing instance with the same name.
+  /// </para>
+  /// <para>
+  /// An engine registered after <see cref="StopAsync"/> began (its factory did not honour its token) is stopped here,
+  /// without waiting for it, and this is logged; its stop may end after <see cref="StopAsync"/> has returned. A factory
+  /// should honour its token.
+  /// </para>
   /// </remarks>
   public void RegisterEngine(string name, IEngine engine)
   {
     _engines[name] = engine;
+    // Added before the flag is read, with a full fence (see StopAsync), so no engine is missed.
+    if (Interlocked.CompareExchange(ref _stopping, 0, 0) == 0)
+      return;
+
+    BestEffort.Log(() => LogEngineCreatedAfterStop(Logger, name));
+    _ = StopAfterAsync(name, engine, [], graph: null, failures: null);
   }
 
   /// <summary>
@@ -591,14 +614,25 @@ public partial class MechanicEngine : BaseEngine
   /// <para>
   /// Each engine is stopped once every engine that depends on it (by its descriptor's
   /// <see cref="EngineDescriptor.DependsOn"/>) has been stopped, and not before; engines that do not depend on each
-  /// other, directly or through other engines, are not ordered, so independent engines stop together and no engine waits for one it has nothing to do with.
-  /// "Stopped" means the dependent's <see cref="IEngine.StopAsync"/> has returned: work that ignores its token may still
-  /// be running then.
+  /// other, directly or through other engines, are not ordered, so independent engines stop together and no engine
+  /// waits for one it has nothing to do with. "Stopped" means the dependent's <see cref="IEngine.StopAsync"/> has
+  /// returned: work that ignores its token may still be running then.
   /// </para>
   /// <para>
   /// An engine that throws while stopping is logged and counts as stopped, so the engines it depends on still stop;
-  /// the first failure is rethrown once every engine has been stopped. An engine whose stop never returns keeps the
-  /// engines it depends on from being stopped.
+  /// the first failure is rethrown once every engine has been stopped. An engine whose stop throws an
+  /// <see cref="OperationCanceledException"/> (its cleanup was cut short) gets a warning instead, and that is not a
+  /// failure: a stop override that uses the engine's own token sees it already cancelled, so cleanup that must finish
+  /// should run without that token, or with its own time limit.
+  /// </para>
+  /// <para>
+  /// An engine whose stop never returns keeps the engines it depends on from being stopped; after 30 seconds a warning
+  /// names it and the engines waiting for it. Host code that can hang (an overridden stop, a custom
+  /// <see cref="IEngine"/>, a blocking cancellation handler) should bound itself.
+  /// </para>
+  /// <para>
+  /// An engine created after the stop began (its factory ignored its token) is stopped when it is registered (see
+  /// <see cref="RegisterEngine"/>), possibly after this has returned.
   /// </para>
   /// </remarks>
   public override async Task StopAsync()
@@ -607,84 +641,287 @@ public partial class MechanicEngine : BaseEngine
     State = EngineState.Stopped;
 
     LogWaitingForAllEngines(Logger);
+    // Before the walk copies _engines, with a full fence: an engine that RegisterEngine adds from now on is either in
+    // the copy or sees the flag (or both, and is stopped twice, which an engine allows).
+    Interlocked.Exchange(ref _stopping, 1);
+    await StopDependentsFirstAsync(only: null).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// Stops the named engines dependents first, as <see cref="StopAsync"/> stops them all, and leaves the others
+  /// running. The order follows the whole dependency graph: an engine that is not named still passes on the order, so
+  /// with B → H → A, where only A and B are named, B stops before A.
+  /// </summary>
+  /// <param name="names">The engines to stop; names of engines that were not created are ignored.</param>
+  /// <remarks>
+  /// A failure is handled as in <see cref="StopAsync"/>: the first is rethrown once all have stopped.
+  /// </remarks>
+  internal Task StopEnginesAsync(IEnumerable<string> names) =>
+    StopDependentsFirstAsync(new HashSet<string>(names, StringComparer.OrdinalIgnoreCase));
+
+  /// <summary>
+  /// Stops the created engines (or only those in <paramref name="only"/>), each once the engines that depend on it
+  /// have stopped (see <see cref="StopAsync"/>), and rethrows the first failure once all have stopped.
+  /// </summary>
+  /// <remarks>
+  /// <para>
+  /// Dependencies come from the mechanic context's descriptors, between engines that were created: an engine without a
+  /// descriptor has no dependencies of its own (it still waits for engines whose descriptors depend on it), and a
+  /// dependency on an engine that was not created is ignored. So a registered engine whose creation failed breaks the
+  /// order through it: with C → B → A and B not created, A and C stop together (C never started).
+  /// </para>
+  /// <para>
+  /// The walk is Kahn's algorithm, dependents first, without recursion, so a long chain cannot overflow the stack
+  /// (<see cref="BaseEngine"/>'s reset walk, <c>DependentsFirst</c>, is a Kahn walk over tasks in the same direction:
+  /// a fix to one may apply to the other). Cycles are rejected
+  /// when the mechanic's task set is set up (<see cref="EngineTask.CheckForCycles"/>); should one be made later
+  /// (through <see cref="EngineDescriptor.AddDependsOn"/>), an engine in it is stopped without waiting for the
+  /// dependents in its cycle, once every engine outside its cycle that depends on it, directly or not, has stopped, so
+  /// every engine still stops.
+  /// </para>
+  /// </remarks>
+  /// <param name="only">The engines to stop, or <c>null</c> for all.</param>
+  private async Task StopDependentsFirstAsync(ISet<string> only)
+  {
+    var engines = _engines.ToDictionary(e => e.Key, e => e.Value, StringComparer.OrdinalIgnoreCase);
+    var graph = new StopGraph(Context as MechanicContext, engines.Keys, only);
     var failures = new ConcurrentQueue<Exception>();
-    await Task.WhenAll(StopDependentsFirst(failures)).ConfigureAwait(false);
+
+    // For each engine, how many of its dependents have no stop yet; an engine is ready when none is left.
+    var pending = graph.Dependents.ToDictionary(d => d.Key, d => d.Value.Count, StringComparer.OrdinalIgnoreCase);
+    var ready = new Queue<string>(engines.Keys.Where(name => !pending.ContainsKey(name)));
+    var stops = new Dictionary<string, Task>(engines.Count, StringComparer.OrdinalIgnoreCase);
+    // The stops no other stop waits for: awaiting these awaits them all.
+    var last = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var first = new List<Task>();
+    while (stops.Count < engines.Count)
+    {
+      var name = ready.Count > 0 ? ready.Dequeue() : graph.NextInACycle(stops);
+
+      first.Clear();
+      if (graph.Dependents.TryGetValue(name, out var dependents))
+        foreach (var dependent in dependents)
+          if (stops.TryGetValue(dependent, out var stop))
+          {
+            first.Add(stop);
+            last.Remove(dependent);
+          }
+      stops[name] = graph.Stops(name)
+        ? StopAfterAsync(name, engines[name], first.ToArray(), graph, failures)
+        : first.Count == 0 ? Task.CompletedTask : Task.WhenAll(first);
+      last.Add(name);
+
+      if (graph.Dependencies.TryGetValue(name, out var dependencies))
+        foreach (var dependency in dependencies)
+          if (--pending[dependency] == 0 && !stops.ContainsKey(dependency))
+            ready.Enqueue(dependency);
+    }
+
+    // These never fault.
+    await Task.WhenAll(last.Select(name => stops[name])).ConfigureAwait(false);
     if (failures.TryDequeue(out var firstFailure))
       ExceptionDispatchInfo.Capture(firstFailure).Throw();
   }
 
   /// <summary>
-  /// Starts stopping every managed engine, each once the engines that depend on it have stopped (see
-  /// <see cref="StopAsync"/>).
+  /// The dependency graph of one stop walk, in both directions, and which engines it stops.
   /// </summary>
-  /// <remarks>
-  /// Dependencies come from the mechanic context's descriptors: an engine without one has no dependencies of its own
-  /// (it still waits for engines whose descriptors depend on it), and a dependency on an engine that is not registered
-  /// is ignored. Cycles are rejected when the mechanic wires its tasks (<see cref="EngineTask.AddDependsOn"/>); should
-  /// one remain anyway, the edge that closes it is not waited for, so every engine still stops.
-  /// </remarks>
-  /// <param name="failures">Receives each failure to stop, in the order they occur.</param>
-  private Task[] StopDependentsFirst(ConcurrentQueue<Exception> failures)
+  private sealed class StopGraph
   {
-    var engines = _engines.ToDictionary(e => e.Key, e => e.Value, StringComparer.OrdinalIgnoreCase);
-    // For each registered engine, the registered engines that depend on it.
-    var dependents = engines.Keys.ToDictionary(name => name, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-      StringComparer.OrdinalIgnoreCase);
-    if (Context is MechanicContext mc)
-      foreach (var descriptor in mc.EngineDescriptors.Where(d => d.Name != null && engines.ContainsKey(d.Name)))
-        foreach (var parent in descriptor.DependsOn)
-          if (parent != null && dependents.TryGetValue(parent, out var ofParent))
-            ofParent.Add(descriptor.Name);
+    private readonly ISet<string> _only;
+    private readonly string[] _order;
+    private List<string> _dependentsFirst;
+    private int _next;
 
-    var stops = new Dictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
-    var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-    Task StopAfterDependents(string name)
+    /// <param name="context">
+    /// The mechanic's context, whose descriptors give the dependencies; <c>null</c> for none.
+    /// </param>
+    /// <param name="engines">The created engines.</param>
+    /// <param name="only">The engines the walk stops, or <c>null</c> for all.</param>
+    public StopGraph(MechanicContext context, ICollection<string> engines, ISet<string> only)
     {
-      if (stops.TryGetValue(name, out var stop))
-        return stop;
-      visiting.Add(name);
-      var first = dependents[name].Where(d => !visiting.Contains(d)).Select(StopAfterDependents).ToArray();
-      visiting.Remove(name);
-      stop = StopAfterAsync(name, engines[name], first, failures);
-      stops[name] = stop;
-      return stop;
+      _only = only;
+      _order = engines.ToArray();
+      Dependents = context == null
+        ? new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        : EngineDependents.Of(context.EngineDescriptors, engines.Contains, Dependencies);
     }
 
-    return engines.Keys.Select(StopAfterDependents).ToArray();
+    /// <summary>For each engine, the engines that depend on it.</summary>
+    public Dictionary<string, HashSet<string>> Dependents { get; }
+
+    /// <summary>For each engine, the engines it depends on.</summary>
+    public Dictionary<string, List<string>> Dependencies { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether the walk stops <paramref name="name"/>, or only passes on the order through it.</summary>
+    public bool Stops(string name) => _only == null || _only.Contains(name);
+
+    /// <summary>
+    /// When no engine is ready although some have no stop yet, so a cycle holds them: the next engine without a stop
+    /// in an order where every cycle comes after the cycles and engines that depend on it. Every engine that depends on
+    /// it from outside its cycle, directly or not, has a stop then.
+    /// </summary>
+    /// <remarks>
+    /// The order is found once per walk, on the first call; the calls then move one cursor through it, so a walk that
+    /// runs into cycles pays linear time in all.
+    /// </remarks>
+    /// <param name="stops">The stops so far, by engine.</param>
+    public string NextInACycle(Dictionary<string, Task> stops)
+    {
+      _dependentsFirst ??= DependentsFirst();
+      while (stops.ContainsKey(_dependentsFirst[_next]))
+        _next++;
+      return _dependentsFirst[_next];
+    }
+
+    /// <summary>
+    /// Every engine, the engines of a cycle together, with each cycle (or engine outside one) after the ones that
+    /// depend on it: the order in which Tarjan's algorithm, following the edges to the dependents, completes the
+    /// strongly connected components. Without recursion.
+    /// </summary>
+    private List<string> DependentsFirst()
+    {
+      var comparer = StringComparer.OrdinalIgnoreCase;
+      var index = new Dictionary<string, int>(comparer);
+      var low = new Dictionary<string, int>(comparer);
+      var order = new List<string>(_order.Length);
+      var open = new Stack<string>();
+      var isOpen = new HashSet<string>(comparer);
+      var work = new Stack<(string Name, IEnumerator<string> Dependents)>();
+
+      void Visit(string name)
+      {
+        index[name] = low[name] = index.Count;
+        open.Push(name);
+        isOpen.Add(name);
+        work.Push((name, DependentsOf(name).GetEnumerator()));
+      }
+
+      foreach (var root in _order)
+      {
+        if (index.ContainsKey(root))
+          continue;
+        Visit(root);
+        while (work.Count > 0)
+        {
+          var (name, dependents) = work.Peek();
+          if (dependents.MoveNext())
+          {
+            var dependent = dependents.Current;
+            if (!index.ContainsKey(dependent))
+              Visit(dependent);
+            else if (isOpen.Contains(dependent))
+              low[name] = Math.Min(low[name], index[dependent]);
+            continue;
+          }
+
+          work.Pop();
+          if (work.Count > 0)
+          {
+            var parent = work.Peek().Name;
+            low[parent] = Math.Min(low[parent], low[name]);
+          }
+          if (low[name] != index[name])
+            continue;
+          // A component is complete: every component it reaches through dependents is in the order already.
+          string member;
+          do
+          {
+            member = open.Pop();
+            isOpen.Remove(member);
+            order.Add(member);
+          }
+          while (!comparer.Equals(member, name));
+        }
+      }
+      return order;
+    }
+
+    private IEnumerable<string> DependentsOf(string name) =>
+      Dependents.TryGetValue(name, out var dependents) ? dependents : Enumerable.Empty<string>();
+
+    /// <summary>
+    /// The engines the walk stops that wait for <paramref name="name"/>'s stop: the engines it depends on, and through
+    /// an engine the walk does not stop, the ones that engine depends on.
+    /// </summary>
+    public IReadOnlyList<string> WaitingFor(string name)
+    {
+      var waiting = new List<string>();
+      var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
+      var queue = new Queue<string>();
+      queue.Enqueue(name);
+      while (queue.Count > 0)
+      {
+        if (!Dependencies.TryGetValue(queue.Dequeue(), out var dependencies))
+          continue;
+        foreach (var dependency in dependencies)
+        {
+          if (!seen.Add(dependency))
+            continue;
+          if (Stops(dependency))
+            waiting.Add(dependency);
+          else
+            queue.Enqueue(dependency);
+        }
+      }
+      return waiting;
+    }
   }
 
   /// <summary>
-  /// Stops <paramref name="engine"/> once <paramref name="first"/> have ended; a failure is queued and logged, not
-  /// thrown, so whatever waits for this stop goes on.
+  /// Stops <paramref name="engine"/> once <paramref name="first"/> have ended. A failure is logged and queued in
+  /// <paramref name="failures"/> (if given), not thrown, so whatever waits for this stop goes on; a cancelled stop is
+  /// only logged, as a warning.
   /// </summary>
-  private async Task StopAfterAsync(string name, IEngine engine, Task[] first, ConcurrentQueue<Exception> failures)
+  /// <param name="name">The engine's name.</param>
+  /// <param name="engine">The engine to stop.</param>
+  /// <param name="first">The stops to wait for first.</param>
+  /// <param name="graph">
+  /// The walk's graph, to name the engines waiting for a stop that takes long; <c>null</c> if none.
+  /// </param>
+  /// <param name="failures">Receives the failure to stop, if any; <c>null</c> to only log it.</param>
+  private async Task StopAfterAsync(string name, IEngine engine, Task[] first, StopGraph graph,
+    ConcurrentQueue<Exception> failures)
   {
-    try
-    {
-      await Task.WhenAll(first).ConfigureAwait(false);
-    }
-    catch
-    {
-      // Not expected (each queues its own failure); the engine is stopped all the same.
-    }
+    // These never fault.
+    await Task.WhenAll(first).ConfigureAwait(false);
 
     try
     {
-      await engine.StopAsync().ConfigureAwait(false);
+      await WarnWhileStoppingAsync(name, engine.StopAsync(), graph).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException ex)
+    {
+      BestEffort.Log(() => LogEngineStopCancelled(Logger, ex, name));
     }
     catch (Exception ex)
     {
-      // Queued before it is logged: a logging provider that throws must not lose the failure or end this stop.
-      failures.Enqueue(ex);
-      try
-      {
-        LogEngineFailedToStop(Logger, ex, name);
-      }
-      catch
-      {
-        // The failure is rethrown by StopAsync.
-      }
+      // Queued before it is logged, so a logging provider that throws cannot lose it.
+      failures?.Enqueue(ex);
+      BestEffort.Log(() => LogEngineFailedToStop(Logger, ex, name));
     }
+  }
+
+  /// <summary>
+  /// Awaits <paramref name="stop"/>; if it has not finished after <see cref="StopWarningDelay"/>, logs a warning that
+  /// names the engine and the engines waiting for it, and once it has returned, that it has.
+  /// </summary>
+  private async Task WarnWhileStoppingAsync(string name, Task stop, StopGraph graph)
+  {
+    if (await stop.EndsWithinAsync(StopWarningDelay, TimeProvider).ConfigureAwait(false))
+    {
+      await stop.ConfigureAwait(false);
+      return;
+    }
+
+    BestEffort.Log(() =>
+    {
+      var waiting = graph?.WaitingFor(name) ?? [];
+      LogEngineStillStopping(Logger, name, (int)StopWarningDelay.TotalSeconds,
+        waiting.Count == 0 ? "none" : string.Join(", ", waiting));
+    });
+    await stop.ConfigureAwait(false);
+    BestEffort.Log(() => LogEngineFinishedStopping(Logger, name));
   }
 
   /// <summary>
@@ -743,6 +980,23 @@ public partial class MechanicEngine : BaseEngine
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Engine {EngineName} failed to stop.")]
   private static partial void LogEngineFailedToStop(ILogger logger, Exception exception, string engineName);
+
+  [LoggerMessage(Level = LogLevel.Warning,
+    Message = "Engine {EngineName}'s stop was cancelled; its cleanup may not have finished.")]
+  private static partial void LogEngineStopCancelled(ILogger logger, Exception exception, string engineName);
+
+  [LoggerMessage(Level = LogLevel.Warning,
+    Message = "Engine {EngineName} has not finished stopping after {Seconds} s; "
+      + "engines waiting for it: {WaitingEngines}.")]
+  private static partial void LogEngineStillStopping(ILogger logger, string engineName, int seconds,
+    string waitingEngines);
+
+  [LoggerMessage(Level = LogLevel.Information, Message = "Engine {EngineName} has finished stopping.")]
+  private static partial void LogEngineFinishedStopping(ILogger logger, string engineName);
+
+  [LoggerMessage(Level = LogLevel.Information,
+    Message = "Engine {EngineName} was created after the stop began; stopping it.")]
+  private static partial void LogEngineCreatedAfterStop(ILogger logger, string engineName);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Waiting on reset of all engines depending on and incl. {EngineName}.")]
   private static partial void LogWaitingForResetOfEngines(ILogger logger, string engineName);

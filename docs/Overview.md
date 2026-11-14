@@ -417,13 +417,30 @@ The coordinator is intentionally conservative: once shutdown starts, it does not
 
 Shutdown stops the engines dependents first: an engine is stopped only once every engine that depends on it (its
 descriptor's `DependsOn`) has been stopped, that is, their `StopAsync` has returned. Engines that do not depend on each
-other, directly or through other engines, are not ordered, so they stop together, and an engine that is slow to stop holds back only the engines it depends
-on. An engine that throws while stopping is logged and counts as stopped; the shutdown rethrows the first such exception
-once every engine has been stopped, and the coordinator still ends `Stopped`. A switch does not rethrow such a failure
-from the generation it replaces, whose engines the next generation has already taken over: it logs a warning that the
-replaced generation's stop failed, and returns the new coordinator. An engine whose `StopAsync` never returns keeps its dependencies running. This order
-applies to the coordinator's shutdown (also of a generation replaced by a switch), not to the engines a switch rebuilds
-from scratch, which it stops together before the next generation starts.
+other, directly or through other engines, are not ordered, so they stop together, and an engine that is slow to stop
+holds back only the engines it depends on. The order is between engines that were created: a registered engine whose
+creation failed breaks the order through it, so with C → B → A and B not created, A and C stop together.
+
+- An engine that throws while stopping is logged and counts as stopped; the shutdown rethrows the first such exception
+  once every engine has been stopped, and the coordinator still ends `Stopped`. A switch does not rethrow such a
+  failure from the generation it replaces, whose engines the next generation has already taken over: it logs a warning
+  that the replaced generation's stop failed, and returns the new coordinator.
+- An engine whose stop throws an `OperationCanceledException` gets a warning that its cleanup may not have finished,
+  and that is not a failure. A `StopAsync` override sees the engine's own `Token` already cancelled, so cleanup that
+  must finish should not use it, or should bound itself.
+- An engine whose `StopAsync` never returns keeps the engines it depends on running: there is no time limit. After 30
+  seconds a warning names it and the engines waiting for it, and an information line follows once it returns (or
+  the error or warning for its failure, if it throws). Host
+  code that can hang (an overridden stop, a custom `IEngine`, a blocking cancellation handler) should bound itself.
+- An engine whose factory ignores its token and returns after the shutdown began is stopped as soon as it is created,
+  possibly after the shutdown has returned; this is logged. A factory should honour its token.
+
+The same order applies to the engines a switch rebuilds from scratch, which it stops before the next generation starts,
+and to the shutdown of the generation a switch replaced. For the rebuilt engines the order runs through the whole graph:
+with B → H → A, where A and B are rebuilt and H is handed over, B stops before A. An engine that is handed over is not
+stopped then, so a handed-over engine that depends on a rebuilt one keeps running, and may see that dependency stop,
+until the old generation shuts down. A failure stopping a rebuilt engine counts as stopped as well; the first is
+rethrown once all have stopped, and the next generation does not start.
 
 Its readiness follows the required engines only: an engine registered as not required for running may still be
 loading, or have failed, while the coordinator is `Running`.
