@@ -142,6 +142,28 @@ public class StopOrderTest
   }
 
   /// <summary>
+  /// Verifies that a shutdown in which an engine fails to stop still ends <see cref="EngineCoordinatorState.Stopped"/>
+  /// and reports the failure, and that a second shutdown then returns quietly.
+  /// </summary>
+  [Fact]
+  public async Task Shutdown_EngineThrowsOnStop_EndsStoppedAndThrows()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var failure = new InvalidOperationException("stop failed");
+    var a = new RecordingEngine("A", new ConcurrentQueue<string>()) { StopFailure = failure };
+    a.Gate.SetResult();
+    var coordinator = CreateCoordinator();
+    Register(coordinator, a, "A");
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var shutdown = () => coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    (await shutdown.Should().ThrowAsync<InvalidOperationException>()).Which.Should().BeSameAs(failure);
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+    await shutdown.Should().NotThrowAsync("a second shutdown finds the coordinator stopped");
+  }
+
+  /// <summary>
   /// Verifies that a logger that throws on the failed stop's log line neither keeps the dependency running nor hides
   /// the stop's failure.
   /// </summary>

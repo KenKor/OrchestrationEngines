@@ -419,7 +419,9 @@ Shutdown stops the engines dependents first: an engine is stopped only once ever
 descriptor's `DependsOn`) has been stopped, that is, their `StopAsync` has returned. Engines that do not depend on each
 other, directly or through other engines, are not ordered, so they stop together, and an engine that is slow to stop holds back only the engines it depends
 on. An engine that throws while stopping is logged and counts as stopped; the shutdown rethrows the first such exception
-once every engine has been stopped. An engine whose `StopAsync` never returns keeps its dependencies running. This order
+once every engine has been stopped, and the coordinator still ends `Stopped`. A switch does not rethrow such a failure
+from the generation it replaces, whose engines the next generation has already taken over: it logs a warning that the
+replaced generation's stop failed, and returns the new coordinator. An engine whose `StopAsync` never returns keeps its dependencies running. This order
 applies to the coordinator's shutdown (also of a generation replaced by a switch), not to the engines a switch rebuilds
 from scratch, which it stops together before the next generation starts.
 

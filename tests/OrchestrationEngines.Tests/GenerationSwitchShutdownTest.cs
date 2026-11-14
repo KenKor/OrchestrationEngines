@@ -52,6 +52,20 @@ public class GenerationSwitchShutdownTest
     return recovery == null ? descriptor : descriptor.SetRecoveryHelper(recovery);
   }
 
+  /// <summary>
+  /// An engine that loads at once and throws once it has stopped.
+  /// </summary>
+  private sealed class StopFailingEngine(Exception failure) : BaseEngine(NullLogger.Instance)
+  {
+    protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
+
+    public override async Task StopAsync()
+    {
+      await base.StopAsync().ConfigureAwait(false);
+      throw failure;
+    }
+  }
+
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
     var deadline = DateTime.UtcNow + MustComplete;
@@ -92,6 +106,31 @@ public class GenerationSwitchShutdownTest
     await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
     failing.Loads.Should().Be(loadsAtSwitch, "the replaced generation's kick-start must not retry the load");
     (await next.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().NotBeNull().And.NotBeSameAs(failing);
+  }
+
+  /// <summary>
+  /// Verifies that a switch whose replaced engine fails to stop, after the next generation has taken over, still
+  /// returns that next generation: the replaced coordinator ends <see cref="EngineCoordinatorState.Stopped"/>, and the
+  /// failure is logged as one from the replaced generation.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_RestartWithDefinitions_ReplacedEngineThrowsOnStop_ReturnsTheNextGeneration()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var replaced = new StopFailingEngine(new InvalidOperationException("The stop failed."));
+    var logged = 0;
+    var logger = new OnMessageLogger("generation this switch replaced", () => Interlocked.Increment(ref logged));
+    var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger, useDispatcher: false);
+    coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      .WaitAsync(MustComplete, ct);
+
+    next.Should().NotBeNull().And.BeSameAs(coordinator.Successor);
+    next.Engines[Name].Should().NotBeSameAs(replaced);
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+    Volatile.Read(ref logged).Should().Be(1);
   }
 
   /// <summary>
