@@ -680,7 +680,8 @@ public partial class EngineTask
   /// loser's assignment then REPLACED a machine that had already transitioned to Running — reverting the
   /// observable state to Created, allowing a second Start to double-run the work delegate concurrently,
   /// and completing the task latch while the zombie duplicate still ran. Exactly-once creation also keeps
-  /// CreateStateMachine's side effects (the parameterized-trigger fields) tied to the one live machine.
+  /// CreateStateMachine's side effects (the parameterized-trigger fields) tied to the one live machine. A reset replaces
+  /// the machine under the same lock (see <see cref="ReplaceStateMachine"/>).
   /// </remarks>
   protected StateMachine<EngineTaskState, EngineTaskTrigger> StateMachine
   {
