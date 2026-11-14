@@ -1370,7 +1370,10 @@ public abstract partial class BaseEngine : IEngine
   /// It is stored as a task that this engine maintains.
   /// </summary>
   /// <param name="name">Name the task is identified by.</param>
-  /// <param name="workAsync">Worker that defines the execution of the task.</param>
+  /// <param name="workAsync">
+  /// Worker that defines the execution of the task. Its handling of its token's cancellation must not block (see
+  /// <see cref="EngineTask(string, Func{CancellationToken, Task}, bool, ILogger, CancellationToken, TimeProvider)"/>).
+  /// </param>
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
   /// <returns>The task.</returns>
@@ -1389,7 +1392,10 @@ public abstract partial class BaseEngine : IEngine
   /// It is stored as a task that this engine maintains.
   /// </summary>
   /// <param name="name">Name the task is identified by.</param>
-  /// <param name="workAsync">Worker that defines the execution of the task.</param>
+  /// <param name="workAsync">
+  /// Worker that defines the execution of the task. Its handling of its token's cancellation must not block (see
+  /// <see cref="EngineTask(string, Func{CancellationToken, Task}, bool, ILogger, CancellationToken, TimeProvider)"/>).
+  /// </param>
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
   /// <returns>The task.</returns>

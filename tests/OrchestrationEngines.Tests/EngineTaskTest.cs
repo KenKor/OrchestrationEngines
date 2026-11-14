@@ -149,7 +149,8 @@ public class EngineTaskTest
   public async Task EngineTask_SynchronousWorkTimesOut_EndsInTimedOut()
   {
     var clock = new ManualTimeProvider();
-    using var workGate = new ManualResetEventSlim();
+    // Not disposed: the armed time-out does not prove the work has reached the gate yet, so it may do so after the test.
+    var workGate = new ManualResetEventSlim();
     try
     {
       var task = NewTask("Load", _ =>
@@ -189,7 +190,8 @@ public class EngineTaskTest
   {
     var clock = new ManualTimeProvider();
     using var engineStop = new CancellationTokenSource();
-    using var workGate = new ManualResetEventSlim();
+    // Not disposed: work that honours its token reaches the gate on another thread, possibly after the test has ended.
+    var workGate = new ManualResetEventSlim();
     try
     {
       var task = NewTask("Load", async token =>
@@ -206,6 +208,9 @@ public class EngineTaskTest
         }
         catch (OperationCanceledException)
         {
+          // On .NET Framework this catch runs inline in engineStop.Cancel(), and the wait below would block the test
+          // there for its whole 5 s (#55). A cancellation handler should not block: let the stop return first.
+          await Task.Yield();
           workGate.Wait(MustComplete);
           throw;
         }
