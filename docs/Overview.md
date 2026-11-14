@@ -350,8 +350,11 @@ it has completed with success. If it ended otherwise (`Failed`, `TimedOut`, `Dep
 `Cancelled`) it throws an `EngineTaskNotReadyException` with the task's name, its final state and its fail reason; when
 the task's work (or recovery) threw, that exception is the inner exception. An unknown task name throws an
 `ArgumentException`. A restart or reset that ends the task during the wait is not a failure: the wait goes on with the
-task's next run; if the restart's set no longer has the task, the wait reports how the task it waited for ended.
-Cancelling the wait's token ends the wait only. `EnsureReadyAsync(taskName)` and `EnsureTasksReadyAsync` still only wait.
+task's next run. If the restart's set no longer has the task, the answer is how the task it waited for ended: it
+returns if that was with success, throws the `EngineTaskNotReadyException` if it ended otherwise, and throws an
+`ArgumentException` if it has not ended (it was replaced while it ran again). Cancelling the wait's token ends the wait
+only. `EnsureReadyAsync(taskName)` is the same wait without a token, with the same answers; `EnsureTasksReadyAsync`
+still only waits.
 
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
 engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A start replaces the

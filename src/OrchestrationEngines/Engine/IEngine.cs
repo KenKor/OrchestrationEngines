@@ -168,7 +168,8 @@ public interface IEngine
   /// The engine's tasks are set up when it starts: on an engine that has not started, every name is unknown. A restart
   /// or reset that ends the task during the wait is not its answer: the wait goes on with the task's next run.
   /// </remarks>
-  /// <exception cref="ArgumentException">The engine has no task of that name.</exception>
+  /// <exception cref="ArgumentException">The engine has no task of that name, also when a restart replaced the task
+  /// waited for with a set that has none.</exception>
   /// <exception cref="EngineTaskNotReadyException">
   /// The task ended Failed (or one of its kinds: TimedOut, DependencyFailed, RecoveryFailed) or Cancelled. It carries
   /// the task's name, its final state and its fail reason, and the work's exception as inner exception if it threw.
