@@ -483,10 +483,12 @@ public partial class EngineCoordinator : IDisposable
 
     var versionChanged = new HashSet<string>(diff.VersionChangedEngineNames, StringComparer.OrdinalIgnoreCase);
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
-    var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
     var handovers = new List<(string Name, Handover Handover)>();
     var rebuiltFromScratch = new List<string>();
+    var runtimeDescriptors = new List<EngineDescriptor>(candidateList.Length);
 
+    // Copy every candidate before the next coordinator is created: a candidate that cannot be copied (a version below
+    // 0, which its setter does not check) throws here, and then there is no next coordinator to dispose (#59, 7a).
     foreach (var candidate in candidateList)
     {
       var name = candidate.Name;
@@ -521,8 +523,12 @@ public partial class EngineCoordinator : IDisposable
             ct));
       }
 
-      nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
+      runtimeDescriptors.Add(runtimeDescriptor);
     }
+
+    var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
+    foreach (var runtimeDescriptor in runtimeDescriptors)
+      nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
 
     // The previous engines are in the handovers now. Drop these references: they live on in this async method's state,
     // which the returned task keeps for as long as anyone holds it.
@@ -708,9 +714,9 @@ public partial class EngineCoordinator : IDisposable
       token).ConfigureAwait(false);
 
     // A generation switch must produce a fresh runtime instance with a fresh token chain.
+    // Not retried (an EngineTaskException): the factory would return the same instance again.
     if (ReferenceEquals(next, previousEngine))
-      throw new InvalidOperationException(
-        $"Engine '{candidate.Name}' returned the previous instance during generation switch.");
+      throw new EngineReturnedPreviousInstanceException(candidate.Name);
 
     handover.Release();
     return next;

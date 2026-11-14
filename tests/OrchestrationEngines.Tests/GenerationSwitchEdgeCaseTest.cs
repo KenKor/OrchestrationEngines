@@ -136,18 +136,57 @@ public class GenerationSwitchEdgeCaseTest
   }
 
   /// <summary>
+  /// Verifies that a switch whose candidate cannot be copied (a version below 0, which its setter does not check) throws
+  /// and leaves the current coordinator current and running (#59, item 7a). The switch copies every candidate before it
+  /// creates the next coordinator, so no next coordinator is left behind to dispose.
+  /// </summary>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task Switch_CandidateCannotBeCopied_ThrowsAndKeepsTheCurrentGeneration(bool useDispatcher)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var candidate = new EngineDescriptor("A", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
+    {
+      Version = -1,
+    };
+
+    try
+    {
+      var act = () => coordinator.RestartWithDefinitionsAsync([candidate], waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+
+      await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+      coordinator.Current.Should().BeSameAs(coordinator);
+      coordinator.State.Should().Be(EngineCoordinatorState.Running);
+    }
+    finally
+    {
+      await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
+  }
+
+  /// <summary>
   /// Verifies that a restart factory that hands back the previous engine instead of a new one fails the next
-  /// generation's engine with a clear reason: a switch must produce a fresh instance with a fresh token chain.
+  /// generation's engine with a clear reason: a switch must produce a fresh instance with a fresh token chain. The
+  /// creation is not retried, also with a restart policy (#59, item 1): the factory would only return it again.
   /// </summary>
   [Fact]
-  public async Task Switch_RestartFactoryReturnsThePreviousEngine_FailsThatEngine()
+  public async Task Switch_RestartFactoryReturnsThePreviousEngine_FailsThatEngineWithoutARetry()
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
     var coordinator = new EngineCoordinator("Switch", logger, useDispatcher: false);
+    var restarts = 0;
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()))
-      .SetRestartFactory((input, _) => Task.FromResult(input.PreviousEngine))
-      .WithoutRestarts();
+      .SetRestartFactory((input, _) =>
+      {
+        Interlocked.Increment(ref restarts);
+        return Task.FromResult(input.PreviousEngine);
+      })
+      .SetRestartPolicy(TestRestartPolicies.NoWait(5));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
@@ -157,8 +196,9 @@ public class GenerationSwitchEdgeCaseTest
     {
       next.GetEngineIfReady("A").Should().BeNull();
       next.GetEngineIfCreated("A").Should().BeNull("the creation failed");
+      Volatile.Read(ref restarts).Should().Be(1, "the creation is not retried");
       logger.Collector.GetSnapshot().Should().Contain(r =>
-        r.Level == LogLevel.Error && r.Message.Contains("returned the previous instance during generation switch"));
+        r.Level == LogLevel.Warning && r.Message.Contains("returned the previous instance during generation switch"));
     }
     finally
     {

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Restarter;
+using OrchestrationEngines.Tasks;
 using Xunit;
 using static OrchestrationEngines.Tests.TestRestartPolicies;
 
@@ -69,6 +70,27 @@ public class KickStartRestartTest
     engine.State.Should().Be(EngineState.Ready);
     engine.Loads.Should().Be(2);
   }
+
+  /// <summary>
+  /// Verifies that an engine whose load throws an EngineTaskException is still started again under the descriptor's
+  /// restart policy (#59, item 1): the load task itself is not retried and ends Cancelled, which stops the engine
+  /// rather than faulting it, and the kick-start starts a Stopped engine whose token is live again.
+  /// </summary>
+  [Fact]
+  public async Task EngineKickStartTask_LoadThrowsEngineTaskException_StartsTheEngineAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new NetworkEngine((load, _) => load == 1 ? throw new LoadException() : Task.CompletedTask);
+    var coordinator = CreateCoordinator(engine);
+
+    var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
+
+    loaded.Should().BeSameAs(engine);
+    engine.Starts.Should().Be(2);
+    engine.Loads.Should().Be(2);
+  }
+
+  private sealed class LoadException() : EngineTaskException(null, "The load cannot go on.");
 
   /// <summary>
   /// Verifies that a lookup that arrives while the kick-start waits to retry a failed engine waits for the retry and
