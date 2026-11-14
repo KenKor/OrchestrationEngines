@@ -326,9 +326,9 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
 - derives engine state from the states of its required tasks (`Created → Starting → Ready`, or `Faulted` when one
   failed; `Stopped` once the engine is stopped, or when a required task was cancelled and none failed)
 - checks a new task set for cyclic dependencies before it replaces the current one. A start whose set-up fails (a
-  cycle, or `SetUpTasks` throwing) publishes none of the new set, logs an error, leaves the engine `Faulted` with no
-  tasks (`Stopped` if the engine was stopped meanwhile), and throws; the next start, or a recovery retry, builds the
-  set again, and still waits for the work the replaced set left running
+  cycle, or `SetUpTasks` throwing) publishes none of the new set, logs an error (unless it is the cancellation of a
+  stop), leaves the engine `Faulted` with no tasks (`Stopped` if the engine was stopped meanwhile), and throws; the
+  next start, or a recovery retry, builds the set again, and still waits for the work the replaced set left running
 - coordinates cancellation and reset behavior
 - shields itself from the code it calls back: a subscriber to `EngineStatusChanged`, or to a task's
   `CompletedStateReached`/`FailedStateReached`, that throws is logged and skipped, and the other subscribers (among

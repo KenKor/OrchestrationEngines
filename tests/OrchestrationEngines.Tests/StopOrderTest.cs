@@ -48,23 +48,6 @@ public class StopOrderTest
     }
   }
 
-  /// <summary>
-  /// A logger whose provider throws on the log line of a failed stop.
-  /// </summary>
-  private sealed class ThrowingOnStopFailureLogger : ILogger
-  {
-    public IDisposable BeginScope<TState>(TState state) where TState : notnull => null;
-
-    public bool IsEnabled(LogLevel logLevel) => true;
-
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception,
-      Func<TState, Exception, string> formatter)
-    {
-      if (formatter(state, exception).Contains("failed to stop"))
-        throw new InvalidOperationException("The logging provider failed.");
-    }
-  }
-
   private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
     new(nameof(StopOrderTest), logger ?? NullLogger.Instance, useDispatcher: false);
 
@@ -172,7 +155,8 @@ public class StopOrderTest
     var b = new RecordingEngine("B", stops) { StopFailure = failure };
     a.Gate.SetResult();
     b.Gate.SetResult();
-    var coordinator = CreateCoordinator(new ThrowingOnStopFailureLogger());
+    var coordinator = CreateCoordinator(
+      new OnMessageLogger("failed to stop", () => throw new InvalidOperationException("The logging provider failed.")));
     Register(coordinator, a, "A");
     Register(coordinator, b, "B").AddDependsOn("A");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);

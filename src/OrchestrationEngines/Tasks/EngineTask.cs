@@ -584,6 +584,50 @@ public partial class EngineTask
   }
 
   /// <summary>
+  /// Validates that no task of <paramref name="tasks"/>, or a task they depend on, directly or not, depends on itself.
+  /// </summary>
+  /// <remarks>
+  /// One depth-first walk over all of them (three colours), linear in the tasks and their dependencies, where a check per
+  /// task would walk the shared dependencies again for every task. The walk follows <see cref="DependsOn"/> beyond
+  /// <paramref name="tasks"/>, and keeps its own stack, so a long chain cannot overflow the call stack.
+  /// </remarks>
+  /// <exception cref="CyclicEngineTaskDependencyException">A cycle is found; the task in it is one on the cycle.</exception>
+  internal static void CheckForCycles(IEnumerable<EngineTask> tasks)
+  {
+    // Absent: not visited yet. False: on the current path. True: done, and no cycle can be reached from it.
+    var done = new Dictionary<EngineTask, bool>();
+    // Each task on the path, with the index of its next dependency to walk.
+    var path = new Stack<(EngineTask Task, int Next)>();
+    foreach (var root in tasks)
+    {
+      if (done.ContainsKey(root))
+        continue;
+      done[root] = false;
+      path.Push((root, 0));
+      while (path.Count > 0)
+      {
+        var (task, next) = path.Pop();
+        if (next == task._dependsOn.Count)
+        {
+          done[task] = true;
+          continue;
+        }
+        path.Push((task, next + 1));
+        var dependency = task._dependsOn[next];
+        if (!done.TryGetValue(dependency, out var isDone))
+        {
+          done[dependency] = false;
+          path.Push((dependency, 0));
+        }
+        else if (!isDone)
+        {
+          throw new CyclicEngineTaskDependencyException(dependency);
+        }
+      }
+    }
+  }
+
+  /// <summary>
   /// Returns a list of all tasks where this task is depending on.
   /// Computes the transitive closure of <see cref="DependsOn"/> (direct + indirect dependencies).
   /// </summary>
