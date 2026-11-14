@@ -8,6 +8,9 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Coverage settings and format for a test run with coverage (see README.md, "Code coverage"). The path is absolute,
+         because the SDK resolves a relative one against the test app's folder. A run without coverage accepts them too. -->
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --coverage-settings "$(MSBuildThisFileDirectory)../CodeCoverage.settings.xml" --coverage-output-format cobertura</TestingPlatformCommandLineArguments>
   </PropertyGroup>
 
   <ItemGroup>

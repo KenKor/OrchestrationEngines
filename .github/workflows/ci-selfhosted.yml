@@ -22,14 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The newest SDK of the 10.0.1xx band, the band global.json allows, as in build.yml: the job tests on the newest
-      # patch, whatever SDK the runner host has. The runner user cannot write to the system dotnet folder, so the SDK
-      # goes into the job's temp directory.
-      - uses: actions/setup-dotnet@v6
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
-        with:
-          dotnet-version: 10.0.1xx
+      # Builds with the runner host's SDK: global.json (10.0.100, latestPatch) decides whether it is accepted. Testing on
+      # the newest patch is build.yml's job. The version is logged, so a host SDK that falls behind shows here.
+      - name: SDK
+        run: dotnet --version
 
       - name: Restore
         run: dotnet restore
