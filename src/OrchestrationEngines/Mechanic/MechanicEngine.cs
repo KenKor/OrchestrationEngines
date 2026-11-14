@@ -676,7 +676,8 @@ public partial class MechanicEngine : BaseEngine
   /// a fix to one may apply to the other). Cycles are rejected
   /// when the mechanic's task set is set up (<see cref="EngineTask.CheckForCycles"/>); should one be made later
   /// (through <see cref="EngineDescriptor.AddDependsOn"/>), an engine in it is stopped without waiting for the
-  /// dependents in its cycle, once every other engine that depends on it has stopped, so every engine still stops.
+  /// dependents in its cycle, once every engine outside its cycle that depends on it, directly or not, has stopped, so
+  /// every engine still stops.
   /// </para>
   /// </remarks>
   /// <param name="only">The engines to stop, or <c>null</c> for all.</param>
@@ -729,7 +730,8 @@ public partial class MechanicEngine : BaseEngine
   {
     private readonly ISet<string> _only;
     private readonly string[] _order;
-    private Dictionary<string, int> _cycleOf;
+    private List<string> _dependentsFirst;
+    private int _next;
 
     /// <param name="context">
     /// The mechanic's context, whose descriptors give the dependencies; <c>null</c> for none.
@@ -755,38 +757,37 @@ public partial class MechanicEngine : BaseEngine
     public bool Stops(string name) => _only == null || _only.Contains(name);
 
     /// <summary>
-    /// When no engine is ready although some have no stop yet, so a cycle holds them: an engine without a stop all of
-    /// whose dependents without a stop are in its cycle. One exists: a cycle that no engine outside it waits on.
+    /// When no engine is ready although some have no stop yet, so a cycle holds them: the next engine without a stop
+    /// in an order where every cycle comes after the cycles and engines that depend on it. Every engine that depends on
+    /// it from outside its cycle, directly or not, has a stop then.
     /// </summary>
     /// <remarks>
-    /// The cycles are found once per walk, on the first call (Tarjan's algorithm, without recursion); each call then
-    /// scans the engines, which only a walk that runs into a cycle pays for.
+    /// The order is found once per walk, on the first call; the calls then move one cursor through it, so a walk that
+    /// runs into cycles pays linear time in all.
     /// </remarks>
     /// <param name="stops">The stops so far, by engine.</param>
     public string NextInACycle(Dictionary<string, Task> stops)
     {
-      _cycleOf ??= FindCycles();
-      foreach (var name in _order)
-        if (!stops.ContainsKey(name)
-            && (!Dependents.TryGetValue(name, out var dependents)
-                || dependents.All(d => stops.ContainsKey(d) || _cycleOf[d] == _cycleOf[name])))
-          return name;
-      throw new InvalidOperationException("No engine is left to stop.");
+      _dependentsFirst ??= DependentsFirst();
+      while (stops.ContainsKey(_dependentsFirst[_next]))
+        _next++;
+      return _dependentsFirst[_next];
     }
 
     /// <summary>
-    /// The strongly connected components of the graph: engines in a cycle together share a number.
+    /// Every engine, the engines of a cycle together, with each cycle (or engine outside one) after the ones that
+    /// depend on it: the order in which Tarjan's algorithm, following the edges to the dependents, completes the
+    /// strongly connected components. Without recursion.
     /// </summary>
-    private Dictionary<string, int> FindCycles()
+    private List<string> DependentsFirst()
     {
       var comparer = StringComparer.OrdinalIgnoreCase;
       var index = new Dictionary<string, int>(comparer);
       var low = new Dictionary<string, int>(comparer);
-      var cycleOf = new Dictionary<string, int>(comparer);
+      var order = new List<string>(_order.Length);
       var open = new Stack<string>();
       var isOpen = new HashSet<string>(comparer);
       var work = new Stack<(string Name, IEnumerator<string> Dependents)>();
-      var count = 0;
 
       void Visit(string name)
       {
@@ -822,18 +823,18 @@ public partial class MechanicEngine : BaseEngine
           }
           if (low[name] != index[name])
             continue;
+          // A component is complete: every component it reaches through dependents is in the order already.
           string member;
           do
           {
             member = open.Pop();
             isOpen.Remove(member);
-            cycleOf[member] = count;
+            order.Add(member);
           }
           while (!comparer.Equals(member, name));
-          count++;
         }
       }
-      return cycleOf;
+      return order;
     }
 
     private IEnumerable<string> DependentsOf(string name) =>

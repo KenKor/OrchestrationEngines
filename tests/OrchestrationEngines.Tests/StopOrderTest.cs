@@ -70,6 +70,16 @@ public class StopOrderTest
     }
   }
 
+  private static async Task WaitUntilAsync(Func<bool> condition, string because)
+  {
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (!condition())
+    {
+      DateTime.UtcNow.Should().BeBefore(deadline, because);
+      await Task.Delay(10, TestContext.Current.CancellationToken);
+    }
+  }
+
   private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
     new(nameof(StopOrderTest), logger ?? NullLogger.Instance, useDispatcher: false);
 
@@ -77,9 +87,9 @@ public class StopOrderTest
     coordinator.RegisterEngine(name, _ => Task.FromResult<IEngine>(engine))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
 
-  private static RecordingEngine Open(string name)
+  private static RecordingEngine Open(string name, ConcurrentQueue<string> stops = null)
   {
-    var engine = new RecordingEngine(name, new ConcurrentQueue<string>());
+    var engine = new RecordingEngine(name, stops ?? new ConcurrentQueue<string>());
     engine.Gate.SetResult();
     return engine;
   }
@@ -498,10 +508,7 @@ public class StopOrderTest
     var stop = mechanic.StopAsync();
     await cache.StopEntered.Task.WaitAsync(MustComplete, ct);
     // The warning's timer is made once Cache's stop has returned to the mechanic, which may be after StopEntered.
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (clock.WaitingTimers == 0 && DateTime.UtcNow < deadline)
-      await Task.Delay(10, ct);
-    clock.WaitingTimers.Should().Be(1, "the warning waits for its time");
+    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the warning must wait for its time");
     clock.Advance(TimeSpan.FromSeconds(29));
     warned.Task.IsCompleted.Should().BeFalse("the warning comes after 30 s");
     clock.Advance(TimeSpan.FromSeconds(1));
@@ -590,16 +597,10 @@ public class StopOrderTest
   {
     var ct = TestContext.Current.CancellationToken;
     var stops = new ConcurrentQueue<string>();
-    IEngine Recorded(string name)
-    {
-      var engine = new RecordingEngine(name, stops);
-      engine.Gate.SetResult();
-      return engine;
-    }
     var below = Enumerable.Range(0, 10).Select(i => $"Z{i}").ToArray();
-    var engines = below.Select(name => (name, Recorded(name), Array.Empty<string>()))
-      .Append(("A", Recorded("A"), below.Append("B").ToArray()))
-      .Append(("B", Recorded("B"), ["A"]))
+    var engines = below.Select(name => (name, (IEngine)Open(name, stops), Array.Empty<string>()))
+      .Append(("A", Open("A", stops), below.Append("B").ToArray()))
+      .Append(("B", Open("B", stops), ["A"]))
       .ToArray();
     var mechanic = CreateMechanic(null, null, engines);
 
@@ -609,6 +610,34 @@ public class StopOrderTest
     order.Should().HaveCount(12);
     foreach (var name in below)
       order.IndexOf(name).Should().BeGreaterThan(order.IndexOf("A"), $"{name} waits for A, which depends on it");
+  }
+
+  /// <summary>
+  /// Verifies that with cycles made after start one above the other (each Ai ↔ Bi below X ↔ Y, X depending on every
+  /// Bi), the upper cycle is broken first: no Ai stops before X, which depends on it through Bi.
+  /// </summary>
+  [Fact]
+  public async Task Stop_CycleAboveAnotherCycle_BreaksTheUpperOneFirst()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    var pairs = Enumerable.Range(0, 10).ToArray();
+    var engines = pairs.SelectMany(i => new[]
+      {
+        ($"A{i}", (IEngine)Open($"A{i}", stops), new[] { $"B{i}" }),
+        ($"B{i}", (IEngine)Open($"B{i}", stops), new[] { $"A{i}" }),
+      })
+      .Append(("X", Open("X", stops), pairs.Select(i => $"B{i}").Append("Y").ToArray()))
+      .Append(("Y", Open("Y", stops), ["X"]))
+      .ToArray();
+    var mechanic = CreateMechanic(null, null, engines);
+
+    await mechanic.StopAsync().WaitAsync(MustComplete, ct);
+
+    var order = stops.ToList();
+    order.Should().HaveCount(22);
+    foreach (var i in pairs)
+      order.IndexOf($"A{i}").Should().BeGreaterThan(order.IndexOf("X"), $"X depends on A{i} through B{i}");
   }
 
   /// <summary>

@@ -23,4 +23,22 @@ internal static class BestEffort
       // Nothing is left to report it to.
     }
   }
+
+  /// <summary>
+  /// Calls <paramref name="log"/> with <paramref name="arg"/>, as <see cref="Log(Action)"/> does, without a closure.
+  /// </summary>
+  /// <typeparam name="T">The argument's type.</typeparam>
+  /// <param name="log">Writes the log entry.</param>
+  /// <param name="arg">The argument to write it with.</param>
+  public static void Log<T>(Action<T> log, T arg)
+  {
+    try
+    {
+      log(arg);
+    }
+    catch
+    {
+      // Nothing is left to report it to.
+    }
+  }
 }
