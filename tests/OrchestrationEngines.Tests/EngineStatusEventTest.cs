@@ -197,13 +197,13 @@ public class EngineStatusEventTest
   public void BaseEngine_State_Set_RaisesTheEventOnceWithTheOldAndNewValue()
   {
     var engine = new LoadEngine();
-    var events = new List<EngineState>();
-    engine.EngineStatusChanged += (_, e) => events.Add(e.State);
+    var log = new StatusLog();
+    log.Attach("A", engine);
 
     engine.State = EngineState.Starting;
 
     engine.State.Should().Be(EngineState.Starting);
-    events.Should().Equal(EngineState.Starting);
+    log.For("A").Should().Equal(EngineState.Starting);
     engine.Changes.Should().Equal((EngineState.Created, EngineState.Starting));
   }
 
@@ -214,12 +214,12 @@ public class EngineStatusEventTest
   public void BaseEngine_State_SetToTheSameValue_RaisesNothing()
   {
     var engine = new LoadEngine();
-    var events = new List<EngineState>();
-    engine.EngineStatusChanged += (_, e) => events.Add(e.State);
+    var log = new StatusLog();
+    log.Attach("A", engine);
 
     engine.State = EngineState.Created;
 
-    events.Should().BeEmpty();
+    log.For("A").Should().BeEmpty();
     engine.Changes.Should().BeEmpty();
   }
 
