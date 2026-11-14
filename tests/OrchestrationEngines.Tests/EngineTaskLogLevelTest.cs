@@ -38,8 +38,6 @@ public class EngineTaskLogLevelTest
     }
   }
 
-  private static RestartPolicy Restarts() => new() { MaxRestartsInWindow = 3, Window = TimeSpan.FromMinutes(10) };
-
   private static async Task RunToEndAsync(EngineTask task)
   {
     await task.FireAsync(EngineTaskTrigger.Start);
@@ -174,26 +172,36 @@ public class EngineTaskLogLevelTest
   /// Verifies that a Fail fired from outside the task's work (by the host or the coordinator) that moves a running task
   /// to Failed is one error naming the reason: no exception of the work's logs it.
   /// </summary>
-  [Fact]
-  public async Task FailFromOutside_RunningTask_LogsOneErrorWithTheReason()
+  [Theory]
+  [InlineData("disk full", "disk full")]
+  [InlineData("", "Unknown failure.")]
+  public async Task FailFromOutside_RunningTask_LogsOneErrorWithTheReason(string reason, string loggedReason)
   {
     var logger = new FakeLogger();
-    var task = NewTask("Root", token => Task.Delay(Timeout.Infinite, token), logger);
-    await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => task.State == EngineTaskState.Running, "the task must start");
+    // The work does not end while the test runs: a Fail from outside does not cancel it.
+    var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    try
+    {
+      var task = NewTask("Root", _ => hang.Task, logger);
+      await task.FireAsync(EngineTaskTrigger.Start);
+      await WaitUntilAsync(() => task.State == EngineTaskState.Running, "the task must start");
 
-    await task.FireAsync(EngineTaskTrigger.Fail, "disk full");
-    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-    // The cancelled work ends after the task did; give it a moment to log anything it would.
-    await Task.Delay(100, TestContext.Current.CancellationToken);
+      await task.FireAsync(EngineTaskTrigger.Fail, reason);
+      await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
 
-    task.State.Should().Be(EngineTaskState.Failed);
-    logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).Should().ContainSingle()
-      .Which.Message.Should().Be("Root: Failed from outside its work. Reason: 'disk full'.");
+      task.State.Should().Be(EngineTaskState.Failed);
+      task.FailReason.Should().Be(loggedReason);
+      logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).Should().ContainSingle()
+        .Which.Message.Should().Be($"Root: Failed from outside its work. Reason: '{loggedReason}'.");
+    }
+    finally
+    {
+      hang.TrySetResult();
+    }
   }
 
   /// <summary>
-  /// Verifies that a Fail fired at a task that has completed, which the task ignores, logs no error.
+  /// Verifies that a Fail fired at a task that has completed, which does not move it to Failed, logs no error.
   /// </summary>
   [Fact]
   public async Task FailFromOutside_CompletedTask_LogsNoError()
@@ -220,19 +228,20 @@ public class EngineTaskLogLevelTest
     var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     try
     {
-      var task = NewTask("Root", _ => hang.Task, logger, clock).SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(Restarts());
+      var task = NewTask("Root", _ => hang.Task, logger, clock)
+        .SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(TestRestartPolicies.NoWait(3));
       await task.FireAsync(EngineTaskTrigger.Start);
       await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
 
       clock.Advance(TimeSpan.FromMinutes(1));
       await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its grace period");
-      clock.Advance(EngineTask.PreviousRunWarningAfter + TimeSpan.FromSeconds(1));
+      clock.Advance(task.TimedOutWorkGrace + TimeSpan.FromSeconds(1));
       await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
 
       task.State.Should().Be(EngineTaskState.TimedOut);
       var records = logger.Collector.GetSnapshot();
       records.Where(r => r.Level == LogLevel.Warning).Should().ContainSingle().Which.Message.Should().Be(
-        $"Root: The work did not stop within {EngineTask.PreviousRunWarningAfter} after the time-out; it is abandoned and the task is not retried.");
+        $"Root: The work did not stop within {task.TimedOutWorkGrace} after the time-out; it is abandoned and the task is not retried.");
       records.Where(r => r.Level == LogLevel.Error).Should().ContainSingle().Which.Message.Should().Contain("timed out");
     }
     finally
@@ -251,12 +260,14 @@ public class EngineTaskLogLevelTest
     var logger = new FakeLogger();
     var clock = new ManualTimeProvider();
     var task = NewTask("Root", token => Task.Delay(Timeout.Infinite, token), logger, clock)
-      .SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(Restarts());
+      .SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(TestRestartPolicies.NoWait(3));
     await task.FireAsync(EngineTaskTrigger.Start);
     await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
 
     clock.Advance(TimeSpan.FromMinutes(1));
-    await WaitUntilAsync(() => task.State != EngineTaskState.Running, "the timed-out task must recover");
+    // Without a wait the task can be Running again at once, so wait for the recovery's own line, not for the state.
+    await WaitUntilAsync(() => logger.Collector.GetSnapshot().Any(r => r.Message.StartsWith("Root: Recovery start")),
+      "the timed-out task must recover");
 
     logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Warning);
     await task.FireAsync(EngineTaskTrigger.Cancel);

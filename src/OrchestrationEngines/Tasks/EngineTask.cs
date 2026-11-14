@@ -1141,8 +1141,8 @@ public partial class EngineTask
     if (cancelled)
       LogEnteredCancelled(Logger, FailReason);
     // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, the
-    // time-out); entering the state is Debug, so a failure is not an error twice. The state is the destination already:
-    // Stateless sets it before it runs the entry actions.
+    // time-out, or, for a Fail from outside the work, FireAsync); entering the state is Debug, so a failure is not an
+    // error twice. The state is the destination already: Stateless sets it before it runs the entry actions.
     else if (State == EngineTaskState.DependencyFailed)
       LogEnteredDependencyFailed(Logger, FailReason);
     else
@@ -1275,9 +1275,10 @@ public partial class EngineTask
       else
         await StateMachine.FireAsync(trigger, reason).ConfigureAwait(false);
 
-      // No exception of the work's logs this failure, so it is the one error; a Fail the task ignores logs nothing.
+      // No exception of the work's logs this failure, so it is the one error; a Fail that does not move the task to
+      // Failed logs no error.
       if (trigger == EngineTaskTrigger.Fail && !wasFailed && State == EngineTaskState.Failed)
-        LogFailedFromOutside(Logger, reason);
+        LogFailedFromOutside(Logger, FailReason);
     }
     finally
     {
