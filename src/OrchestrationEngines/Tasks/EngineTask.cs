@@ -509,15 +509,11 @@ public partial class EngineTask
 
     // The task's message is only changed once the wait takes long: a recovery usually waits a moment for the run that
     // failed to finish, and its "Recovering after an error" message must not be replaced by that.
-    using (var warningCts = new CancellationTokenSource())
+    if (!await previous.EndsWithinAsync(PreviousRunWarningAfter, TimeProvider).ConfigureAwait(false))
     {
-      var warning = Task.Delay(PreviousRunWarningAfter, TimeProvider, warningCts.Token);
-      if (await Task.WhenAny(previous, warning).ConfigureAwait(false) == warning)
-      {
-        LogPreviousRunNotStopped(Logger, PreviousRunWarningAfter);
-        StateMessage = $"Waiting until the previous run has stopped: it has not noticed its cancellation after {PreviousRunWarningAfter.TotalSeconds:0} s.";
-      }
-      warningCts.Cancel();
+      LogPreviousRunNotStopped(Logger, PreviousRunWarningAfter);
+      StateMessage = "Waiting until the previous run has stopped: it has not noticed its cancellation after "
+        + $"{PreviousRunWarningAfter.TotalSeconds:0} s.";
     }
     await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
   }

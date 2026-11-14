@@ -429,7 +429,8 @@ creation failed breaks the order through it, so with C → B → A and B not cre
   and that is not a failure. A `StopAsync` override sees the engine's own `Token` already cancelled, so cleanup that
   must finish should not use it, or should bound itself.
 - An engine whose `StopAsync` never returns keeps the engines it depends on running: there is no time limit. After 30
-  seconds a warning names it and the engines waiting for it, and an information line follows if it does finish. Host
+  seconds a warning names it and the engines waiting for it, and an information line follows once it returns (or
+  the error or warning for its failure, if it throws). Host
   code that can hang (an overridden stop, a custom `IEngine`, a blocking cancellation handler) should bound itself.
 - An engine whose factory ignores its token and returns after the shutdown began is stopped as soon as it is created,
   possibly after the shutdown has returned; this is logged. A factory should honour its token.

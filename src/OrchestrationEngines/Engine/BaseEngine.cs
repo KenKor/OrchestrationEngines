@@ -939,7 +939,9 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   /// <remarks>
   /// A task's level is the longest chain of dependents above it in the engine's tasks, so the tasks of one level do not
-  /// depend on each other and are reset together. Linear in the tasks and their dependencies.
+  /// depend on each other and are reset together. Linear in the tasks and their dependencies. The mechanic's stop walk
+  /// over engines (<c>MechanicEngine.StopDependentsFirstAsync</c>) is a Kahn walk in the same direction: a fix to one
+  /// may apply to the other.
   /// </remarks>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks that depend on one of <paramref name="tasks"/>, directly
   /// or not, form a cycle (possible only for tasks added after the set-up, which

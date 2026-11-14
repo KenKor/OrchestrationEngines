@@ -91,7 +91,8 @@ public class StopOrderTest
   private static EngineDescriptor RegisterRebuilt(EngineCoordinator coordinator, RecordingEngine first, string name)
   {
     var created = 0;
-    return coordinator.RegisterEngine(name, _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : Open(name)))
+    return coordinator
+      .RegisterEngine(name, _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : Open(name)))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
   }
 
@@ -99,7 +100,8 @@ public class StopOrderTest
   /// Registers an engine that a generation switch hands over: the next generation's engine is a new one that stops at
   /// once, and <paramref name="first"/> stops when the replaced generation shuts down.
   /// </summary>
-  private static EngineDescriptor RegisterHandedOver(EngineCoordinator coordinator, RecordingEngine first, string name) =>
+  private static EngineDescriptor RegisterHandedOver(
+    EngineCoordinator coordinator, RecordingEngine first, string name) =>
     RegisterRebuilt(coordinator, first, name).SetRestartFactory((_, _) => Task.FromResult<IEngine>(Open(name)));
 
   /// <summary>
@@ -369,7 +371,8 @@ public class StopOrderTest
     RegisterRebuilt(coordinator, c, "C").AddDependsOn("B");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
+    var next = coordinator.RestartWithDefinitionsAsync(
+      coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
     try
     {
       await c.StopEntered.Task.WaitAsync(MustComplete, ct);
@@ -409,7 +412,8 @@ public class StopOrderTest
     RegisterRebuilt(coordinator, b, "B").AddDependsOn("H");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
+    var next = coordinator.RestartWithDefinitionsAsync(
+      coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
     try
     {
       await b.StopEntered.Task.WaitAsync(MustComplete, ct);
@@ -417,7 +421,8 @@ public class StopOrderTest
       stops.Should().Equal(["B"], "A must wait for B, which depends on it through H");
       b.Gate.SetResult();
       await a.StopEntered.Task.WaitAsync(MustComplete, ct);
-      stops.Should().Equal(["B", "A"], "H is handed over, so the switch does not stop it before the next generation starts");
+      stops.Should().Equal(["B", "A"],
+        "H is handed over, so the switch does not stop it before the next generation starts");
     }
     finally
     {
@@ -444,7 +449,8 @@ public class StopOrderTest
     RegisterHandedOver(coordinator, c, "C").AddDependsOn("B");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
+    var next = coordinator.RestartWithDefinitionsAsync(
+      coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
     try
     {
       await c.StopEntered.Task.WaitAsync(MustComplete, ct);
@@ -484,12 +490,18 @@ public class StopOrderTest
         && message.Contains("not finished stopping"),
       () => warned.TrySetResult(),
       new OnMessageLogger(
-        (level, message, _) => level == LogLevel.Information && message.Contains("Cache") && message.Contains("finished stopping"),
+        (level, message, _) => level == LogLevel.Information && message.Contains("Cache")
+          && message.Contains("finished stopping"),
         () => finished.TrySetResult()));
     var mechanic = CreateMechanic(logger, clock, ("Db", db, []), ("Cache", cache, ["Db"]));
 
     var stop = mechanic.StopAsync();
     await cache.StopEntered.Task.WaitAsync(MustComplete, ct);
+    // The warning's timer is made once Cache's stop has returned to the mechanic, which may be after StopEntered.
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (clock.WaitingTimers == 0 && DateTime.UtcNow < deadline)
+      await Task.Delay(10, ct);
+    clock.WaitingTimers.Should().Be(1, "the warning waits for its time");
     clock.Advance(TimeSpan.FromSeconds(29));
     warned.Task.IsCompleted.Should().BeFalse("the warning comes after 30 s");
     clock.Advance(TimeSpan.FromSeconds(1));
@@ -511,7 +523,8 @@ public class StopOrderTest
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
     var warnings = 0;
-    var logger = new OnMessageLogger((level, _, _) => level == LogLevel.Warning, () => Interlocked.Increment(ref warnings));
+    var logger = new OnMessageLogger(
+      (level, _, _) => level == LogLevel.Warning, () => Interlocked.Increment(ref warnings));
     var mechanic = CreateMechanic(logger, clock, ("A", Open("A"), []));
 
     await mechanic.StopAsync().WaitAsync(MustComplete, ct);
@@ -569,6 +582,36 @@ public class StopOrderTest
   }
 
   /// <summary>
+  /// Verifies that a cycle made after start (A ↔ B) is broken inside the cycle: the engines A depends on but that are
+  /// not in it (Z0 to Z9) still stop only after A.
+  /// </summary>
+  [Fact]
+  public async Task Stop_CycleAboveOtherEngines_StopsThoseAfterTheCycle()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    IEngine Recorded(string name)
+    {
+      var engine = new RecordingEngine(name, stops);
+      engine.Gate.SetResult();
+      return engine;
+    }
+    var below = Enumerable.Range(0, 10).Select(i => $"Z{i}").ToArray();
+    var engines = below.Select(name => (name, Recorded(name), Array.Empty<string>()))
+      .Append(("A", Recorded("A"), below.Append("B").ToArray()))
+      .Append(("B", Recorded("B"), ["A"]))
+      .ToArray();
+    var mechanic = CreateMechanic(null, null, engines);
+
+    await mechanic.StopAsync().WaitAsync(MustComplete, ct);
+
+    var order = stops.ToList();
+    order.Should().HaveCount(12);
+    foreach (var name in below)
+      order.IndexOf(name).Should().BeGreaterThan(order.IndexOf("A"), $"{name} waits for A, which depends on it");
+  }
+
+  /// <summary>
   /// Verifies that a chain of 10,000 engines stops dependents first without running out of stack. The walk runs on a
   /// thread with a small stack (256 KB), as a deep chain must not depend on how big the caller's stack happens to be.
   /// </summary>
@@ -579,7 +622,8 @@ public class StopOrderTest
     const int length = 10_000;
     var stops = new ConcurrentQueue<string>();
     var engines = Enumerable.Range(0, length)
-      .Select(i => ($"E{i}", (IEngine)new CountingEngine($"E{i}", stops), i == 0 ? Array.Empty<string>() : [$"E{i - 1}"]))
+      .Select(i => (
+        $"E{i}", (IEngine)new CountingEngine($"E{i}", stops), i == 0 ? Array.Empty<string>() : [$"E{i - 1}"]))
       .ToArray();
     var mechanic = CreateMechanic(null, null, engines);
 
@@ -602,7 +646,10 @@ public class StopOrderTest
     var ct = TestContext.Current.CancellationToken;
     var stops = new ConcurrentQueue<string>();
     var a = new RecordingEngine("A", stops);
-    var b = new RecordingEngine("B", stops) { StopFailure = new OperationCanceledException("The cleanup was cut short.") };
+    var b = new RecordingEngine("B", stops)
+    {
+      StopFailure = new OperationCanceledException("The cleanup was cut short."),
+    };
     a.Gate.SetResult();
     b.Gate.SetResult();
     var warned = 0;
@@ -638,7 +685,8 @@ public class StopOrderTest
     var factoryGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var logged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var logger = new OnMessageLogger(
-      (level, message, _) => level == LogLevel.Information && message.Contains("Late") && message.Contains("after the stop began"),
+      (level, message, _) => level == LogLevel.Information && message.Contains("Late")
+        && message.Contains("after the stop began"),
       () => logged.TrySetResult());
     var coordinator = CreateCoordinator(logger);
     coordinator.RegisterEngine("Late", async _ =>

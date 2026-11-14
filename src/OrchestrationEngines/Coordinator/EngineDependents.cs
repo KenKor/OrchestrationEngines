@@ -14,8 +14,12 @@ internal static class EngineDependents
   /// </summary>
   /// <param name="descriptors">The descriptors whose <see cref="EngineDescriptor.DependsOn"/> are reversed.</param>
   /// <param name="includes">Whether an engine, by name, is part of the graph.</param>
+  /// <param name="dependencies">
+  /// If given, receives the same edges the other way round: for each included engine, the included engines it depends
+  /// on, each once.
+  /// </param>
   internal static Dictionary<string, HashSet<string>> Of(IEnumerable<EngineDescriptor> descriptors,
-    Func<string, bool> includes)
+    Func<string, bool> includes, Dictionary<string, List<string>> dependencies = null)
   {
     var dependentsByEngine = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
     foreach (var descriptor in descriptors)
@@ -31,7 +35,14 @@ internal static class EngineDependents
           dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
           dependentsByEngine[dependency] = dependents;
         }
-        dependents.Add(descriptor.Name);
+        if (!dependents.Add(descriptor.Name) || dependencies == null)
+          continue;
+        if (!dependencies.TryGetValue(descriptor.Name, out var dependenciesOfEngine))
+        {
+          dependenciesOfEngine = [];
+          dependencies[descriptor.Name] = dependenciesOfEngine;
+        }
+        dependenciesOfEngine.Add(dependency);
       }
     }
     return dependentsByEngine;

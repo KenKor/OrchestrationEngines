@@ -8,7 +8,8 @@ namespace OrchestrationEngines.Tests;
 /// exception), on the thread that logs it: to throw from a logging provider, or to act at the moment the code under
 /// test logs. Every line goes on to <paramref name="next"/> first, if given, so several of these watch one logger.
 /// </summary>
-internal sealed class OnMessageLogger(Func<LogLevel, string, Exception, bool> matches, Action action, ILogger next = null)
+internal sealed class OnMessageLogger(
+  Func<LogLevel, string, Exception, bool> matches, Action action, ILogger next = null)
   : ILogger
 {
   /// <summary>

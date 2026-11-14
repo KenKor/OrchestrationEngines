@@ -10,6 +10,25 @@ namespace OrchestrationEngines.Helpers;
 /// </summary>
 internal static class TaskExtensions
 {
+  /// <summary>
+  /// Waits until <paramref name="task"/> has ended or <paramref name="after"/> has passed on <paramref name="clock"/>,
+  /// whichever comes first, and removes the timer. Does not observe the task's failure.
+  /// </summary>
+  /// <param name="task">The task to wait for.</param>
+  /// <param name="after">How long to wait at most.</param>
+  /// <param name="clock">Measures <paramref name="after"/>.</param>
+  /// <returns>Whether <paramref name="task"/> ended in time.</returns>
+  public static async Task<bool> EndsWithinAsync(this Task task, TimeSpan after, TimeProvider clock)
+  {
+    if (task.IsCompleted)
+      return true;
+    using var cancelTimer = new CancellationTokenSource();
+    var timer = Task.Delay(after, clock, cancelTimer.Token);
+    var first = await Task.WhenAny(task, timer).ConfigureAwait(false);
+    cancelTimer.Cancel();
+    return first == task;
+  }
+
 #if !NET6_0_OR_GREATER
   /// <summary>
   /// Executes the wait async operation.

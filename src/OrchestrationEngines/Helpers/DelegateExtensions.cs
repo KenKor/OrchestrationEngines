@@ -28,14 +28,8 @@ internal static class DelegateExtensions
       }
       catch (Exception ex)
       {
-        try
-        {
-          onError(ex);
-        }
-        catch
-        {
-          // Nothing is left to report it to; the next subscriber must still be called.
-        }
+        // The next subscriber must still be called.
+        BestEffort.Log(() => onError(ex));
       }
     }
   }

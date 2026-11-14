@@ -541,7 +541,9 @@ public partial class EngineCoordinator : IDisposable
         rebuilding = new RebuildingSwitch(rebuiltFromScratch);
         Volatile.Write(ref _rebuildingSwitch, rebuilding);
         // Dependents first, through the engines handed over too (see MechanicEngine.StopEnginesAsync). A failure counts
-        // as stopped and the first is rethrown once all have stopped: the next generation does not start.
+        // as stopped and the first is rethrown once all have stopped: the next generation does not start. The engines
+        // are looked up by name when they are stopped, so one that a kick-start re-created since the copy above is the
+        // one stopped (the one it replaced has ended already).
         await mechanic.StopEnginesAsync(rebuiltFromScratch).ConfigureAwait(false);
       }
       rebuiltFromScratch = null;
@@ -573,15 +575,9 @@ public partial class EngineCoordinator : IDisposable
     catch (Exception ex)
     {
       // The next generation is live: the switch has succeeded, and its caller needs the new coordinator. The mechanic
-      // logged the failed stop with the engine named; say that it was the replaced generation's.
-      try
-      {
-        LogReplacedGenerationStopFailed(ex, _coordinatorName);
-      }
-      catch (Exception)
-      {
-        // A logging provider that throws must not make the switch fail after all.
-      }
+      // logged the failed stop with the engine named; say that it was the replaced generation's. A logging provider
+      // that throws must not make the switch fail after all.
+      BestEffort.Log(() => LogReplacedGenerationStopFailed(ex, _coordinatorName));
     }
 
     return nextCoordinator;
