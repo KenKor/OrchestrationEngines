@@ -64,6 +64,30 @@ public class EngineLifecycleTokenTest
       Probe = (ProbeTask)AddTask("Probe", new ProbeTask(_ => Task.CompletedTask, CancellationToken));
   }
 
+  /// <summary>
+  /// Starts <paramref name="engine"/>, waits until it is ready, and prepares a restart by resetting all its tasks.
+  /// </summary>
+  private static async Task StartReadyAndResetAsync(BaseEngine engine, CancellationToken ct)
+  {
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Collects the state changes <paramref name="engine"/> publishes from now on.
+  /// </summary>
+  private static List<EngineStatusEventArgs> CaptureStatus(BaseEngine engine)
+  {
+    var published = new List<EngineStatusEventArgs>();
+    engine.EngineStatusChanged += (_, e) =>
+    {
+      lock (published)
+        published.Add(e);
+    };
+    return published;
+  }
+
   private static bool IsDisposed(CancellationToken token)
   {
     try
@@ -216,9 +240,7 @@ public class EngineLifecycleTokenTest
     var ct = TestContext.Current.CancellationToken;
     using var parent = new CancellationTokenSource();
     var engine = new CountingEngine(parent.Token);
-    await engine.StartAsync().WaitAsync(MustComplete, ct);
-    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
-    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    await StartReadyAndResetAsync(engine, ct);
     parent.Cancel();
 
     await engine.StartAsync().WaitAsync(MustComplete, ct);
@@ -255,6 +277,95 @@ public class EngineLifecycleTokenTest
   }
 
   /// <summary>
+  /// Verifies that a cancel of the engine's parent token after a reset has prepared a restart, with nobody to start the
+  /// engine again, releases the restart at once: the engine is Stopped and a wait until it is ready ends, without a
+  /// start or a stop.
+  /// </summary>
+  [Fact]
+  public async Task ResetAllTasksAsync_ThenAParentCancel_ReleasesTheRestart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token);
+    await StartReadyAndResetAsync(engine, ct);
+    engine.State.Should().Be(EngineState.Created, "the restart is prepared");
+
+    parent.Cancel();
+
+    engine.State.Should().Be(EngineState.Stopped);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.Runs.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that <see cref="BaseEngine.CancelAll"/> after a reset has prepared a restart releases the restart at once,
+  /// as a cancel of the parent token does.
+  /// </summary>
+  [Fact]
+  public async Task ResetAllTasksAsync_ThenCancelAll_ReleasesTheRestart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new CountingEngine();
+    await StartReadyAndResetAsync(engine, ct);
+
+    engine.CancelAll();
+
+    engine.State.Should().Be(EngineState.Stopped);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.Runs.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that a cancel of the parent token that comes after a reset has decided the engine is Created (here: from
+  /// the Created event itself) still releases the restart and leaves the engine Stopped.
+  /// </summary>
+  [Fact]
+  public async Task ResetAllTasksAsync_ParentCancelledOnTheCreatedEvent_ReleasesTheRestart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.EngineStatusChanged += (_, e) =>
+    {
+      if (e.State == EngineState.Created)
+        parent.Cancel();
+    };
+
+    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Stopped);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a cancel of the parent token that comes after giving up a restart has decided the engine is Faulted
+  /// (here: from the Faulted event itself) leaves the engine Stopped, and a wait until it is ready ends.
+  /// </summary>
+  [Fact]
+  public async Task AbandonRestart_ParentCancelledOnTheFaultedEvent_LeavesTheEngineStopped()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token);
+    await StartReadyAndResetAsync(engine, ct);
+    var published = CaptureStatus(engine);
+    engine.EngineStatusChanged += (_, e) =>
+    {
+      if (e.State == EngineState.Faulted)
+        parent.Cancel();
+    };
+
+    engine.AbandonRestart("its kick-start failed");
+
+    engine.State.Should().Be(EngineState.Stopped);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    lock (published)
+      published.Select(e => e.State).Should().Equal(EngineState.Faulted, EngineState.Stopped);
+  }
+
+  /// <summary>
   /// Verifies that giving up a prepared restart of an engine whose parent token was cancelled leaves it Stopped, with
   /// no fault cause, while a live engine is still Faulted with the reason.
   /// </summary>
@@ -264,11 +375,8 @@ public class EngineLifecycleTokenTest
     var ct = TestContext.Current.CancellationToken;
     using var parent = new CancellationTokenSource();
     var engine = new CountingEngine(parent.Token);
-    var published = new List<EngineStatusEventArgs>();
-    engine.EngineStatusChanged += (_, e) => published.Add(e);
-    await engine.StartAsync().WaitAsync(MustComplete, ct);
-    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
-    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    var published = CaptureStatus(engine);
+    await StartReadyAndResetAsync(engine, ct);
     parent.Cancel();
 
     engine.AbandonRestart("its kick-start was cancelled");
@@ -287,11 +395,8 @@ public class EngineLifecycleTokenTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = new CountingEngine();
-    var published = new List<EngineStatusEventArgs>();
-    engine.EngineStatusChanged += (_, e) => published.Add(e);
-    await engine.StartAsync().WaitAsync(MustComplete, ct);
-    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
-    await engine.ResetAllTasksAsync().WaitAsync(MustComplete, ct);
+    var published = CaptureStatus(engine);
+    await StartReadyAndResetAsync(engine, ct);
 
     engine.AbandonRestart("its kick-start failed");
 
