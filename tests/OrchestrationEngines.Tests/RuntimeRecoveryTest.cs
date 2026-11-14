@@ -9,6 +9,7 @@ using OrchestrationEngines.Engine;
 using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
+using static OrchestrationEngines.Tests.TestRestartPolicies;
 
 namespace OrchestrationEngines.Tests;
 
@@ -21,25 +22,6 @@ namespace OrchestrationEngines.Tests;
 public class RuntimeRecoveryTest
 {
   private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
-  /// <summary>
-  /// A restart policy that never waits between restarts, so tests do not depend on the backoff.
-  /// </summary>
-  private static RestartPolicy NoWait(int maxRestarts) => new()
-  {
-    MaxRestartsInWindow = maxRestarts,
-    Window = TimeSpan.FromMinutes(10),
-    InitialBackoff = TimeSpan.Zero,
-    MaxBackoff = TimeSpan.Zero,
-  };
-
-  // A policy that allows a number of restarts in a row, without a window or a wait.
-  private static RestartPolicy NoWaitInARow(int maxRestarts) => new()
-  {
-    MaxConsecutiveRestarts = maxRestarts,
-    InitialBackoff = TimeSpan.Zero,
-    MaxBackoff = TimeSpan.Zero,
-  };
 
   /// <summary>
   /// An engine shaped like a process host: a required start task that fails the first <paramref name="failedStarts"/>
@@ -105,7 +87,7 @@ public class RuntimeRecoveryTest
     var ct = TestContext.Current.CancellationToken;
     var kernel = new KernelEngine(failedStarts: 2);
     var coordinator = CreateCoordinator();
-    Register(coordinator, "Kernel", kernel).SetRecoveryHelper(NoWait(3));
+    Register(coordinator, "Kernel", kernel).SetRestartPolicy(NoWait(3));
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     await WaitUntilAsync(() => kernel.State == EngineState.Ready, "the third start succeeds");
@@ -125,7 +107,7 @@ public class RuntimeRecoveryTest
     var ct = TestContext.Current.CancellationToken;
     var kernel = new KernelEngine(failedStarts: int.MaxValue);
     var coordinator = CreateCoordinator();
-    Register(coordinator, "Kernel", kernel).SetRecoveryHelper(NoWait(2));
+    Register(coordinator, "Kernel", kernel).SetRestartPolicy(NoWait(2));
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the recovery gives up");
@@ -139,21 +121,21 @@ public class RuntimeRecoveryTest
   /// Verifies that the restarts in a row stop a kick-start whose engine keeps faulting after its context task
   /// succeeded, also without a restart window: the count must not start over during the kick-start's restarts, or the
   /// engine would never be given up on. The policy applies the same set through
-  /// <see cref="EngineDescriptor.SetRecoveryHelper(RestartPolicy)"/> or as the descriptor's
-  /// <see cref="EngineDescriptor.RestartPolicy"/>.
+  /// <see cref="EngineDescriptor.SetRestartPolicy(RestartPolicy)"/> or the descriptor's
+  /// <see cref="EngineDescriptor.RestartPolicy"/> property.
   /// </summary>
   [Theory]
   [InlineData(true)]
   [InlineData(false)]
   public async Task EngineCoordinator_DescriptorRecovery_StartKeepsFailing_StopsAfterTheConsecutiveRestarts(
-    bool setRecoveryHelper)
+    bool fluent)
   {
     var ct = TestContext.Current.CancellationToken;
     var kernel = new KernelEngine(failedStarts: int.MaxValue);
     var coordinator = CreateCoordinator();
     var descriptor = Register(coordinator, "Kernel", kernel);
-    if (setRecoveryHelper)
-      descriptor.SetRecoveryHelper(NoWaitInARow(2));
+    if (fluent)
+      descriptor.SetRestartPolicy(NoWaitInARow(2));
     else
       descriptor.RestartPolicy = NoWaitInARow(2);
 
@@ -219,7 +201,7 @@ public class RuntimeRecoveryTest
     var coordinator = CreateCoordinator();
     var descriptor = Register(coordinator, "Kernel", kernel);
     descriptor.RestartPolicy = NoWait(10);
-    descriptor.SetRecoveryHelper(NoWaitInARow(1));
+    descriptor.SetRecoveryHelper(NoWaitInARow(1).GetEnforcer());
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the helper gives up");

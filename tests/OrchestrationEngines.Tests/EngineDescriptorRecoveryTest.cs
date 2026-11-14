@@ -39,24 +39,42 @@ public class EngineDescriptorRecoveryTest
   }
 
   /// <summary>
-  /// Verifies that each lifecycle task gets an enforcer of its own when the descriptor's recovery was set from a policy,
-  /// or comes from its default <see cref="EngineDescriptor.RestartPolicy"/> alone.
+  /// Verifies that each lifecycle task gets an enforcer of its own from the descriptor's
+  /// <see cref="EngineDescriptor.RestartPolicy"/>: the default one, or one set with
+  /// <see cref="EngineDescriptor.SetRestartPolicy"/>.
   /// </summary>
   [Theory]
   [InlineData(true)]
   [InlineData(false)]
-  public void EngineDescriptor_RecoveryFromAPolicy_EachLifecycleTaskHasItsOwnEnforcer(bool setRecoveryHelper)
+  public void EngineDescriptor_RecoveryFromAPolicy_EachLifecycleTaskHasItsOwnEnforcer(bool setRestartPolicy)
   {
     var descriptor = new EngineDescriptor("Network", Factory);
-    if (setRecoveryHelper)
-      descriptor.SetRecoveryHelper(RestartPolicy.Default);
+    if (setRestartPolicy)
+      descriptor.SetRestartPolicy(RestartPolicy.Critical);
 
     var helpers = LifecycleTasks(descriptor).Select(t => t.RecoveryHelper).ToArray();
 
     helpers.Should().AllBeOfType<RestartPolicyEnforcer>();
     helpers.Distinct().Should().HaveCount(3);
-    if (setRecoveryHelper)
-      helpers.Should().NotContain(descriptor.RecoveryHelper);
+  }
+
+  /// <summary>
+  /// Verifies that <see cref="EngineDescriptor.SetRestartPolicy"/> sets <see cref="EngineDescriptor.RestartPolicy"/>,
+  /// the one public way to set a policy (#59, item 4), and that it checks the policy as the property does.
+  /// </summary>
+  [Fact]
+  public void EngineDescriptor_SetRestartPolicy_SetsTheRestartPolicy()
+  {
+    var descriptor = new EngineDescriptor("Network", Factory);
+    var policy = RestartPolicy.Critical;
+
+    descriptor.SetRestartPolicy(policy).Should().BeSameAs(descriptor);
+
+    descriptor.RestartPolicy.Should().BeSameAs(policy);
+    descriptor.RecoveryHelper.Should().BeNull();
+    var setInvalid = () => descriptor.SetRestartPolicy(new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(30) });
+    setInvalid.Should().Throw<ArgumentOutOfRangeException>();
+    descriptor.RestartPolicy.Should().BeSameAs(policy);
   }
 
   /// <summary>
@@ -68,25 +86,31 @@ public class EngineDescriptorRecoveryTest
   {
     var descriptor = new EngineDescriptor("Network", Factory);
 
+    var before = descriptor.RestartPolicy;
+
     var set = () => descriptor.RestartPolicy = new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(30) };
 
     set.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(RestartPolicy.MaxBackoff));
-    descriptor.RestartPolicy.Should().Be(RestartPolicy.Default, "a rejected policy leaves the previous one");
+    descriptor.RestartPolicy.Should().BeSameAs(before, "a rejected policy leaves the previous one");
     descriptor.RestartPolicy = null;
     LifecycleTasks(descriptor).Should().OnlyContain(t => t.RecoveryHelper == null);
   }
 
   /// <summary>
   /// Verifies that an enforcer set directly is shared by the lifecycle tasks, as there is no telling how to create
-  /// another, and that it replaces a policy set before.
+  /// another, and that it wins over the restart policy, whichever was set first.
   /// </summary>
-  [Fact]
-  public void EngineDescriptor_SetRecoveryHelperDirectly_TheLifecycleTasksShareIt()
+  [Theory]
+  [InlineData(true)]
+  [InlineData(false)]
+  public void EngineDescriptor_SetRecoveryHelperDirectly_TheLifecycleTasksShareIt(bool policyFirst)
   {
     var enforcer = RestartPolicy.Default.GetEnforcer();
-    var descriptor = new EngineDescriptor("Network", Factory)
-      .SetRecoveryHelper(RestartPolicy.Unlimited)
-      .SetRecoveryHelper(enforcer);
+    var descriptor = new EngineDescriptor("Network", Factory);
+    if (policyFirst)
+      descriptor.SetRestartPolicy(RestartPolicy.Unlimited).SetRecoveryHelper(enforcer);
+    else
+      descriptor.SetRecoveryHelper(enforcer).SetRestartPolicy(RestartPolicy.Unlimited);
 
     var helpers = LifecycleTasks(descriptor).Select(t => t.RecoveryHelper).ToArray();
 
@@ -102,7 +126,7 @@ public class EngineDescriptorRecoveryTest
   {
     var ct = TestContext.Current.CancellationToken;
     var coordinator = new EngineCoordinator(nameof(EngineDescriptorRecoveryTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Network", Factory, requiredForRunning: true).SetRecoveryHelper(RestartPolicy.Default);
+    coordinator.RegisterEngine("Network", Factory, requiredForRunning: true).SetRestartPolicy(RestartPolicy.Critical);
 
     var next = await coordinator
       .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), token: ct)
@@ -110,7 +134,8 @@ public class EngineDescriptorRecoveryTest
     var copy = next.GetRegisteredDefinitions().Single();
 
     var helpers = LifecycleTasks(copy).Select(t => t.RecoveryHelper).ToArray();
+    copy.RestartPolicy.Should().Be(RestartPolicy.Critical);
+    helpers.Should().AllBeOfType<RestartPolicyEnforcer>();
     helpers.Distinct().Should().HaveCount(3);
-    helpers.Should().NotContain(copy.RecoveryHelper);
   }
 }

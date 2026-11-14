@@ -11,13 +11,13 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// Max nr of restarts allowed within a time window before failing.
   /// Set this to 0 to stop checking failures within a window.
   /// </summary>
-  public int MaxRestartsInWindow { get; set; } = 5;
+  public int MaxRestartsInWindow { get; init; } = 5;
 
   /// <summary>
   /// Restart Window
   /// Set this to TimeSpan.Zero to stop checking failures within a window.
   /// </summary>
-  public TimeSpan Window { get; set; } = TimeSpan.FromMinutes(3);
+  public TimeSpan Window { get; init; } = TimeSpan.FromMinutes(3);
 
   /// <summary>
   /// Max nr of restarts in a row without a successful run before failing, however long each attempt takes; a success
@@ -25,17 +25,24 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// Window / MaxRestartsInWindow to fail: older restarts leave the window before the limit is reached.
   /// Set this to 0 (the default for a policy you create) to stop checking restarts in a row.
   /// </summary>
-  public int MaxConsecutiveRestarts { get; set; }
+  public int MaxConsecutiveRestarts { get; init; }
 
   /// <summary>
   /// Initial Backoff time
   /// </summary>
-  public TimeSpan InitialBackoff { get; set; } = TimeSpan.FromSeconds(1);
+  public TimeSpan InitialBackoff { get; init; } = TimeSpan.FromSeconds(1);
 
   /// <summary>
   /// Maximum Backoff time
   /// </summary>
-  public TimeSpan MaxBackoff { get; set; } = TimeSpan.FromSeconds(10);
+  public TimeSpan MaxBackoff { get; init; } = TimeSpan.FromSeconds(10);
+
+  /// <summary>
+  /// The share of each wait that is random, from 0 (no jitter, the default) to 1: the wait before a restart is the
+  /// backoff × (1 − Jitter × a random fraction in [0, 1)). With jitter, engines that failed together do not all restart
+  /// at the same moment. The backoff itself still doubles without the jitter.
+  /// </summary>
+  public double Jitter { get; init; }
 
   /// <summary>
   /// Default restart policy. For typical engine, IO-bound / flaky:<br/>
@@ -105,11 +112,13 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   public IRestartPolicyEnforcer GetEnforcer(TimeProvider timeProvider = null) => new RestartPolicyEnforcer(this, timeProvider);
 
   /// <summary>
-  /// Throws if the settings cannot be enforced: for <see cref="RestartPolicyEnforcer"/>, and when the policy is set on
-  /// a descriptor.
+  /// Throws if the settings cannot be enforced.
   /// </summary>
-  /// <exception cref="ArgumentOutOfRangeException">A setting is negative, or <see cref="MaxBackoff"/> is less than
-  /// <see cref="InitialBackoff"/>.</exception>
+  /// <remarks>
+  /// Called by <see cref="RestartPolicyEnforcer"/>, and when the policy is set on a descriptor.
+  /// </remarks>
+  /// <exception cref="ArgumentOutOfRangeException">A setting is negative, <see cref="MaxBackoff"/> is less than
+  /// <see cref="InitialBackoff"/>, or <see cref="Jitter"/> is not in 0..1.</exception>
   internal void Validate()
   {
     // 0 means disable this check.
@@ -118,6 +127,8 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
     if (MaxConsecutiveRestarts < 0) throw new ArgumentOutOfRangeException(nameof(MaxConsecutiveRestarts));
     if (InitialBackoff < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(InitialBackoff));
     if (MaxBackoff < InitialBackoff) throw new ArgumentOutOfRangeException(nameof(MaxBackoff));
+    // Written so that NaN is rejected too.
+    if (!(Jitter >= 0 && Jitter <= 1)) throw new ArgumentOutOfRangeException(nameof(Jitter));
   }
 
   /*
@@ -131,7 +142,8 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
     if (ReferenceEquals(this, other)) return true;
     return MaxRestartsInWindow == other.MaxRestartsInWindow && Window.Equals(other.Window) &&
            MaxConsecutiveRestarts == other.MaxConsecutiveRestarts &&
-           InitialBackoff.Equals(other.InitialBackoff) && MaxBackoff.Equals(other.MaxBackoff);
+           InitialBackoff.Equals(other.InitialBackoff) && MaxBackoff.Equals(other.MaxBackoff) &&
+           Jitter.Equals(other.Jitter);
   }
 
   /// <inheritdoc/>
@@ -143,6 +155,6 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// <inheritdoc/>
   public override int GetHashCode()
   {
-    return HashCode.Combine(MaxRestartsInWindow, Window, MaxConsecutiveRestarts, InitialBackoff, MaxBackoff);
+    return HashCode.Combine(MaxRestartsInWindow, Window, MaxConsecutiveRestarts, InitialBackoff, MaxBackoff, Jitter);
   }
 }

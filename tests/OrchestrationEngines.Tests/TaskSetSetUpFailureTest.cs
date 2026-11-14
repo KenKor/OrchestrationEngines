@@ -235,7 +235,7 @@ public class TaskSetSetUpFailureTest
     var coordinator = new EngineCoordinator(nameof(TaskSetSetUpFailureTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine("Engine", _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRecoveryHelper(new RestartPolicy
+      .SetRestartPolicy(new RestartPolicy
       {
         MaxRestartsInWindow = 3,
         InitialBackoff = TimeSpan.Zero,

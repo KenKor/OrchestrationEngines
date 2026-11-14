@@ -7,6 +7,7 @@ using OrchestrationEngines.Engine;
 using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
+using static OrchestrationEngines.Tests.TestRestartPolicies;
 
 namespace OrchestrationEngines.Tests;
 
@@ -19,17 +20,6 @@ public class PreviousRunTest
 {
   private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private static readonly TimeSpan MustStayPending = TimeSpan.FromMilliseconds(200);
-
-  /// <summary>
-  /// A restart policy that never waits between restarts, so tests do not depend on the backoff.
-  /// </summary>
-  private static RestartPolicy NoWait(int maxRestarts) => new()
-  {
-    MaxRestartsInWindow = maxRestarts,
-    Window = TimeSpan.FromMinutes(10),
-    InitialBackoff = TimeSpan.Zero,
-    MaxBackoff = TimeSpan.Zero,
-  };
 
   /// <summary>
   /// Work that counts its runs and how many of them run at the same time. The first run ignores its token and only

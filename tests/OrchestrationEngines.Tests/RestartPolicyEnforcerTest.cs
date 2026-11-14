@@ -27,6 +27,27 @@ public class RestartPolicyEnforcerTest
     await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
   }
 
+  /// <summary>
+  /// Starts a task whose run fails and whose recovery calls <paramref name="enforcer"/>, with
+  /// <paramref name="recoveryToken"/> when given (else the recovery's own token); returns the task and the recovery's
+  /// backoff once it waits.
+  /// </summary>
+  private static async Task<(EngineTask Task, Task Backoff)> StartFailingRunAsync(IRestartPolicyEnforcer enforcer,
+    CancellationToken? recoveryToken = null)
+  {
+    var invoked = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var task = NewTask(_ => throw new InvalidOperationException("The run fails."))
+      .SetRecovery(new CustomRestarter((et, token) =>
+      {
+        var restart = enforcer.Invoke(et, recoveryToken ?? token);
+        invoked.TrySetResult(restart);
+        return restart;
+      }));
+    await task.FireAsync(EngineTaskTrigger.Start);
+    var backoff = await invoked.Task.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    return (task, backoff);
+  }
+
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
     var deadline = DateTime.UtcNow + MustComplete;
@@ -90,16 +111,7 @@ public class RestartPolicyEnforcerTest
       MaxBackoff = TimeSpan.FromMinutes(1),
     }, clock);
     using var recovery = new CancellationTokenSource();
-    var invoked = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-    var task = NewTask(_ => throw new InvalidOperationException("The run fails."))
-      .SetRecovery(new CustomRestarter((et, _) =>
-      {
-        var restart = enforcer.Invoke(et, recovery.Token);
-        invoked.TrySetResult(restart);
-        return restart;
-      }));
-    await task.FireAsync(EngineTaskTrigger.Start);
-    var backoff = await invoked.Task.WaitAsync(MustComplete, ct);
+    var (task, backoff) = await StartFailingRunAsync(enforcer, recovery.Token);
     task.CancellationToken.IsCancellationRequested.Should().BeFalse("the task's own token is live during the backoff");
 
     recovery.Cancel();
@@ -138,6 +150,73 @@ public class RestartPolicyEnforcerTest
     await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
     Volatile.Read(ref runs).Should().Be(2);
+  }
+
+  /// <summary>
+  /// Verifies that the jitter shortens the wait by its share of a random fraction of the backoff (#59, item 3): with a
+  /// random draw of 0.5, a 10-second backoff waits 10 seconds without jitter, 7.5 with half, and 5 with full jitter.
+  /// The next backoff still doubles from the backoff without jitter.
+  /// </summary>
+  [Theory]
+  [InlineData(0.0, 10_000)]
+  [InlineData(0.5, 7_500)]
+  [InlineData(1.0, 5_000)]
+  public async Task RestartPolicyEnforcer_Invoke_JitterShortensTheWait(double jitter, int expectedWaitMs)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var clock = new ManualTimeProvider();
+    var enforcer = new RestartPolicyEnforcer(new RestartPolicy
+    {
+      InitialBackoff = TimeSpan.FromSeconds(10),
+      MaxBackoff = TimeSpan.FromSeconds(40),
+      Jitter = jitter,
+    }, clock, nextRandom: () => 0.5);
+    var (_, backoff) = await StartFailingRunAsync(enforcer);
+    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the restart must wait for its backoff");
+
+    clock.Advance(TimeSpan.FromMilliseconds(expectedWaitMs - 1));
+    await Task.Delay(100, ct);
+    backoff.IsCompleted.Should().BeFalse("the wait has not passed yet");
+    clock.Advance(TimeSpan.FromMilliseconds(1));
+    await backoff.WaitAsync(MustComplete, ct);
+
+    enforcer.CurrentBackoff.Should().Be(TimeSpan.FromSeconds(20), "the backoff doubles without the jitter");
+  }
+
+  /// <summary>
+  /// Verifies that the jitter is part of a policy's equality and hash code.
+  /// </summary>
+  [Fact]
+  public void RestartPolicy_Equals_ComparesTheJitter()
+  {
+    var half = new RestartPolicy { Jitter = 0.5 };
+
+    half.Should().Be(new RestartPolicy { Jitter = 0.5 });
+    half.GetHashCode().Should().Be(new RestartPolicy { Jitter = 0.5 }.GetHashCode());
+    half.Should().NotBe(new RestartPolicy { Jitter = 0.25 });
+    new RestartPolicy().Jitter.Should().Be(0, "no jitter unless the host sets one");
+  }
+
+  /// <summary>
+  /// Verifies that with full jitter, a wait drawn from the enforcer's own random source ends within the backoff: a
+  /// smoke test of that source, with one draw.
+  /// </summary>
+  [Fact]
+  public async Task RestartPolicyEnforcer_Invoke_FullJitterWithTheSharedRandom_EndsWithinTheBackoff()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var clock = new ManualTimeProvider();
+    var enforcer = new RestartPolicyEnforcer(new RestartPolicy
+    {
+      InitialBackoff = TimeSpan.FromSeconds(10),
+      MaxBackoff = TimeSpan.FromSeconds(10),
+      Jitter = 1,
+    }, clock);
+    var (_, backoff) = await StartFailingRunAsync(enforcer);
+
+    clock.Advance(TimeSpan.FromSeconds(10));
+
+    await backoff.WaitAsync(MustComplete, ct);
   }
 
   /// <summary>
@@ -299,8 +378,8 @@ public class RestartPolicyEnforcerTest
   }
 
   /// <summary>
-  /// Verifies that the enforcer rejects a policy with a negative limit, a negative window or backoff, or a maximum
-  /// backoff below the initial one.
+  /// Verifies that the enforcer rejects a policy with a negative limit, a negative window or backoff, a maximum
+  /// backoff below the initial one, or a jitter outside 0..1.
   /// </summary>
   [Fact]
   public void RestartPolicyEnforcer_Constructor_InvalidPolicy_Throws()
@@ -312,6 +391,9 @@ public class RestartPolicyEnforcerTest
       new RestartPolicy { Window = TimeSpan.FromSeconds(-1) },
       new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(-1) },
       new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(5), MaxBackoff = TimeSpan.FromSeconds(1) },
+      new RestartPolicy { Jitter = -0.1 },
+      new RestartPolicy { Jitter = 1.1 },
+      new RestartPolicy { Jitter = double.NaN },
     };
 
     foreach (var policy in invalidPolicies)

@@ -49,7 +49,7 @@ public class GenerationSwitchShutdownTest
     var descriptor = new EngineDescriptor(name, _ => Task.FromResult(first()), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartFactory((_, _) => Task.FromResult<IEngine>(Quick()));
-    return recovery == null ? descriptor : descriptor.SetRecoveryHelper(recovery);
+    return recovery == null ? descriptor : descriptor.SetRestartPolicy(recovery);
   }
 
   /// <summary>
