@@ -123,6 +123,12 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   internal bool HasStarted => _hasStarted;
 
+  /// <summary>
+  /// Whether the engine has a task set of its own: it has started (<see cref="HasStarted"/>), and its last set-up did not
+  /// leave it without tasks (a restart whose set-up failed).
+  /// </summary>
+  internal bool HasTaskSet => _hasStarted && _tasks.Count > 0;
+
   private readonly Lock _taskSetChange = new();
 
   /// <summary>
@@ -1283,7 +1289,16 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   private TaskCompletionSource _restart;
 
-  private protected bool RestartPending => Volatile.Read(ref _restart) != null;
+  private bool RestartPending => Volatile.Read(ref _restart) != null;
+
+  /// <summary>
+  /// Whether the task <paramref name="taskName"/> of the current set has ended without success while no restart is
+  /// pending, so that waiting for it (<see cref="EnsureTaskReadyAsync(string, CancellationToken)"/>) would only report
+  /// that ending. Its state is read once.
+  /// </summary>
+  private protected bool HasGivenUp(string taskName) =>
+    _tasks.TryGetValue(taskName, out var task) && task.State is var state && state.IsCompleted()
+    && state != EngineTaskState.CompletedWithSuccess && !RestartPending;
 
   /// <summary>
   /// Prepares the engine to be started again (as the kick-start's retry does), if a task matches
