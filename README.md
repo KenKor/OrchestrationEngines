@@ -26,11 +26,13 @@ Packing is blocked until the licence and other packaging details are decided. Se
 ## Code coverage
 
 ```bash
-dotnet test --coverage --coverage-output-format cobertura --coverage-settings "$PWD/tests/CodeCoverage.settings.xml" --results-directory "$PWD/TestResults"
+dotnet test --coverage --results-directory "$PWD/TestResults"
 ```
 
-The paths must be absolute: the .NET 10.0.1xx SDK resolves them against the test app's folder, and with a relative
-settings path it stops before any test runs. `$PWD` works in bash and PowerShell.
+The results directory must be an absolute path: the .NET 10.0.1xx SDK resolves a relative one against the test app's
+folder. `$PWD` works in bash and PowerShell; in cmd.exe, use `%CD%` instead. The test project sets the
+coverage settings (`tests/CodeCoverage.settings.xml`) and the Cobertura format itself, through
+`TestingPlatformCommandLineArguments`.
 
 This writes one Cobertura report per target framework to `TestResults/`. The settings limit the measurement to the
 library itself. Any tool that reads Cobertura can show the report, for example ReportGenerator or a CI coverage task.
