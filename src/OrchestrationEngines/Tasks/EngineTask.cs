@@ -1141,8 +1141,8 @@ public partial class EngineTask
     if (cancelled)
       LogEnteredCancelled(Logger, FailReason);
     // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, the
-    // time-out); entering the state is Debug, so a failure is not an error twice. The state is the destination already:
-    // Stateless sets it before it runs the entry actions.
+    // time-out, or, for a Fail from outside the work, FireAsync); entering the state is Debug, so a failure is not an
+    // error twice. The state is the destination already: Stateless sets it before it runs the entry actions.
     else if (State == EngineTaskState.DependencyFailed)
       LogEnteredDependencyFailed(Logger, FailReason);
     else
@@ -1269,10 +1269,16 @@ public partial class EngineTask
     await _triggerLock.WaitAsync().ConfigureAwait(false);
     try
     {
+      var wasFailed = State == EngineTaskState.Failed;
       if (string.IsNullOrEmpty(reason))
         await StateMachine.FireAsync(trigger).ConfigureAwait(false);
       else
         await StateMachine.FireAsync(trigger, reason).ConfigureAwait(false);
+
+      // No exception of the work's logs this failure, so it is the one error; a Fail that does not move the task to
+      // Failed logs no error.
+      if (trigger == EngineTaskTrigger.Fail && !wasFailed && State == EngineTaskState.Failed)
+        LogFailedFromOutside(Logger, FailReason);
     }
     finally
     {
@@ -1457,6 +1463,8 @@ public partial class EngineTask
         return;
 
       _timedOutWorkAbandoned = !workStopped;
+      if (!workStopped)
+        LogTimedOutWorkAbandoned(Logger, TimedOutWorkGrace);
       FailReason = workStopped
         ? $"Task timed out after {Timeout.Value}."
         : $"Task timed out after {Timeout.Value} and its work did not stop within {TimedOutWorkGrace}.";
@@ -1766,6 +1774,13 @@ public partial class EngineTask
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Exception: '{Reason}'.")]
   private static partial void LogWorkFailed(ILogger logger, Exception exception, string reason);
+
+  [LoggerMessage(Level = LogLevel.Error, Message = "Failed from outside its work. Reason: '{Reason}'.")]
+  private static partial void LogFailedFromOutside(ILogger logger, string reason);
+
+  [LoggerMessage(Level = LogLevel.Warning,
+    Message = "The work did not stop within {Grace} after the time-out; it is abandoned and the task is not retried.")]
+  private static partial void LogTimedOutWorkAbandoned(ILogger logger, TimeSpan grace);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "Recovery start by resetting the requested cancellation.")]
   private static partial void LogRecoveryStartedAfterCancellation(ILogger logger);
