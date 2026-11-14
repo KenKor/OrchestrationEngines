@@ -348,8 +348,9 @@ public partial class MechanicEngine : BaseEngine
     }
 
     // Created but never started (its context failed): report the kick-start, and start none of its tasks (which would
-    // run without a context). An engine that started and then faulted answers for its task (or an unknown name).
-    if (notStarted != null && engine is BaseEngine { HasStarted: false })
+    // run without a context). Also when it has no tasks: its last set-up failed (a restart), and the kick-start's
+    // failure is the answer, not an unknown name. An engine that started and then faulted answers for its task.
+    if (notStarted != null && engine is BaseEngine { HasStarted: false } or BaseEngine { Tasks.Count: 0 })
       throw notStarted;
     await engine.EnsureTaskReadyAsync(taskName, token).ConfigureAwait(false);
   }
@@ -412,7 +413,8 @@ public partial class MechanicEngine : BaseEngine
       throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.");
     if (engine is not BaseEngine baseEngine)
       throw new InvalidOperationException($"Engine '{engineName}' is not a {nameof(BaseEngine)}, so its tasks cannot be reset.");
-    if (baseEngine.Tasks.Count == 0)
+    // Tasks it created in its constructor do not count: resetting them would start their work without a context.
+    if (!baseEngine.HasStarted || baseEngine.Tasks.Count == 0)
       throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
     await baseEngine.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
   }
@@ -451,13 +453,21 @@ public partial class MechanicEngine : BaseEngine
     // StartAsync returns once the tasks have been fired, not once they have run.
     // We must await the engine to be created, get ready, kick-started and all, including for all its dependencies.
     // The kick-start task depends on the creation task, so this also waits for the engine to exist.
-    try
+    // A kick-start that gave up, with no restart of the mechanic pending, needs no wait: the check below answers null
+    // without an exception thrown on every lookup of an engine that failed.
+    if (!(_tasks.TryGetValue(kickStartTaskName, out var kickStart) && kickStart.State is var settled
+          && settled.IsCompleted() && settled != EngineTaskState.CompletedWithSuccess && !RestartPending))
     {
-      await EnsureReadyAsync(kickStartTaskName).ConfigureAwait(false);
-    }
-    catch (EngineTaskNotReadyException)
-    {
-      // The kick-start ended without success: the engine is not Ready, and the check below answers null.
+      try
+      {
+        await EnsureTaskReadyAsync(kickStartTaskName).ConfigureAwait(false);
+      }
+      catch (EngineTaskNotReadyException)
+      {
+        // The kick-start ended without success: the engine is not Ready, and the check below answers null. Its
+        // ArgumentException for a task that was replaced is not caught: the mechanic's own sets always have the
+        // kick-start.
+      }
     }
 
     // An engine that is loading again (its tasks were reset after its first start, see BaseEngine.TriggerResetAsync) is
@@ -945,7 +955,7 @@ public partial class MechanicEngine : BaseEngine
   public Task InvalidateContextForEngineAsync(string engineName)
   {
     // 1. Find the context task. This is the one responsible for retrieving the context.
-    var taskName = engineName + EngineContextTask.PostFix;
+    var taskName = EngineContextTask.ContextName(engineName);
     if (!_tasks.TryGetValue(taskName, out var contextTask))
       throw new ArgumentException($"Cannot get task for engine '{engineName}'", nameof(engineName));
 

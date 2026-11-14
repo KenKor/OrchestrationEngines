@@ -655,7 +655,7 @@ public partial class EngineCoordinator : IDisposable
     {
       // The kick-start depends on the engine's creation and context tasks; a retry keeps it from completing, and a
       // reset of it is followed to its next run.
-      await Mechanic.EnsureReadyAsync(EngineKickStartTask.KickStartName(name)).ConfigureAwait(false);
+      await Mechanic.EnsureTaskReadyAsync(EngineKickStartTask.KickStartName(name)).ConfigureAwait(false);
     }
     catch (Exception ex)
     {

@@ -1163,16 +1163,11 @@ public abstract partial class BaseEngine : IEngine
     }
   }
 
+  /// <inheritdoc cref="EnsureTaskReadyAsync(string, CancellationToken)"/>
   /// <summary>
-  /// Waits until the task named <paramref name="taskName"/> has completed with success: the same as
-  /// <see cref="EnsureTaskReadyAsync"/> without a token, with the same answers.
+  /// The same as <see cref="EnsureTaskReadyAsync"/> without a token: it calls it, so an override of
+  /// <see cref="EnsureTaskReadyAsync"/> must not call this overload.
   /// </summary>
-  /// <param name="taskName">The name of the task (compared ignoring case).</param>
-  /// <remarks>
-  /// A restart or reset that ends the task during the wait is not its answer: the wait goes on with the task's next run.
-  /// </remarks>
-  /// <exception cref="ArgumentException">The engine has no task of that name.</exception>
-  /// <exception cref="EngineTaskNotReadyException">The task ended without success.</exception>
   public virtual Task EnsureReadyAsync(string taskName) => EnsureTaskReadyAsync(taskName);
 
   /// <summary>
@@ -1288,7 +1283,7 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   private TaskCompletionSource _restart;
 
-  private bool RestartPending => Volatile.Read(ref _restart) != null;
+  private protected bool RestartPending => Volatile.Read(ref _restart) != null;
 
   /// <summary>
   /// Prepares the engine to be started again (as the kick-start's retry does), if a task matches

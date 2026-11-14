@@ -351,19 +351,30 @@ public class EnsureTaskReadyTest
     thrown.Which.ParamName.Should().Be("taskName");
   }
 
+  private static async Task WaitUntilAsync(Func<bool> condition, string because)
+  {
+    var deadline = DateTime.UtcNow + MustComplete;
+    while (!condition())
+    {
+      DateTime.UtcNow.Should().BeBefore(deadline, because);
+      await Task.Delay(10, TestContext.Current.CancellationToken);
+    }
+  }
+
   private static EngineCoordinator CoordinatorWith(Func<CancellationToken, Task<IEngine>> create,
-    Func<CancellationToken, Task<IEngineContext>> contextFactory = null)
+    Func<CancellationToken, Task<IEngineContext>> contextFactory = null, Action<EngineDescriptor> configure = null)
   {
     var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Mixed", create, requiredForRunning: false)
+    var descriptor = coordinator.RegisterEngine("Mixed", create, requiredForRunning: false)
       .SetContextFactory(contextFactory ?? (_ => Task.FromResult<IEngineContext>(new NoContext())))
       .WithoutRestarts();
+    configure?.Invoke(descriptor);
     return coordinator;
   }
 
   private static EngineCoordinator CoordinatorWith(IEngine engine,
-    Func<CancellationToken, Task<IEngineContext>> contextFactory = null) =>
-    CoordinatorWith(_ => Task.FromResult(engine), contextFactory);
+    Func<CancellationToken, Task<IEngineContext>> contextFactory = null, Action<EngineDescriptor> configure = null) =>
+    CoordinatorWith(_ => Task.FromResult(engine), contextFactory, configure);
 
   /// <summary>
   /// Verifies that the coordinator, not started yet, starts and waits for an engine's task that completes.
@@ -427,7 +438,7 @@ public class EnsureTaskReadyTest
     var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "Load", ct).WaitAsync(MustComplete, ct))
       .Should().ThrowAsync<EngineTaskNotReadyException>();
 
-    thrown.Which.TaskName.Should().Be("Mixed" + EngineKickStartTask.PostFix);
+    thrown.Which.TaskName.Should().Be(EngineKickStartTask.KickStartName("Mixed"));
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 
@@ -508,7 +519,7 @@ public class EnsureTaskReadyTest
     var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "render", ct).WaitAsync(MustComplete, ct))
       .Should().ThrowAsync<EngineTaskNotReadyException>();
 
-    thrown.Which.TaskName.Should().Be("Mixed" + EngineKickStartTask.PostFix);
+    thrown.Which.TaskName.Should().Be(EngineKickStartTask.KickStartName("Mixed"));
     engine.Renders.Should().Be(0);
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
@@ -539,13 +550,9 @@ public class EnsureTaskReadyTest
     var first = new GenerationEngine(hangs: true);
     var second = new GenerationEngine(hangs: false);
     var created = 0;
-    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Gen", _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : second),
-        requiredForRunning: false)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
+    var coordinator = CoordinatorWith(_ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : second));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var wait = coordinator.EnsureEngineTaskReadyAsync("Gen", "Load", ct);
+    var wait = coordinator.EnsureEngineTaskReadyAsync("Mixed", "Load", ct);
     await first.LoadStarted.Task.WaitAsync(MustComplete, ct);
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
@@ -598,17 +605,85 @@ public class EnsureTaskReadyTest
         MaxBackoff = TimeSpan.FromSeconds(1),
       });
     _ = coordinator.StartAsync();
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (engine.State != EngineState.Faulted)
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, "the first load must fail");
-      await Task.Delay(10, ct);
-    }
+    await WaitUntilAsync(() => engine.State == EngineState.Faulted, "the first load must fail");
 
     await coordinator.EnsureEngineTaskReadyAsync("Retried", "Load", ct).WaitAsync(MustComplete, ct);
 
     engine.Loads.Should().Be(2);
     engine.Tasks["Load"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that resetting the tasks of an engine that never started, but created a task in its constructor, is
+  /// refused as for an engine that has not started, and does not run the task's work without a context.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_NotStartedEngineWithTasks_IsRefused()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new ConstructedTasksEngine();
+    var coordinator = CoordinatorWith(engine, _ => throw new InvalidOperationException("No context."));
+
+    var thrown = await coordinator.Awaiting(c => c.ResetTasksForEngineAsync("Mixed", ["render"], resetDependentTasks: false, ct)
+        .WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<InvalidOperationException>();
+
+    thrown.Which.Message.Should().Contain("has not started");
+    engine.Renders.Should().Be(0);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// An engine whose first set-up creates a task "Load" that fails, and whose later set-ups fail, so a restart leaves
+  /// it without tasks.
+  /// </summary>
+  private sealed class SetUpFailsOnRestartEngine() : BaseEngine(NullLogger.Instance)
+  {
+    private int _setUps;
+
+    protected override void SetUpTasks()
+    {
+      if (Interlocked.Increment(ref _setUps) > 1)
+        throw new InvalidOperationException("The set-up failed.");
+      CreateTask("Load", _ => throw new LoadException("The database was not reachable."));
+    }
+  }
+
+  /// <summary>
+  /// Verifies that an engine that started, and whose kick-start then gave up because its restarts' set-ups failed,
+  /// is reported by its kick-start, not as an unknown task.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_EnsureEngineTaskReadyAsync_RestartSetUpFailed_ThrowsForTheKickStart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new SetUpFailsOnRestartEngine();
+    var coordinator = CoordinatorWith(engine, configure: d => d.SetRestartPolicy(NoWait(1)));
+
+    var thrown = await coordinator.Awaiting(c => c.EnsureEngineTaskReadyAsync("Mixed", "Load", ct).WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<EngineTaskNotReadyException>();
+
+    thrown.Which.TaskName.Should().Be(EngineKickStartTask.KickStartName("Mixed"));
+    engine.Tasks.Should().BeEmpty();
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that looking up an engine whose kick-start gave up answers null, also on a second lookup.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_GetEngineAsync_KickStartGaveUpOnANotStartedEngine_ReturnsNull()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = CoordinatorWith(new MixedEngine(), _ => throw new InvalidOperationException("No context."));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var first = await coordinator.GetEngineAsync("Mixed", ct).WaitAsync(MustComplete, ct);
+    var second = await coordinator.GetEngineAsync("Mixed", ct).WaitAsync(MustComplete, ct);
+
+    first.Should().BeNull();
+    second.Should().BeNull();
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }
