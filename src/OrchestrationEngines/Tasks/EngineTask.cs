@@ -1611,13 +1611,11 @@ public partial class EngineTask
     {
       LogEngineTaskException(Logger, ex, ex.Message);
 
-      // Design intent: EngineTaskException is treated as non-recoverable and maps to cancellation.
-      // TODO: Reconsider "non-recoverable". Cancel from Running only ends in Cancelled when this task's token was
-      // cancelled or no RecoveryHelper is set. An EngineTaskException thrown while the token is still live, by a task
-      // with a RecoveryHelper (the engine lifecycle tasks take their descriptor's, and a host may set one on every
-      // engine), goes to Recovering, so the work is retried. Keep the behaviour until it is decided whether such
-      // exceptions should be retried.
-      await FireIfCurrentAsync(run, EngineTaskTrigger.Cancel, failReason: $"Cancelled by the work: {ex.Message}")
+      // An EngineTaskException is not recoverable: the run ends Cancelled, also with a RecoveryHelper (#59, item 1). Cancel
+      // from Running goes to Recovering while the token is live and a RecoveryHelper is set, so the run's token is
+      // cancelled first (under the trigger lock, and only for the current run).
+      await FireIfCurrentAsync(run, EngineTaskTrigger.Cancel, failReason: $"Cancelled by the work: {ex.Message}",
+          cancelRun: true)
         .ConfigureAwait(false);
     }
     catch (Exception ex)

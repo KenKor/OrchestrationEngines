@@ -323,12 +323,11 @@ public class EngineTaskTest
   }
 
   /// <summary>
-  /// Pins the current behaviour (see the TODO in EngineTask.ExecuteWorkAsync): an EngineTaskException maps to
-  /// cancellation, and a task with a recovery policy whose token is still live recovers from that cancellation, so
-  /// its work runs again.
+  /// Verifies that an EngineTaskException from the work is not retried, also by a task with a recovery policy whose
+  /// token is still live (#59, item 1): the task ends Cancelled after one run, with the work's reason.
   /// </summary>
   [Fact]
-  public async Task EngineTask_WorkThrowsEngineTaskException_WithRecovery_RunsTheWorkAgain()
+  public async Task EngineTask_WorkThrowsEngineTaskException_WithRecovery_EndsInCancelledWithoutARetry()
   {
     var runs = 0;
     EngineTask task = null;
@@ -337,8 +336,9 @@ public class EngineTaskTest
 
     await RunToEndAsync(task);
 
-    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
-    runs.Should().Be(2);
+    task.State.Should().Be(EngineTaskState.Cancelled);
+    task.FailReason.Should().Be("Cancelled by the work: The task cannot go on.");
+    runs.Should().Be(1);
   }
 
   /// <summary>

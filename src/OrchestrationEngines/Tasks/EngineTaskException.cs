@@ -18,8 +18,9 @@ namespace OrchestrationEngines.Tasks;
 /// </para>
 ///
 /// <para>
-/// Note: In <see cref="EngineTask"/>, catching <see cref="EngineTaskException"/> currently maps to cancellation
-/// rather than recovery. This is a design choice: these exceptions typically indicate a non-recoverable task condition.
+/// An <see cref="EngineTaskException"/> thrown by a task's work is not retried: the task ends
+/// <see cref="EngineTaskState.Cancelled"/>, with "Cancelled by the work: " and the message as its reason, also when it
+/// has a recovery policy. Throw one for a condition that another attempt cannot change.
 /// </para>
 /// </remarks>
 public abstract class EngineTaskException : Exception
