@@ -242,7 +242,7 @@ public partial class EngineTask
   public DateTime? RunStartedAtUtc { get; private set; }
 
   /// <summary>
-  /// UTC timestamp when the current/last run ended (exit from Running).
+  /// UTC timestamp when the current/last run ended (exit from Running); <c>null</c> while the task runs.
   /// </summary>
   public DateTime? RunEndedAtUtc { get; private set; }
 
@@ -1036,7 +1036,16 @@ public partial class EngineTask
   // ---------------------------
 
   /// <summary>Starts measuring the current task run.</summary>
-  protected virtual void StartCallTimer() => RunStartedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
+  /// <remarks>
+  /// Runs as the entry action of Running, under the trigger lock, like <see cref="StopCallTimer"/>: it must not throw
+  /// or block, or the task could never enter Running. It also clears the end of the previous run, so a task that runs
+  /// again after a recovery (Running, Recovering, Running, without a reset) does not show that end while it runs.
+  /// </remarks>
+  protected virtual void StartCallTimer()
+  {
+    RunStartedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
+    RunEndedAtUtc = null;
+  }
 
   /// <summary>Stops measuring the current task run.</summary>
   /// <remarks>

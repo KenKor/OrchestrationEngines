@@ -281,6 +281,39 @@ public class EngineTaskTest
   }
 
   /// <summary>
+  /// Verifies that a task that runs again after a recovery (Running, Recovering, Running, without a reset) does not
+  /// keep the end time of its failed run: while it runs, it has no end time and measures from its new start.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_RunsAgainAfterRecovery_ClearsTheEndOfTheFailedRun()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var clock = new ManualTimeProvider();
+    var recovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var runs = 0;
+    var task = NewTask("Load", _ => Interlocked.Increment(ref runs) == 1 ? throw new InvalidOperationException("Fails.") : gate.Task, clock)
+      .SetRecovery(new CustomRestarter((_, _) => recovery.Task));
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await WaitUntilAsync(() => task.State == EngineTaskState.Recovering, "the failure must start the recovery");
+
+    clock.Advance(TimeSpan.FromSeconds(5));
+    var restarted = clock.GetUtcNow().UtcDateTime;
+    recovery.SetResult();
+    await WaitUntilAsync(() => task.State == EngineTaskState.Running && Volatile.Read(ref runs) == 2,
+      "the recovery runs the work again");
+    clock.Advance(TimeSpan.FromSeconds(3));
+
+    task.RunStartedAtUtc.Should().Be(restarted);
+    task.RunEndedAtUtc.Should().BeNull("the task is running again");
+    task.RunDuration.Should().Be(TimeSpan.FromSeconds(3), "a running task measures from its latest start until now");
+
+    gate.SetResult();
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+    task.RunEndedAtUtc.Should().Be(restarted + TimeSpan.FromSeconds(3));
+  }
+
+  /// <summary>
   /// Verifies that an EngineTaskException ends a task without a recovery policy in Cancelled.
   /// </summary>
   [Fact]
