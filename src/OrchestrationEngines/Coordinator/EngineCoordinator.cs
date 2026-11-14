@@ -1177,28 +1177,16 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   public async Task InvalidateContextForEngineAsyncInt(string name)
   {
-    bool invalidating;
-    lock (_sync)
-    {
-      invalidating = State == EngineCoordinatorState.Running;
-      AppMachine.Fire(EngineCoordinatorTrigger.InvalidateContext);
-    }
-
+    var wasRunning = FireFromRunning(EngineCoordinatorTrigger.InvalidateContext);
     try
     {
       await Mechanic.InvalidateContextForEngineAsync(name).ConfigureAwait(false);
     }
     finally
     {
-      // An invalidation that leaves every required task completed (an optional engine's, or one the mechanic
-      // rejected) causes no mechanic status change that would bring the coordinator back, so return to Running here,
-      // as RefreshEngineContextAsyncInt does. A required engine that loads again keeps the required tasks open, and
-      // its own Ready event brings the coordinator back.
-      lock (_sync)
-      {
-        if (invalidating && State == EngineCoordinatorState.Initializing && _mechanic?.IsRequiredCompletedWithSuccess() == true)
-          AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
-      }
+      // An optional engine's invalidation, or one the mechanic rejected, leaves the required tasks completed. A required
+      // engine that loads again keeps them open, and its own Ready event brings the coordinator back.
+      ReturnToRunningIfRequiredReady(wasRunning);
     }
   }
 
@@ -1233,31 +1221,50 @@ public partial class EngineCoordinator : IDisposable
   {
     ArgumentNullException.ThrowIfNull(context);
 
-    bool refreshing;
-    lock (_sync)
-    {
-      refreshing = State == EngineCoordinatorState.Running;
-      AppMachine.Fire(EngineCoordinatorTrigger.RefreshEngine);
-    }
-
+    var wasRunning = FireFromRunning(EngineCoordinatorTrigger.RefreshEngine);
     try
     {
       Mechanic.RegisterContext(name, context);
     }
     finally
     {
-      // The coordinator follows the mechanic, and a refresh leaves the mechanic's tasks completed (the engine itself
-      // decides what to reload). No mechanic status change follows that would bring the coordinator back, so return
-      // to Running here.
-      lock (_sync)
-      {
-        // Fix (OptionalEngineTest): required engines only, as in Mechanic_EngineStatusChanged.
-        if (refreshing && State == EngineCoordinatorState.Initializing && _mechanic.IsRequiredCompletedWithSuccess())
-          AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
-      }
+      // A refresh leaves the mechanic's tasks completed: the engine itself decides what to reload.
+      ReturnToRunningIfRequiredReady(wasRunning);
     }
 
     return Task.CompletedTask;
+  }
+
+  /// <summary>
+  /// Fires <paramref name="trigger"/>, which takes the coordinator to Initializing, and returns whether it was Running
+  /// before (see <see cref="ReturnToRunningIfRequiredReady"/>).
+  /// </summary>
+  private bool FireFromRunning(EngineCoordinatorTrigger trigger)
+  {
+    lock (_sync)
+    {
+      var wasRunning = State == EngineCoordinatorState.Running;
+      AppMachine.Fire(trigger);
+      return wasRunning;
+    }
+  }
+
+  /// <summary>
+  /// Returns a coordinator that was Running before a refresh or an invalidation to Running, when the required engines
+  /// are still Ready afterwards.
+  /// </summary>
+  /// <remarks>
+  /// The coordinator follows the mechanic. An operation that leaves the required tasks completed causes no mechanic
+  /// status change that would bring the coordinator back from Initializing, so it is brought back here.
+  /// </remarks>
+  private void ReturnToRunningIfRequiredReady(bool wasRunning)
+  {
+    lock (_sync)
+    {
+      // Fix (OptionalEngineTest): required engines only, as in Mechanic_EngineStatusChanged.
+      if (wasRunning && State == EngineCoordinatorState.Initializing && _mechanic?.IsRequiredCompletedWithSuccess() == true)
+        AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
+    }
   }
 
   /// <summary>

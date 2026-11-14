@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
+using OrchestrationEngines.Helpers;
 using OrchestrationEngines.Tasks;
 
 namespace OrchestrationEngines.Mechanic;
@@ -56,6 +57,8 @@ public class EngineKickStartTask : EngineTask
     /// </remarks>
     private BaseEngine _engineToRestart;
 
+    private readonly MechanicEngine _mechanic;
+
     /// <summary>
     /// Creates a task that starts an engine and ensures it reaches Ready.
     /// </summary>
@@ -72,8 +75,9 @@ public class EngineKickStartTask : EngineTask
             token)
     {
         Descriptor = engineDescriptor;
+        _mechanic = m;
         RecoveryHelper = engineDescriptor.CreateRecoveryHelper(TimeProvider);
-        _workAsync = runtimeToken => KickStartAsync(m, engineDescriptor);
+        _workAsync = runtimeToken => KickStartAsync(m, engineDescriptor, runtimeToken);
     }
 
     /// <summary>
@@ -81,12 +85,14 @@ public class EngineKickStartTask : EngineTask
     /// </summary>
     /// <param name="m">The m.</param>
     /// <param name="engineDescriptor">The engine descriptor.</param>
+    /// <param name="token">The run's token: once the run is ended (a reset of this task), it stops waiting for the engine.</param>
     /// <exception cref="EvaluateException">
     /// Thrown if the engine stops or faults during startup.
     /// </exception>
     protected async Task KickStartAsync(
         MechanicEngine m,
-        EngineDescriptor engineDescriptor)
+        EngineDescriptor engineDescriptor,
+        CancellationToken token = default)
     {
         // Fix (RuntimeRecoveryTest): a kick-start that runs again after recovery finds the engine Faulted (or
         // Stopped by a task's own cancellation, see NeedsResetBeforeRestart) from the previous attempt. Reset its
@@ -103,7 +109,10 @@ public class EngineKickStartTask : EngineTask
         _engineToRestart = null;
 
         // Drive the engine to Ready (initialization complete).
-        await MechanicEngine.EnsureEngineReadyAsync(EngineInstance).ConfigureAwait(false);
+        // A reset of this task ends this run and prepares a restart of the engine, which only the next run carries out;
+        // and the next run starts once this one's work has ended. So stop waiting once this run is ended, or the two wait
+        // for each other (#85).
+        await MechanicEngine.EnsureEngineReadyAsync(EngineInstance).WaitAsync(token).ConfigureAwait(false);
 
         // Validate final engine state.
         if (EngineInstance?.State >= EngineState.Stopped)
@@ -141,11 +150,18 @@ public class EngineKickStartTask : EngineTask
     protected override async Task OnResetEnteredAsync()
     {
         // Reset all engine-level tasks before restarting. That prepares a restart which only this task carries out, when it
-        // runs again.
-        if (EngineInstance != null)
+        // runs again. A run that is still starting the engine (its reset was ended by this one, but its work goes on) has
+        // not recorded it yet: restart the engine it is starting all the same, or a second invalidation that comes in
+        // meanwhile leaves the engine loaded with the previous context (#85). An engine that was never started needs no
+        // restart: the next run starts it.
+        var engine = EngineInstance
+            ?? (_mechanic.Engines.TryGetValue(Descriptor.Name, out var created) && created.State != EngineState.Created
+                ? created
+                : null);
+        if (engine != null)
         {
-            _engineToRestart = EngineInstance as BaseEngine;
-            await EngineInstance.ResetAllTasksAsync().ConfigureAwait(false);
+            _engineToRestart = engine as BaseEngine;
+            await engine.ResetAllTasksAsync().ConfigureAwait(false);
         }
 
         // Clear instance reference; it will be re-established on next run.
