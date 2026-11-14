@@ -1158,6 +1158,9 @@ public partial class EngineCoordinator : IDisposable
   /// <remarks>
   /// This forces re-initialization of the affected engine and its dependents.
   /// </remarks>
+  /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/>.</exception>
+  /// <exception cref="InvalidOperationException">The coordinator is shut down, so the engines would not start
+  /// again.</exception>
   public Task InvalidateContextForEngineAsync(string name, CancellationToken token = default)
     => DispatchAsync(() => InvalidateContextForEngineAsyncInt(name), token);
 

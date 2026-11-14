@@ -137,6 +137,24 @@ public class EngineCoordinatorLifecycleTest
   }
 
   /// <summary>
+  /// Verifies that invalidating a context on a coordinator that is shut down throws, instead of resetting tasks that
+  /// would never run again (#58, item 1).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_AfterShutdown_Throws()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = CreateCoordinator();
+    coordinator.RegisterEngineDescriptor(Descriptor(Name, new NetworkEngine((_, _) => Task.CompletedTask)));
+    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().NotBeNull();
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    var act = () => coordinator.InvalidateContextForEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
+
+    await act.Should().ThrowAsync<InvalidOperationException>();
+  }
+
+  /// <summary>
   /// Verifies that shutting down while an engine loads ends a lookup that waits for that engine, instead of leaving
   /// it waiting forever.
   /// </summary>
