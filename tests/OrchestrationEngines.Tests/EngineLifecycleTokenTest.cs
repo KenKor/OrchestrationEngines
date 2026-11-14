@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -77,14 +77,10 @@ public class EngineLifecycleTokenTest
   /// <summary>
   /// Collects the state changes <paramref name="engine"/> publishes from now on.
   /// </summary>
-  private static List<EngineStatusEventArgs> CaptureStatus(BaseEngine engine)
+  private static ConcurrentQueue<EngineStatusEventArgs> CaptureStatus(BaseEngine engine)
   {
-    var published = new List<EngineStatusEventArgs>();
-    engine.EngineStatusChanged += (_, e) =>
-    {
-      lock (published)
-        published.Add(e);
-    };
+    var published = new ConcurrentQueue<EngineStatusEventArgs>();
+    engine.EngineStatusChanged += (_, e) => published.Enqueue(e);
     return published;
   }
 
@@ -361,16 +357,15 @@ public class EngineLifecycleTokenTest
 
     engine.State.Should().Be(EngineState.Stopped);
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
-    lock (published)
-      published.Select(e => e.State).Should().Equal(EngineState.Faulted, EngineState.Stopped);
+    published.Select(e => e.State).Should().Equal(EngineState.Faulted, EngineState.Stopped);
   }
 
   /// <summary>
-  /// Verifies that giving up a prepared restart of an engine whose parent token was cancelled leaves it Stopped, with
-  /// no fault cause, while a live engine is still Faulted with the reason.
+  /// Verifies that giving up a restart after a cancel of the parent token, which released the restart already, leaves
+  /// the engine Stopped: it does not fault it, and nothing is published with a fault cause.
   /// </summary>
   [Fact]
-  public async Task AbandonRestart_AfterAParentCancel_LeavesTheEngineStoppedWithoutAFaultCause()
+  public async Task AbandonRestart_AfterAParentCancel_LeavesTheEngineStopped()
   {
     var ct = TestContext.Current.CancellationToken;
     using var parent = new CancellationTokenSource();
@@ -378,6 +373,7 @@ public class EngineLifecycleTokenTest
     var published = CaptureStatus(engine);
     await StartReadyAndResetAsync(engine, ct);
     parent.Cancel();
+    engine.State.Should().Be(EngineState.Stopped, "the cancel released the restart");
 
     engine.AbandonRestart("its kick-start was cancelled");
 
