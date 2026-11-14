@@ -389,13 +389,17 @@ An engine's lifecycle tasks (creation, context, kick-start) recover by the descr
 engine whose load fails is retried with backoff, and each attempt is logged. An engine whose start failed reports `Faulted` between attempts, and is started again (with a new task set,
 see below) for the next one; `Faulted` is final only once the policy gives up, which a lookup sees (it waits
 for the retries, and then gets null). With `RestartPolicy.Default` (five restarts in a row, the wait doubling from 1 s
-up to 10 s) a permanent error is given up on after about 25 seconds and six attempts. A host that needs a failed load
-to fault for good at once sets `RestartPolicy = null`. One failure is not retried, whatever the policy: an
-`EngineTaskException` thrown by a task's work (throw one for a condition another attempt cannot change) ends that task
-`Cancelled`, with "Cancelled by the work: " and its message as the reason. A generation switch's restart factory that
-returns the previous engine instead of a new one is such a case (`EngineReturnedPreviousInstanceException`). Every other
-exception is retried. The retries also delay what waits for the engine: a generation
-switch that waits until the next generation is ready keeps the previous generation (and the engine handed over) until
+up to 10 s) a permanent error is given up on after about 25 seconds and six attempts. A host that needs a failed load to
+fault for good at once sets `RestartPolicy = null`. One failure is not retried by the task that throws it, whatever its
+recovery: an `EngineTaskException` (derive from it for a condition another attempt cannot change) thrown by a task's
+work ends that task `Cancelled`, with "Cancelled by the work: " and its message as the reason. So an engine whose
+creation or context task throws one is not created again. A generation switch's restart factory that returns the
+previous engine instead of a new one is such a case (`EngineReturnedPreviousInstanceException`). Such a task is
+`Cancelled`, not `Failed`, so it is logged as a Warning, not an Error, and the tasks and engines that depend on it are
+cancelled with it. A task of the engine itself that ends this way stops the engine (it does not fault it), and the
+kick-start still starts a stopped engine again under the restart policy, which runs the task again. Every other
+exception is retried. The retries also delay what waits for the engine: a generation switch that waits until the next
+generation is ready keeps the previous generation (and the engine handed over) until
 the retries have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, a
 context refresh, another switch, and the lookups and readiness waits that start the coordinator: `GetEngineAsync`,
 `EnsureReadyAsync` and `EnsureEngineTaskReadyAsync`) wait as well.

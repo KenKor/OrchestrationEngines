@@ -483,57 +483,52 @@ public partial class EngineCoordinator : IDisposable
 
     var versionChanged = new HashSet<string>(diff.VersionChangedEngineNames, StringComparer.OrdinalIgnoreCase);
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
-    var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
-    NextCoordinatorCreated?.Invoke(nextCoordinator);
     var handovers = new List<(string Name, Handover Handover)>();
     var rebuiltFromScratch = new List<string>();
+    var runtimeDescriptors = new List<EngineDescriptor>(candidateList.Length);
 
-    // A candidate that cannot be copied (a version below 0, which its setter does not check) throws here: dispose the
-    // next coordinator, which already holds a linked token source and, with the dispatcher on, a dispatcher (#59, 7a).
-    try
+    // Copy every candidate before the next coordinator is created: a candidate that cannot be copied (a version below
+    // 0, which its setter does not check) throws here, and then there is no next coordinator to dispose (#59, 7a).
+    foreach (var candidate in candidateList)
     {
-      foreach (var candidate in candidateList)
+      var name = candidate.Name;
+      currentEngineByName.TryGetValue(name, out var previousEngine);
+      currentDescriptorByName.TryGetValue(name, out var previousDescriptor);
+
+      EngineDescriptor runtimeDescriptor;
+      // Fix (RebuiltEngineSwitchTest): without a restart factory the next engine is built from scratch and cannot take
+      // over anything, yet the previous engine was handed over and kept running until the next generation had started,
+      // so two copies of its data could be loaded at the same time. It is now not handed over, and stopped before the
+      // next generation starts (as in the .NET Framework version).
+      if (previousEngine == null || candidate.RestartFromPrevious == null)
       {
-        var name = candidate.Name;
-        currentEngineByName.TryGetValue(name, out var previousEngine);
-        currentDescriptorByName.TryGetValue(name, out var previousDescriptor);
-
-        EngineDescriptor runtimeDescriptor;
-        // Fix (RebuiltEngineSwitchTest): without a restart factory the next engine is built from scratch and cannot take
-        // over anything, yet the previous engine was handed over and kept running until the next generation had started,
-        // so two copies of its data could be loaded at the same time. It is now not handed over, and stopped before the
-        // next generation starts (as in the .NET Framework version).
-        if (previousEngine == null || candidate.RestartFromPrevious == null)
-        {
-          runtimeDescriptor = CloneDescriptor(candidate);
-          if (previousEngine != null)
-            rebuiltFromScratch.Add(name);
-        }
-        else
-        {
-          var definitionChanged = versionChanged.Contains(name);
-          var dependencyChanged = restartRequired.Contains(name) && !definitionChanged;
-          var handover = new Handover(previousEngine, previousDescriptor);
-          handovers.Add((name, handover));
-
-          runtimeDescriptor = CloneDescriptor(
-            candidate,
-            ct => CreateReplacementEngineFromPreviousAsync(
-              candidate,
-              handover,
-              definitionChanged,
-              dependencyChanged,
-              ct));
-        }
-
-        nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
+        runtimeDescriptor = CloneDescriptor(candidate);
+        if (previousEngine != null)
+          rebuiltFromScratch.Add(name);
       }
+      else
+      {
+        var definitionChanged = versionChanged.Contains(name);
+        var dependencyChanged = restartRequired.Contains(name) && !definitionChanged;
+        var handover = new Handover(previousEngine, previousDescriptor);
+        handovers.Add((name, handover));
+
+        runtimeDescriptor = CloneDescriptor(
+          candidate,
+          ct => CreateReplacementEngineFromPreviousAsync(
+            candidate,
+            handover,
+            definitionChanged,
+            dependencyChanged,
+            ct));
+      }
+
+      runtimeDescriptors.Add(runtimeDescriptor);
     }
-    catch
-    {
-      nextCoordinator.Dispose();
-      throw;
-    }
+
+    var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
+    foreach (var runtimeDescriptor in runtimeDescriptors)
+      nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
 
     // The previous engines are in the handovers now. Drop these references: they live on in this async method's state,
     // which the returned task keeps for as long as anyone holds it.
@@ -1346,17 +1341,6 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Whether <see cref="Dispose"/> has been called; for the tests.
-  /// </summary>
-  internal bool IsDisposed { get; private set; }
-
-  /// <summary>
-  /// Called with the next coordinator as soon as a generation switch has created it; for the tests, which cannot see
-  /// that coordinator when the switch throws.
-  /// </summary>
-  internal Action<EngineCoordinator> NextCoordinatorCreated { get; set; }
-
-  /// <summary>
   /// Disposes coordinator-owned resources.
   /// </summary>
   /// <remarks>
@@ -1367,7 +1351,6 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   public void Dispose()
   {
-    IsDisposed = true;
     _monitorPulse.Dispose();
     _linkedCts.Dispose();
     _mechanicDispatcher?.Dispose();

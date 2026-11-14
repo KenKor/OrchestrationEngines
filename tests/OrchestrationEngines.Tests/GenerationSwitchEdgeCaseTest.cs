@@ -137,20 +137,18 @@ public class GenerationSwitchEdgeCaseTest
 
   /// <summary>
   /// Verifies that a switch whose candidate cannot be copied (a version below 0, which its setter does not check) throws
-  /// without leaking the next coordinator it had already created (#59, item 7a): that one is disposed, and the current
-  /// coordinator stays current and running.
+  /// and leaves the current coordinator current and running (#59, item 7a). The switch copies every candidate before it
+  /// creates the next coordinator, so no next coordinator is left behind to dispose.
   /// </summary>
   [Theory]
   [InlineData(false)]
   [InlineData(true)]
-  public async Task Switch_CandidateCannotBeCopied_DisposesTheNextCoordinator(bool useDispatcher)
+  public async Task Switch_CandidateCannotBeCopied_ThrowsAndKeepsTheCurrentGeneration(bool useDispatcher)
   {
     var ct = TestContext.Current.CancellationToken;
     var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    EngineCoordinator created = null;
-    coordinator.NextCoordinatorCreated = next => created = next;
     var candidate = new EngineDescriptor("A", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
     {
       Version = -1,
@@ -161,8 +159,6 @@ public class GenerationSwitchEdgeCaseTest
       var act = () => coordinator.RestartWithDefinitionsAsync([candidate], waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
 
       await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
-      created.Should().NotBeNull("the switch got as far as creating the next coordinator");
-      created.IsDisposed.Should().BeTrue("a switch that throws must not leak the next coordinator");
       coordinator.Current.Should().BeSameAs(coordinator);
       coordinator.State.Should().Be(EngineCoordinatorState.Running);
     }

@@ -3,7 +3,8 @@ using System;
 namespace OrchestrationEngines.Tasks;
 
 /// <summary>
-/// Base type for exceptions that are intentionally tied to a specific <see cref="EngineTask"/>.
+/// Base type for exceptions that end an <see cref="EngineTask"/>'s run without a retry: a condition another attempt
+/// cannot change.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -12,15 +13,17 @@ namespace OrchestrationEngines.Tasks;
 /// </para>
 ///
 /// <para>
-/// The primary purpose is to retain the originating <see cref="EngineTask"/> instance so that higher-level
-/// orchestration (Mechanic/Coordinator) can make policy decisions (e.g., cancel, fail fast, classify as non-recoverable)
-/// and can log with full task context.
+/// It can carry the originating <see cref="EngineTask"/>, so that higher-level orchestration (Mechanic/Coordinator) can
+/// log with full task context. <see cref="EngineTask"/> is null when the exception is raised where no task can be
+/// reached, such as by a factory (<c>EngineReturnedPreviousInstanceException</c>).
 /// </para>
 ///
 /// <para>
-/// An <see cref="EngineTaskException"/> thrown by a task's work is not retried: the task ends
+/// An <see cref="EngineTaskException"/> thrown by a task's work is not retried by that task: it ends
 /// <see cref="EngineTaskState.Cancelled"/>, with "Cancelled by the work: " and the message as its reason, also when it
-/// has a recovery policy. Throw one for a condition that another attempt cannot change.
+/// has a recovery policy. Derive from it for a condition that another attempt cannot change. A task of an engine that
+/// ends this way stops the engine, it does not fault it; the engine's kick-start may still start the engine again
+/// under its descriptor's restart policy, which then runs the task again.
 /// </para>
 /// </remarks>
 public abstract class EngineTaskException : Exception

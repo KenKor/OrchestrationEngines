@@ -1,13 +1,15 @@
-namespace OrchestrationEngines.Tasks;
+using OrchestrationEngines.Tasks;
+
+namespace OrchestrationEngines.Coordinator;
 
 /// <summary>
-/// Thrown when a generation switch's engine factory (see <c>EngineDescriptor.SetRestartFactory</c>) returns the
+/// Thrown when a generation switch's engine factory (see <see cref="EngineDescriptor.SetRestartFactory"/>) returns the
 /// previous engine instead of a new one: a switch must produce a fresh instance with a fresh token chain.
 /// </summary>
 /// <remarks>
-/// Like every <see cref="EngineTaskException"/>, it is not retried: the factory would return the same instance again.
-/// It is thrown by the factory the switch hands to the engine's creation task, which cannot reach that task, so
-/// <see cref="EngineTaskException.EngineTask"/> is null.
+/// Like every <see cref="EngineTaskException"/>, it is not retried by the task that throws it, here the engine's
+/// creation task: the factory would return the same instance again. It is thrown by the factory the switch hands to
+/// that task, which cannot reach the task, so <see cref="EngineTaskException.EngineTask"/> is null.
 /// </remarks>
 public sealed class EngineReturnedPreviousInstanceException : EngineTaskException
 {
