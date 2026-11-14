@@ -183,7 +183,7 @@ public abstract partial class BaseEngine : IEngine
     _linkedCts = new CancellationTokenSource();
     _token = _linkedCts.Token;
     _applicationLogger = new PrefixLogger(logger ?? NullLogger.Instance, () => LogTag);
-    _cancelRegistration = RegisterReleaseOnCancel();
+    _cancelRegistration = _token.UnsafeRegister(static engine => ((BaseEngine)engine).ReleaseRestartOnCancel(), this);
   }
 
   /// <summary>
@@ -204,7 +204,7 @@ public abstract partial class BaseEngine : IEngine
     _token = _linkedCts.Token;
     _applicationLogger = new PrefixLogger(logger ?? NullLogger.Instance, () => LogTag);
     // Last: a parent token that is cancelled already runs the callback here, which then finds no restart to release.
-    _cancelRegistration = RegisterReleaseOnCancel();
+    _cancelRegistration = _token.UnsafeRegister(static engine => ((BaseEngine)engine).ReleaseRestartOnCancel(), this);
   }
 
   /// <summary>
@@ -1224,11 +1224,11 @@ public abstract partial class BaseEngine : IEngine
     await Task.WhenAll(notStarted.Select(t => t.CancelAsync("Cancelled because the engine was stopped.")))
       .ConfigureAwait(false);
 
-    // Cancelled, so nothing cancels it again (see CancelAll); disposing it takes it off the token it is linked to. Under
-    // the gate, so it waits for another thread's cancel that is still notifying (see _sourceGate).
-    // Not under the gate: the dispose waits for the callback while it runs on another thread (a cancel of the parent
+    // Not under the gate: this dispose waits for the callback while it runs on another thread (a cancel of the parent
     // token), and a subscriber that callback raises Stopped to may take the gate (CancelAll, StopAsync).
     _cancelRegistration.Dispose();
+    // Cancelled, so nothing cancels it again (see CancelAll); disposing it takes it off the token it is linked to. Under
+    // the gate, so it waits for another thread's cancel that is still notifying (see _sourceGate).
     lock (_sourceGate)
       _linkedCts.Dispose();
     ReleaseResources();
@@ -1333,31 +1333,17 @@ public abstract partial class BaseEngine : IEngine
   /// <see cref="CancelAll"/>). Does nothing without one.
   /// </summary>
   /// <remarks>
-  /// The engine is then Stopped before <c>Cancel()</c> returns, and it publishes Stopped on that thread too: under the
-  /// engine's source gate for <see cref="CancelAll"/>, and under the coordinator's lock on its shutdown. A subscriber to
-  /// <see cref="EngineStatusChanged"/> that blocks there, or takes locks in the opposite order, holds up or deadlocks
-  /// that <c>Cancel()</c>. Only when another thread is publishing a change, or the cancel itself came from a
-  /// subscriber, is Stopped queued and published after that change, by the thread publishing it. A
-  /// <see cref="StopAsync"/> on another thread waits for this callback when it disposes the registration, which it does
-  /// outside the source gate for that reason.
+  /// The engine is then Stopped before <c>Cancel()</c> returns, and it publishes Stopped on that thread too (what that
+  /// asks of a subscriber: see <see cref="IEngine.EngineStatusChanged"/>), under the engine's source gate for
+  /// <see cref="CancelAll"/> and under the coordinator's lock on its shutdown. Only when another thread is publishing a
+  /// change, or the cancel itself came from a subscriber, is Stopped queued and published after that change, by the
+  /// thread publishing it. A <see cref="StopAsync"/> on another thread waits for this callback when it disposes the
+  /// registration, which it does outside the source gate for that reason.
   /// </remarks>
   private void ReleaseRestartOnCancel()
   {
     if (RestartPending)
       ReleaseRestart();
-  }
-
-  /// <summary>
-  /// Registers <see cref="ReleaseRestartOnCancel"/> on the engine's token, without the constructing caller's execution
-  /// context: the subscribers it raises Stopped to should not run under that caller's async-locals (logging scopes,
-  /// activities), nor should the registration keep them alive.
-  /// </summary>
-  private CancellationTokenRegistration RegisterReleaseOnCancel()
-  {
-    if (ExecutionContext.IsFlowSuppressed())
-      return _token.Register(ReleaseRestartOnCancel);
-    using (ExecutionContext.SuppressFlow())
-      return _token.Register(ReleaseRestartOnCancel);
   }
 
   /// <summary>

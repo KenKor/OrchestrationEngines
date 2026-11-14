@@ -44,6 +44,27 @@ internal static partial class CancellationExtensions
     }
   }
 
+#if !NETCOREAPP3_0_OR_GREATER
+  /// <summary>
+  /// Stand-in for <c>CancellationToken.UnsafeRegister</c> (.NET Core 3.0 and later): registers
+  /// <paramref name="callback"/> without capturing the caller's execution context, so it runs in the context of the
+  /// thread that cancels.
+  /// </summary>
+  /// <param name="token">The token to register on.</param>
+  /// <param name="callback">What to run when <paramref name="token"/> is cancelled.</param>
+  /// <param name="state">What <paramref name="callback"/> is passed.</param>
+  /// <returns>The registration, to dispose when the callback is no longer wanted.</returns>
+  public static CancellationTokenRegistration UnsafeRegister(this CancellationToken token, Action<object> callback,
+    object state)
+  {
+    // SuppressFlow throws when the flow is suppressed already; the registration captures nothing then anyway.
+    if (ExecutionContext.IsFlowSuppressed())
+      return token.Register(callback, state);
+    using (ExecutionContext.SuppressFlow())
+      return token.Register(callback, state);
+  }
+#endif
+
   [LoggerMessage(Level = LogLevel.Warning, Message = "A callback registered on a cancellation token threw; the cancellation went ahead.")]
   private static partial void LogCancelCallbackFailed(ILogger logger, Exception exception);
 }
