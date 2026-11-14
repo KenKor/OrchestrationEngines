@@ -27,6 +27,27 @@ public class RestartPolicyEnforcerTest
     await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
   }
 
+  /// <summary>
+  /// Starts a task whose run fails and whose recovery calls <paramref name="enforcer"/>, with
+  /// <paramref name="recoveryToken"/> when given (else the recovery's own token); returns the task and the recovery's
+  /// backoff once it waits.
+  /// </summary>
+  private static async Task<(EngineTask Task, Task Backoff)> StartFailingRunAsync(IRestartPolicyEnforcer enforcer,
+    CancellationToken? recoveryToken = null)
+  {
+    var invoked = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var task = NewTask(_ => throw new InvalidOperationException("The run fails."))
+      .SetRecovery(new CustomRestarter((et, token) =>
+      {
+        var restart = enforcer.Invoke(et, recoveryToken ?? token);
+        invoked.TrySetResult(restart);
+        return restart;
+      }));
+    await task.FireAsync(EngineTaskTrigger.Start);
+    var backoff = await invoked.Task.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    return (task, backoff);
+  }
+
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
     var deadline = DateTime.UtcNow + MustComplete;
@@ -90,16 +111,7 @@ public class RestartPolicyEnforcerTest
       MaxBackoff = TimeSpan.FromMinutes(1),
     }, clock);
     using var recovery = new CancellationTokenSource();
-    var invoked = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-    var task = NewTask(_ => throw new InvalidOperationException("The run fails."))
-      .SetRecovery(new CustomRestarter((et, _) =>
-      {
-        var restart = enforcer.Invoke(et, recovery.Token);
-        invoked.TrySetResult(restart);
-        return restart;
-      }));
-    await task.FireAsync(EngineTaskTrigger.Start);
-    var backoff = await invoked.Task.WaitAsync(MustComplete, ct);
+    var (task, backoff) = await StartFailingRunAsync(enforcer, recovery.Token);
     task.CancellationToken.IsCancellationRequested.Should().BeFalse("the task's own token is live during the backoff");
 
     recovery.Cancel();
@@ -159,16 +171,7 @@ public class RestartPolicyEnforcerTest
       MaxBackoff = TimeSpan.FromSeconds(40),
       Jitter = jitter,
     }, clock, nextRandom: () => 0.5);
-    var invoked = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-    var task = NewTask(_ => throw new InvalidOperationException("The run fails."))
-      .SetRecovery(new CustomRestarter((et, token) =>
-      {
-        var restart = enforcer.Invoke(et, token);
-        invoked.TrySetResult(restart);
-        return restart;
-      }));
-    await task.FireAsync(EngineTaskTrigger.Start);
-    var backoff = await invoked.Task.WaitAsync(MustComplete, ct);
+    var (_, backoff) = await StartFailingRunAsync(enforcer);
     await WaitUntilAsync(() => clock.WaitingTimers == 1, "the restart must wait for its backoff");
 
     clock.Advance(TimeSpan.FromMilliseconds(expectedWaitMs - 1));
@@ -195,10 +198,11 @@ public class RestartPolicyEnforcerTest
   }
 
   /// <summary>
-  /// Verifies that with full jitter and the enforcer's own random source, the wait never exceeds the backoff.
+  /// Verifies that with full jitter, a wait drawn from the enforcer's own random source ends within the backoff: a
+  /// smoke test of that source, with one draw.
   /// </summary>
   [Fact]
-  public async Task RestartPolicyEnforcer_Invoke_FullJitter_WaitsNoLongerThanTheBackoff()
+  public async Task RestartPolicyEnforcer_Invoke_FullJitterWithTheSharedRandom_EndsWithinTheBackoff()
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
@@ -208,16 +212,7 @@ public class RestartPolicyEnforcerTest
       MaxBackoff = TimeSpan.FromSeconds(10),
       Jitter = 1,
     }, clock);
-    var invoked = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-    var task = NewTask(_ => throw new InvalidOperationException("The run fails."))
-      .SetRecovery(new CustomRestarter((et, token) =>
-      {
-        var restart = enforcer.Invoke(et, token);
-        invoked.TrySetResult(restart);
-        return restart;
-      }));
-    await task.FireAsync(EngineTaskTrigger.Start);
-    var backoff = await invoked.Task.WaitAsync(MustComplete, ct);
+    var (_, backoff) = await StartFailingRunAsync(enforcer);
 
     clock.Advance(TimeSpan.FromSeconds(10));
 

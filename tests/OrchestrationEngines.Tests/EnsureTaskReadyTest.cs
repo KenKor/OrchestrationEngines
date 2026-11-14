@@ -9,6 +9,7 @@ using OrchestrationEngines.Mechanic;
 using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
+using static OrchestrationEngines.Tests.TestRestartPolicies;
 
 namespace OrchestrationEngines.Tests;
 
@@ -39,13 +40,7 @@ public class EnsureTaskReadyTest
       CreateTask("Cancelled", _ => throw new OperationCanceledException("The query timed out."), requiredForRunning: false);
       CreateTask("AfterBroken", _ => Task.CompletedTask, requiredForRunning: false).AddDependsOn(broken);
       CreateTask("Retried", _ => throw new LoadException("Still missing."), requiredForRunning: false)
-        .SetRecovery(new RestartPolicy
-        {
-          MaxRestartsInWindow = 1,
-          Window = TimeSpan.FromMinutes(10),
-          InitialBackoff = TimeSpan.Zero,
-          MaxBackoff = TimeSpan.Zero,
-        });
+        .SetRecovery(NoWait(1));
       CreateTask("Slow", token => Task.Delay(Timeout.Infinite, token), requiredForRunning: false)
         .SetTimeOut(TimeSpan.FromMilliseconds(50));
     }
@@ -286,13 +281,7 @@ public class EnsureTaskReadyTest
     var runs = 0;
     var task = new EngineTask("Load", _ => ++runs == 1 ? throw new LoadException("First run fails.") : Task.CompletedTask,
         requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
-      .SetRecovery(new RestartPolicy
-      {
-        MaxRestartsInWindow = 2,
-        Window = TimeSpan.FromMinutes(10),
-        InitialBackoff = TimeSpan.Zero,
-        MaxBackoff = TimeSpan.Zero,
-      });
+      .SetRecovery(NoWait(2));
 
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, ct);

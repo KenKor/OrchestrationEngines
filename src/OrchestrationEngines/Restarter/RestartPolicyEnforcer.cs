@@ -44,18 +44,6 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// </summary>
   private readonly Func<double> _nextRandom;
 
-#if NET6_0_OR_GREATER
-  private static double NextSharedRandom() => Random.Shared.NextDouble();
-#else
-  // Random is not thread-safe, and enforcers of many tasks draw from it at once.
-  private static readonly Random SharedRandom = new();
-
-  private static double NextSharedRandom()
-  {
-    lock (SharedRandom) return SharedRandom.NextDouble();
-  }
-#endif
-
   /// <summary>
   /// Gets the timestamps (UTC) of recorded restart attempts used to enforce the restart-rate limit.
   /// </summary>
@@ -110,7 +98,7 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// </list>
   /// </remarks>
   public RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider = null)
-    : this(policy, timeProvider, NextSharedRandom)
+    : this(policy, timeProvider, () => Random.Shared.NextDouble())
   {
   }
 
@@ -124,7 +112,7 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   {
     _policy = policy ?? throw new ArgumentNullException(nameof(policy));
     _timeProvider = timeProvider ?? TimeProvider.System;
-    _nextRandom = nextRandom ?? throw new ArgumentNullException(nameof(nextRandom));
+    _nextRandom = nextRandom;
     _policy.Validate();
     CurrentBackoff = _policy.InitialBackoff;
   }

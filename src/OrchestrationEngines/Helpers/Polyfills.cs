@@ -207,3 +207,44 @@ namespace System.Threading.Tasks
 }
 
 #endif
+
+#if !NET6_0_OR_GREATER
+
+namespace System
+{
+  /// <summary>
+  /// The shared, thread-safe <see cref="Random"/> that .NET 6 offers as <c>Random.Shared</c>.
+  /// </summary>
+  internal static class RandomPolyfills
+  {
+    private static readonly Random SharedInstance = new LockedRandom();
+
+    extension(Random)
+    {
+      /// <summary>A <see cref="Random"/> that can be used from any thread at once.</summary>
+      public static Random Shared => SharedInstance;
+    }
+
+    /// <summary>
+    /// A <see cref="Random"/> that takes a lock around each draw, since <see cref="Random"/> itself is not thread-safe.
+    /// </summary>
+    private sealed class LockedRandom : Random
+    {
+      private readonly object _lock = new();
+
+      public override int Next() { lock (_lock) return base.Next(); }
+
+      public override int Next(int maxValue) { lock (_lock) return base.Next(maxValue); }
+
+      public override int Next(int minValue, int maxValue) { lock (_lock) return base.Next(minValue, maxValue); }
+
+      public override double NextDouble() { lock (_lock) return base.NextDouble(); }
+
+      public override void NextBytes(byte[] buffer) { lock (_lock) base.NextBytes(buffer); }
+
+      protected override double Sample() { lock (_lock) return base.Sample(); }
+    }
+  }
+}
+
+#endif

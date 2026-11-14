@@ -11,6 +11,7 @@ using OrchestrationEngines.Engine;
 using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
+using static OrchestrationEngines.Tests.TestRestartPolicies;
 
 namespace OrchestrationEngines.Tests;
 
@@ -236,13 +237,7 @@ public class EngineReadinessApiTest
     var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), logger, useDispatcher: false);
     var descriptor = coordinator.RegisterEngine("E", _ => Task.FromResult<IEngine>(new FailsOnceEngine()));
     if (mayRestart)
-      descriptor.SetRestartPolicy(new RestartPolicy
-      {
-        MaxRestartsInWindow = 3,
-        Window = TimeSpan.FromMinutes(10),
-        InitialBackoff = TimeSpan.Zero,
-        MaxBackoff = TimeSpan.Zero,
-      });
+      descriptor.SetRestartPolicy(NoWait(3));
     else
       descriptor.WithoutRestarts();
 
