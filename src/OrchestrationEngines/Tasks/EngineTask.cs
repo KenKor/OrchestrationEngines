@@ -113,8 +113,9 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// It is replaced, and the previous one disposed, when the task is reset or its recovery starts after a cancel; and
-  /// it is disposed once the engine has replaced the task's set and the task's latest run has ended. A derived task
-  /// must not hold on to it past its run: read <see cref="CancellationToken"/> instead.
+  /// it is disposed once the task's set has been replaced, or dropped before it was published (a failed set-up, or a
+  /// stop during it), and the task's latest run has ended. A derived task must not hold on to it past its run: read
+  /// <see cref="CancellationToken"/> instead.
   /// </remarks>
   protected CancellationTokenSource _linkedCts;
 
