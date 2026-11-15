@@ -357,15 +357,15 @@ only. `EnsureReadyAsync(taskName)` is the same wait without a token, with the sa
 still only waits.
 
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
-engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing, and a stop during a
-start's set-up leaves the task set as it was. A start replaces the
-task set; the previous set's tasks that have not completed (a background monitor, tasks someone started or waits on) are
-ended first: they go to Cancelled, which releases their waiters, and never run again. The new set's tasks start once the
-work of the replaced set has stopped, so the two sets' work never runs at the same time. Once its work has ended, each
-task of the replaced set has its token cancelled (a completed task's too, so work it left running stops) and its token
-source disposed; a token whose source is disposed still reports cancellation, but its `WaitHandle` throws
-`ObjectDisposedException`. The same holds for a task's token after a reset or a recovery, and for the engine's token
-after a stop.
+engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A stop during a
+start's set-up drops the new set unstarted; if the set-up then returns normally, the previous set stays, and if it
+throws, the engine is left with an empty set, as after any failed set-up. A start replaces the task set; the previous
+set's tasks that have not completed (a background monitor, tasks someone started or waits on) are ended first: they go
+to Cancelled, which releases their waiters, and never run again. The new set's tasks start once the work of the replaced
+set has stopped, so the two sets' work never runs at the same time. Once its work has ended, each task of the replaced
+set has its token cancelled (a completed task's too, so work it left running stops) and its token source disposed; a
+token whose source is disposed still reports cancellation, but its `WaitHandle` throws `ObjectDisposedException`. The
+same holds for a task's token after a reset or a recovery, and for the engine's token after a stop.
 
 Cancellation handlers must not block. On .NET Framework (the `netstandard2.0` build), the code after a cancelled
 `await` in a task's work (its `catch (OperationCanceledException)`, for example) can run inline on the thread that
