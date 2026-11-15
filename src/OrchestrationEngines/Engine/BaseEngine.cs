@@ -291,8 +291,8 @@ public abstract partial class BaseEngine : IEngine
   protected virtual void RequestCancellation() => CancelSource();
 
   /// <summary>
-  /// Cancels the engine's source. Once cancelled, it may have been disposed by a stop (see <see cref="StopAsync"/>);
-  /// <see cref="CancellationExtensions.CancelBestEffort"/> leaves it alone. <see cref="CancelAll"/> and <see cref="StopAsync"/> call this, not the virtual
+  /// Cancels the engine's source. Once cancelled, it may have been disposed by a stop (see
+  /// <see cref="StopAsync"/>); <see cref="CancellationExtensions.CancelBestEffort"/> leaves it alone. <see cref="CancelAll"/> and <see cref="StopAsync"/> call this, not the virtual
   /// <see cref="RequestCancellation"/>, so an override cannot keep a stop from cancelling.
   /// </summary>
   private void CancelSource()
