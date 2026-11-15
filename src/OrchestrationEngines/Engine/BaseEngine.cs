@@ -45,8 +45,9 @@ public abstract partial class BaseEngine : IEngine
   /// Makes cancelling <see cref="_linkedCts"/> and disposing it exclusive: a source is flagged cancelled before its
   /// callbacks run, so without it a stop could dispose the source while another thread's cancel is still notifying, and
   /// the tasks' sources linked to it would not be cancelled. It covers the cancels this engine makes (CancelAll,
-  /// RequestCancellation). A cancel that comes through the parent token is safe without it: the cascade to the tasks'
-  /// sources runs inside the link's callback, and a dispose meanwhile waits for that callback, so for all of the cascade.
+  /// RequestCancellation). A cancel that comes through the parent token is safe without it: the cascade to the
+  /// tasks' sources runs inside the link's callback, and a dispose meanwhile waits for that callback, so for all of
+  /// the cascade.
   /// </summary>
   private readonly object _sourceGate = new();
 
