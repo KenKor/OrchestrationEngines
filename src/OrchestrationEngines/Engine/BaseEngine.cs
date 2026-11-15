@@ -714,7 +714,7 @@ public abstract partial class BaseEngine : IEngine
         _buildingTaskSet = NewTaskSet();
       }
       var replacedWork = WhenAllPending(pending);
-      bool afterFailedSetUp;
+      var afterFailedSetUp = false;
       var stoppedDuringSetUp = false;
       Dictionary<string, EngineTask> dropped = null;
       try
@@ -730,7 +730,6 @@ public abstract partial class BaseEngine : IEngine
           {
             dropped = _buildingTaskSet;
             _buildingTaskSet = null;
-            afterFailedSetUp = false;
           }
           else
           {
