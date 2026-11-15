@@ -360,6 +360,39 @@ public class TaskSetSetUpFailureTest
   }
 
   /// <summary>
+  /// Verifies that a set-up during which the engine is stopped, and which then returns normally, does not publish its
+  /// set: the engine keeps the set it had, as after a stop that came before the set-up, and none of the new tasks is
+  /// started. Without the fix, the new set was published and its tasks were started, only to cancel.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_StoppedDuringASetUpThatReturns_DoesNotPublishTheSet()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var ran = 0;
+    EngineTask made = null;
+    var engine = new SetUpEngine
+    {
+      SetUp = e =>
+      {
+        made = e.Make("A", _ =>
+        {
+          Interlocked.Increment(ref ran);
+          return Task.CompletedTask;
+        });
+        e.StopAsync().GetAwaiter().GetResult();
+      }
+    };
+
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Stopped);
+    engine.Tasks.Should().BeEmpty("the set built during the stop is not published");
+    made.State.Should().Be(EngineTaskState.Created, "a task of the dropped set is not started");
+    Volatile.Read(ref ran).Should().Be(0);
+  }
+
+  /// <summary>
   /// Verifies that a stop that comes in after the set-up failed, but before the engine's state was decided, leaves the
   /// engine Stopped: the stop is final. The failure log is the only call in that window, so the stop comes from there.
   /// Without the fix, the engine was found not stopped, the stop then published Stopped, and Faulted overwrote it.
