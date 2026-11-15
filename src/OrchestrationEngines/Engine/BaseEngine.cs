@@ -284,9 +284,7 @@ public abstract partial class BaseEngine : IEngine
   /// Requests cancellation of all engine activities.
   /// </summary>
   /// <remarks>
-  /// The token's callbacks run inline, under the engine's source gate, so a <see cref="CancelAll"/> or
-  /// <see cref="StopAsync"/> on another thread waits for them. A callback that waits for another cancel or stop of this
-  /// engine may deadlock: hand that off (for example with <c>Task.Run</c>).
+  /// As for <see cref="CancelAll"/>: the token's callbacks run under the engine's source gate.
   /// </remarks>
   protected virtual void RequestCancellation() => CancelSource();
 
