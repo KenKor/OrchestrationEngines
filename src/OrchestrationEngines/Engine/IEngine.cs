@@ -105,6 +105,9 @@ public interface IEngine
   /// <para>
   /// This method is typically invoked by <see cref="EngineKickStartTask"/>.
   /// </para>
+  /// <para>
+  /// Stopping is final: on an engine that has been stopped (or cancelled), it does nothing.
+  /// </para>
   /// </remarks>
   Task StartAsync();
 
@@ -204,6 +207,9 @@ public interface IEngine
   /// <see cref="BaseEngine"/>, gives the restart up with <see cref="BaseEngine.AbandonRestart"/>), every wait until the
   /// engine is ready waits.
   /// </para>
+  /// <para>
+  /// On an engine that has been stopped (or cancelled), it does nothing: a stopped engine is not started again.
+  /// </para>
   /// </remarks>
   Task ResetAllTasksAsync();
 
@@ -218,6 +224,9 @@ public interface IEngine
   /// <para>
   /// As <see cref="ResetAllTasksAsync"/>, it prepares a restart that the caller must follow up with
   /// <see cref="StartAsync"/> or <see cref="StopAsync"/>.
+  /// </para>
+  /// <para>
+  /// On an engine that has been stopped (or cancelled), it does nothing, as <see cref="ResetAllTasksAsync"/>.
   /// </para>
   /// </remarks>
   Task ResetFailedTasksAsync();

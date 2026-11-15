@@ -45,8 +45,9 @@ public abstract partial class BaseEngine : IEngine
   /// Makes cancelling <see cref="_linkedCts"/> and disposing it exclusive: a source is flagged cancelled before its
   /// callbacks run, so without it a stop could dispose the source while another thread's cancel is still notifying, and
   /// the tasks' sources linked to it would not be cancelled. It covers the cancels this engine makes (CancelAll,
-  /// RequestCancellation), not one that comes through the parent token: that cascade runs without it, and a dispose
-  /// meanwhile waits for the link's callback that is running, not for the callbacks it goes on to call.
+  /// RequestCancellation). A cancel that comes through the parent token is safe without it: the cascade to the
+  /// tasks' sources runs inside the link's callback, and a dispose meanwhile waits for that callback, so for all of
+  /// the cascade.
   /// </summary>
   private readonly object _sourceGate = new();
 
@@ -283,12 +284,16 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Requests cancellation of all engine activities.
   /// </summary>
+  /// <remarks>
+  /// As for <see cref="CancelAll"/>: the token's callbacks run under the engine's source gate.
+  /// </remarks>
   protected virtual void RequestCancellation() => CancelSource();
 
   /// <summary>
-  /// Cancels the engine's source. Once cancelled, it may have been disposed by a stop (see StopAsync);
-  /// CancelBestEffort leaves it alone. <see cref="CancelAll"/> and <see cref="StopAsync"/> call this, not the virtual
-  /// <see cref="RequestCancellation"/>, so an override cannot keep a stop from cancelling.
+  /// Cancels the engine's source. Once cancelled, it may have been disposed by a stop (see <see cref="StopAsync"/>);
+  /// <see cref="CancellationExtensions.CancelBestEffort"/> leaves it alone. <see cref="CancelAll"/> and
+  /// <see cref="StopAsync"/> call this, not the virtual <see cref="RequestCancellation"/>, so an override cannot keep a
+  /// stop from cancelling.
   /// </summary>
   private void CancelSource()
   {
@@ -711,25 +716,39 @@ public abstract partial class BaseEngine : IEngine
         _buildingTaskSet = NewTaskSet();
       }
       var replacedWork = WhenAllPending(pending);
-      bool afterFailedSetUp;
+      var afterFailedSetUp = false;
+      var stoppedDuringSetUp = false;
+      Dictionary<string, EngineTask> dropped = null;
       try
       {
         SetUpTasks();
         lock (_taskSetChange)
         {
-          // Before the set is published: the tasks of a cyclic set would wait for each other for good, and so would
-          // everyone waiting for them.
-          EngineTask.CheckForCycles(_buildingTaskSet.Values);
-          if (!replacedWork.IsCompleted)
+          // A stop that came in during the set-up: the set is not published, and none of it is started, as after a stop
+          // that came before the set-up (see above). Its tasks would only cancel. Decided under the lock, so the set is
+          // dropped or published as a whole.
+          stoppedDuringSetUp = IsCancellationRequested;
+          if (stoppedDuringSetUp)
           {
-            foreach (var task in _buildingTaskSet.Values)
-              task.RunAfter(replacedWork);
+            dropped = _buildingTaskSet;
+            _buildingTaskSet = null;
           }
-          Volatile.Write(ref _taskSet, _buildingTaskSet);
-          _buildingTaskSet = null;
-          _hasStarted = true;
-          afterFailedSetUp = SetUpFailed;
-          _setUpException = null;
+          else
+          {
+            // Before the set is published: the tasks of a cyclic set would wait for each other for good, and so would
+            // everyone waiting for them.
+            EngineTask.CheckForCycles(_buildingTaskSet.Values);
+            if (!replacedWork.IsCompleted)
+            {
+              foreach (var task in _buildingTaskSet.Values)
+                task.RunAfter(replacedWork);
+            }
+            Volatile.Write(ref _taskSet, _buildingTaskSet);
+            _buildingTaskSet = null;
+            _hasStarted = true;
+            afterFailedSetUp = SetUpFailed;
+            _setUpException = null;
+          }
         }
       }
       catch (Exception ex)
@@ -761,8 +780,19 @@ public abstract partial class BaseEngine : IEngine
       }
       finally
       {
-        // Published over, or replaced by an empty set: the replaced set is gone either way.
-        ReleaseTokens(replacedTasks);
+        // Published over, or replaced by an empty set: the replaced set is gone either way. A dropped set leaves it in
+        // place, with its sources: they are cancelled through the engine's token, and go with the engine.
+        if (!stoppedDuringSetUp)
+          ReleaseTokens(replacedTasks);
+      }
+
+      if (stoppedDuringSetUp)
+      {
+        // Its tasks never ran. (An overlapping set-up may have taken the set already.)
+        if (dropped != null)
+          ReleaseTokens(dropped.Values);
+        ReleaseRestartIfCancelled();
+        return;
       }
 
       // Fire the start trigger for those that we're started yet.
@@ -1429,6 +1459,11 @@ public abstract partial class BaseEngine : IEngine
   /// <summary>
   /// Cancels all engine activity.
   /// </summary>
+  /// <remarks>
+  /// The token's callbacks run inline, under the engine's source gate, so another <see cref="CancelAll"/> or a
+  /// <see cref="StopAsync"/> on another thread waits for them. A callback that waits for another cancel or stop of this
+  /// engine may deadlock: hand that off (for example with <c>Task.Run</c>).
+  /// </remarks>
   public void CancelAll()
   {
     LogCancellingAllTasks();
