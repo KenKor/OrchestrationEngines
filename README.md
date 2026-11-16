@@ -23,7 +23,7 @@ dotnet test
 
 The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
-Packing is blocked until the licence and other packaging details are decided. See `docs/Releasing.md`.
+Packing is blocked until the repository URL and other packaging details are decided. See `docs/Releasing.md`.
 
 ## Code coverage
 
@@ -39,3 +39,14 @@ copy of either option makes the test run fail before any test runs, with an erro
 
 This writes one Cobertura report per target framework to `TestResults/`. The settings limit the measurement to the
 library itself. Any tool that reads Cobertura can show the report, for example ReportGenerator or a CI coverage task.
+
+## Licence
+
+Copyright (c) 2026 Spatial Eye. Licensed under the [Mozilla Public License 2.0](LICENSE).
+
+You may use, fork and change the code. A file of this library that you change and distribute stays under the MPL-2.0,
+with its source available and its copyright and licence notices kept. Your own code that uses the library may be under
+any licence.
+
+The licence grants no rights to Spatial Eye's names or trademarks, including the name `OrchestrationEngines` and the
+package id (section 2.3 of the licence).

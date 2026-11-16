@@ -13,8 +13,8 @@ every pull request and every `v*` tag:
 | --- | --- |
 | Build and test (net10.0 and net48, on Windows) | Works |
 | Coverage report as a build artifact | Works |
-| Pack on a pull request or a push to `main` | Warns until the licence, copyright and repository URL are set |
-| Pack on a `v*` tag | Fails until the licence, copyright and repository URL are set |
+| Pack on a pull request or a push to `main` | Warns until the repository URL is set |
+| Pack on a `v*` tag | Fails until the repository URL is set |
 | Publish (only on a `v*` tag) | Fails until publishing is set up |
 
 The warning on pull requests lets their checks pass. The package those builds produce is for checking only and must not
@@ -22,12 +22,17 @@ be published. Packing locally fails, like on a tag, with a message that names wh
 `CheckPackagingDecisions` target in `Directory.Build.targets`; `RequirePackagingDecisions=false` turns the error into the
 warning.
 
+## Decided
+
+| Decision | Where it is |
+| --- | --- |
+| Licence: Mozilla Public License 2.0 | `LICENSE`, and `PackageLicenseExpression` (`MPL-2.0`) in `Directory.Build.props` |
+| Copyright holder: Spatial Eye | `Copyright` in `Directory.Build.props` |
+
 ## Open decisions
 
 | Decision | Where it goes | Notes |
 | --- | --- | --- |
-| Licence | `PackageLicenseExpression` in `Directory.Build.props`, plus a `LICENSE` file | An SPDX expression, for example `MIT` or `Apache-2.0`. |
-| Copyright holder | `Copyright` in `Directory.Build.props` | |
 | Repository home | `RepositoryUrl` in `Directory.Build.props` | Where the repository will live for good. Debuggers fetch source from it through SourceLink. |
 | Package feed and owner | `publish` job in the workflow | nuget.org, a private feed, or both. On nuget.org: which account or organisation owns the package. |
 | Package ID | `PackageId` in the `.csproj` | Check that `OrchestrationEngines` is still free on nuget.org; an ID prefix can be reserved there. |
@@ -37,7 +42,7 @@ warning.
 
 ## Finishing the pipeline
 
-1. Set the licence, copyright and repository URL in `Directory.Build.props`, and add the `LICENSE` file.
+1. Set the repository URL in `Directory.Build.props`.
 2. Remove the `CheckPackagingDecisions` target from `Directory.Build.targets` (and the file, if nothing else is in it).
 3. Set up versioning. With version tags, a release is then started by pushing a tag such as `v1.0.0`.
 4. Replace the step in the `publish` job with a download of the `packages` artifact and a
