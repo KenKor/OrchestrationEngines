@@ -13,8 +13,8 @@ every pull request and every `v*` tag:
 | --- | --- |
 | Build and test (net10.0 and net48, on Windows) | Works |
 | Coverage report as a build artifact | Works |
-| Pack on a pull request or a push to `main` | Warns until the repository URL is set |
-| Pack on a `v*` tag | Fails until the repository URL is set |
+| Pack on a pull request or a push to `main` | Warns until packaging is set up |
+| Pack on a `v*` tag | Fails until packaging is set up |
 | Publish (only on a `v*` tag) | Fails until publishing is set up |
 
 The warning on pull requests lets their checks pass. The package those builds produce is for checking only and must not

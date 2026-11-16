@@ -23,7 +23,7 @@ dotnet test
 
 The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
-Packing is blocked until the repository URL and other packaging details are decided. See `docs/Releasing.md`.
+Packing is blocked until the open packaging decisions in `docs/Releasing.md` are made.
 
 ## Code coverage
 
@@ -42,11 +42,15 @@ library itself. Any tool that reads Cobertura can show the report, for example R
 
 ## Licence
 
-Copyright (c) 2026 Spatial Eye. Licensed under the [Mozilla Public License 2.0](LICENSE).
+Copyright (c) 2026 Spatial Eye.
 
-You may use, fork and change the code. A file of this library that you change and distribute stays under the MPL-2.0,
-with its source available and its copyright and licence notices kept. Your own code that uses the library may be under
-any licence.
+This notice applies to every source file in this repository: This Source Code Form is subject to the terms of the
+Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at
+https://mozilla.org/MPL/2.0/. The full text is in `LICENSE`.
 
-The licence grants no rights to Spatial Eye's names or trademarks, including the name `OrchestrationEngines` and the
-package id (section 2.3 of the licence).
+You may use, fork and change the code. If you distribute the library, changed or not, its files stay under the
+MPL-2.0: you make their source available to your recipients and keep the copyright and licence notices. Your own code
+that uses the library may be under any licence.
+
+The MPL-2.0 grants no trademark rights (section 2.3). Spatial Eye keeps the name `OrchestrationEngines` and the package
+id for its own releases; a fork that is distributed uses its own name.

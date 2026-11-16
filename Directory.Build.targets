@@ -18,8 +18,6 @@
   -->
   <Target Name="CheckPackagingDecisions" BeforeTargets="GenerateNuspec" Condition="'$(IsPackable)' == 'true'">
     <ItemGroup>
-      <_MissingPackagingSetting Include="PackageLicenseExpression" Condition="'$(PackageLicenseExpression)' == ''" />
-      <_MissingPackagingSetting Include="Copyright" Condition="'$(Copyright)' == ''" />
       <_MissingPackagingSetting Include="RepositoryUrl" Condition="'$(_RepositoryUrlSetByHand)' != 'true'" />
     </ItemGroup>
     <Error Condition="'@(_MissingPackagingSetting)' != '' And '$(RequirePackagingDecisions)' == 'true'" Code="OEPACK001"

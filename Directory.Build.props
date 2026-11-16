@@ -16,8 +16,8 @@
   </PropertyGroup>
 
   <!--
-    Packaging settings (see docs/Releasing.md). Packing fails until each one is set; the check is in
-    Directory.Build.targets. The repository URL is still open.
+    Packaging settings (see docs/Releasing.md). Packing fails while a decided setting is missing; the check
+    is in Directory.Build.targets.
   -->
   <PropertyGroup>
     <!-- SPDX licence expression; the text is in LICENSE. -->
