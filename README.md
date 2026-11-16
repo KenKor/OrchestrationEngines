@@ -48,9 +48,9 @@ This notice applies to every source file in this repository: This Source Code Fo
 Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at
 https://mozilla.org/MPL/2.0/. The full text is in `LICENSE`.
 
-You may use, fork and change the code. If you distribute the library, changed or not, its files stay under the
-MPL-2.0: you make their source available to your recipients and keep the copyright and licence notices. Your own code
-that uses the library may be under any licence.
+You may use, fork and change the code. If you distribute the library, changed or not, its source files stay under the
+MPL-2.0 and keep their copyright and licence notices, and you make that source available to your recipients, also when
+you ship it compiled. Your own code that uses the library may be under any licence.
 
-The MPL-2.0 grants no trademark rights (section 2.3). Spatial Eye keeps the name `OrchestrationEngines` and the package
-id for its own releases; a fork that is distributed uses its own name.
+The MPL-2.0 grants no rights in the trademarks, service marks or logos of Spatial Eye or any other contributor, except as
+needed for the licence notices (section 2.3).
