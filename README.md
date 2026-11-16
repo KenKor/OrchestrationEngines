@@ -23,7 +23,7 @@ dotnet test
 
 The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
-Packing is blocked until the open packaging decisions in `docs/Releasing.md` are made.
+Packing is blocked until the repository URL is set (`RepositoryUrl` in `Directory.Build.props`, see `docs/Releasing.md`).
 
 ## Code coverage
 

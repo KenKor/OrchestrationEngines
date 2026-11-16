@@ -28,6 +28,7 @@ warning.
 | --- | --- |
 | Licence: Mozilla Public License 2.0 | `LICENSE`, and `PackageLicenseExpression` (`MPL-2.0`) in `Directory.Build.props` |
 | Copyright holder: Spatial Eye | `Copyright` in `Directory.Build.props` |
+| Main author: Spatial Eye B.V., then the contributors | `Authors` in `Directory.Build.props` |
 
 ## Open decisions
 
