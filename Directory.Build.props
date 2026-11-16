@@ -16,13 +16,13 @@
   </PropertyGroup>
 
   <!--
-    Packaging decisions that are still open (see docs/Releasing.md). Packing fails until each one is set; the check is in
-    Directory.Build.targets.
+    Packaging settings (see docs/Releasing.md). Packing fails until the repository URL is set; the check is
+    in Directory.Build.targets.
   -->
   <PropertyGroup>
-    <!-- SPDX licence expression, for example MIT or Apache-2.0. -->
-    <PackageLicenseExpression></PackageLicenseExpression>
-    <Copyright></Copyright>
+    <!-- SPDX licence expression; the text is in LICENSE. -->
+    <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
+    <Copyright>Copyright (c) 2026 Spatial Eye</Copyright>
     <!-- The repository's final home; the package links to it and SourceLink points debuggers at it. -->
     <RepositoryUrl></RepositoryUrl>
   </PropertyGroup>
