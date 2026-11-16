@@ -13,8 +13,8 @@
   </PropertyGroup>
 
   <!--
-    Stops packing until the open packaging decisions are made (see docs/Releasing.md). Building and testing are not
-    affected. Remove this target once all decisions in docs/Releasing.md are done.
+    Stops packing until the repository URL is set (see docs/Releasing.md). Building and testing are not affected.
+    Remove this target once RepositoryUrl is set in Directory.Build.props.
   -->
   <Target Name="CheckPackagingDecisions" BeforeTargets="GenerateNuspec" Condition="'$(IsPackable)' == 'true'">
     <ItemGroup>

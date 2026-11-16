@@ -60,8 +60,8 @@ jobs:
           path: TestResults/
           if-no-files-found: ignore
 
-      # Until the packaging decisions are made (see Directory.Build.targets) this warns, except on a version tag, where
-      # it fails: nothing may be released before then.
+      # Until the repository URL is set (see Directory.Build.targets) this warns, except on a version tag, where it
+      # fails: nothing may be released before then.
       - name: Pack
         run: >-
           dotnet pack src/OrchestrationEngines/OrchestrationEngines.csproj --no-build --configuration Release
