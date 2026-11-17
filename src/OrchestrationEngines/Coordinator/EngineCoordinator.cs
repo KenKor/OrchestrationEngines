@@ -1130,7 +1130,12 @@ public partial class EngineCoordinator : IDisposable
   /// has failed (see <see cref="MechanicEngine.ResetEngineTasksAsync"/>).
   /// </remarks>
   /// <exception cref="InvalidOperationException">
-  /// The engine was not created, never started, is stopped, or is not a <see cref="BaseEngine"/>.
+  /// The engine was not created (its kick-start's exception is the <see cref="Exception.InnerException"/>), never
+  /// started, or is not a <see cref="BaseEngine"/>.
+  /// </exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The engine was stopped before or during the reset, and no next generation has it (its
+  /// <see cref="EngineTaskNotReadyException.State"/> is Cancelled).
   /// </exception>
   public async Task ResetTasksForEngineAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
     CancellationToken token = default)

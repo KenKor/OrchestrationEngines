@@ -394,11 +394,12 @@ public partial class MechanicEngine : BaseEngine
   /// <param name="token">Cancels the wait for the kick-start; once the reset has begun, it is not cancelled.</param>
   /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
   /// <exception cref="InvalidOperationException">
-  /// The engine was not created, never started, is stopped, or is not a <see cref="BaseEngine"/>.
+  /// The engine was not created (its kick-start's exception is the <see cref="Exception.InnerException"/>), never
+  /// started, or is not a <see cref="BaseEngine"/>.
   /// </exception>
   /// <exception cref="EngineTaskNotReadyException">
-  /// The engine was stopped while its kick-start was waited for (its kick-start ended Cancelled), for example by a
-  /// generation switch: the next generation has the live engine.
+  /// The engine, or this mechanic, was stopped, before or during the reset, for example by a generation switch: the
+  /// next generation has the live engine. Its <see cref="EngineTaskNotReadyException.State"/> is Cancelled.
   /// </exception>
   public async Task ResetEngineTasksAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
     CancellationToken token = default)
@@ -406,18 +407,35 @@ public partial class MechanicEngine : BaseEngine
     // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
     var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
     // Stopped meanwhile (before or after the engine was created): report the cancelled kick-start, which a caller that
-    // follows generation switches recognises.
-    if (notStarted is { State: EngineTaskState.Cancelled } && engine is null or BaseEngine { IsCancellationRequested: true })
+    // follows generation switches recognises. Only when something was stopped: an engine that was not created is null
+    // whether or not anything was (#58 item 15).
+    if (notStarted is { State: EngineTaskState.Cancelled }
+        && (engine is BaseEngine { IsCancellationRequested: true } || (engine == null && IsCancellationRequested)))
       throw notStarted;
     if (engine == null)
-      throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.");
+      throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.",
+        notStarted);
     if (engine is not BaseEngine baseEngine)
       throw new InvalidOperationException($"Engine '{engineName}' is not a {nameof(BaseEngine)}, so its tasks cannot be reset.");
     // Tasks it created in its constructor do not count: resetting them would start their work without a context.
     if (!baseEngine.HasTaskSet)
       throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
-    await baseEngine.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+    // Stopped during the reset: its tasks are not run again, whether the reset noticed (and threw) or not. Report it
+    // with the one "stopped" signal, as above (#58 items 5 and 11).
+    try
+    {
+      await baseEngine.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+    }
+    catch (InvalidOperationException) when (baseEngine.IsCancellationRequested)
+    {
+      throw StoppedDuringTheReset(engineName);
+    }
+    if (baseEngine.IsCancellationRequested)
+      throw StoppedDuringTheReset(engineName);
   }
+
+  private static EngineTaskNotReadyException StoppedDuringTheReset(string engineName) =>
+    new(EngineKickStartTask.KickStartName(engineName), EngineTaskState.Cancelled, "The engine was stopped during the reset.");
 
   /// <summary>
   /// Asynchronously waits for an engine (and its dependencies) to reach Ready.
