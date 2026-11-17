@@ -23,10 +23,6 @@ public class EngineStartupTest
   private static readonly TimeSpan MustStayPending = TimeSpan.FromMilliseconds(500);
 
   /// <summary>
-  /// Time given to a call that must complete.
-  /// </summary>
-
-  /// <summary>
   /// Engine shaped like typical host engines: a quick first task, then a load that blocks until the test releases
   /// a gate (or fails, if the gate is faulted).
   /// </summary>
