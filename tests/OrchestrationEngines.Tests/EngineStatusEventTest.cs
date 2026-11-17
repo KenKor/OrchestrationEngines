@@ -19,8 +19,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineStatusEventTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine with one load task; the test decides what a load does.
   /// </summary>

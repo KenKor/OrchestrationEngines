@@ -17,7 +17,6 @@ namespace OrchestrationEngines.Tests;
 public class OptionalEngineTest
 {
   private static readonly TimeSpan MustStayPending = TimeSpan.FromMilliseconds(500);
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
 
   /// <summary>
   /// An engine with one load task that waits for a gate the test controls.

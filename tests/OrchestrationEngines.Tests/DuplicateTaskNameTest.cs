@@ -16,8 +16,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class DuplicateTaskNameTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine whose set-up creates the tasks the test names, in order; "Use" depends on the first one.
   /// </summary>

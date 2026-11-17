@@ -16,8 +16,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class TaskLoggerTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// Verifies that the task's own messages (its state changes) and the messages its work logs through the task's logger
   /// both start with the task's name.

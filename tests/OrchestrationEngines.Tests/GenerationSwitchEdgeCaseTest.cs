@@ -19,8 +19,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class GenerationSwitchEdgeCaseTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// Engine with one load task that waits for a gate (already open for a quick engine).
   /// </summary>

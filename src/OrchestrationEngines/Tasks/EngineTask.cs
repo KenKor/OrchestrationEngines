@@ -202,6 +202,9 @@ public partial class EngineTask
   /// <summary>
   /// True once the task has transitioned out of Created (i.e. it has been started and is either waiting or running).
   /// </summary>
+  /// <remarks>
+  /// A start does not consult this property, so overriding it does not change when the task starts.
+  /// </remarks>
   public virtual bool IsStarted => State.IsStarted();
 
   /// <summary>

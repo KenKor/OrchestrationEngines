@@ -20,8 +20,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class ThrowingCallbackTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// Load, then Use, which depends on it. A subscriber that throws is attached to Load before Use subscribes.
   /// </summary>

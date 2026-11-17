@@ -15,8 +15,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class IndependentNetworksTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// A network engine with one load task, whose work the test decides.
   /// </summary>

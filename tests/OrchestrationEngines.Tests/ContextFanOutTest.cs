@@ -22,8 +22,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class ContextFanOutTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// A context that carries a value, for example the path of the open workspace.
   /// </summary>

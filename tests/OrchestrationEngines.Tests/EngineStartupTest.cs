@@ -25,7 +25,6 @@ public class EngineStartupTest
   /// <summary>
   /// Time given to a call that must complete.
   /// </summary>
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
 
   /// <summary>
   /// Engine shaped like typical host engines: a quick first task, then a load that blocks until the test releases

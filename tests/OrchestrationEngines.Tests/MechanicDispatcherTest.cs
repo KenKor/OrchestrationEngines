@@ -14,8 +14,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class MechanicDispatcherTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// Verifies that a call that throws faults only its own caller, and that the dispatcher goes on with the next call.
   /// </summary>
