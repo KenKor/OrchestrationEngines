@@ -989,9 +989,10 @@ public abstract partial class BaseEngine : IEngine
   /// again on a dependency of the set that is still to be reset (see <see cref="TriggerResetAsync"/>). A task named twice or
   /// reached twice is reset once. A reset ends the current run: its outcome is dropped and its token cancelled; it does
   /// not wait for the work to end, so work that ignores its token goes on until it checks. While a restart is prepared
-  /// (the kick-start's retry, see <see cref="ResetFailedTasksAsync"/>), the set is about to be replaced: the reset waits
-  /// until the engine has started again, which can take the retry's backoff, and then returns without resetting the new
-  /// set, whose tasks run fresh. If the restart is given up (<see cref="AbandonRestart"/>), its set-up fails, or the
+  /// (<see cref="ResetAllTasksAsync"/> or <see cref="ResetFailedTasksAsync"/>, as the kick-start does when the context
+  /// changes or when it starts the engine again), the set is about to be replaced: the reset waits until the engine has
+  /// started again, which after a context change lasts until the kick-start has run again on the new context, and then
+  /// returns without resetting the new set, whose tasks run fresh. If the restart is given up (<see cref="AbandonRestart"/>), its set-up fails, or the
   /// engine is stopped meanwhile, it throws. <see cref="TriggerResetAsync"/> does not wait: it returns at once.
   /// </remarks>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
@@ -1015,21 +1016,21 @@ public abstract partial class BaseEngine : IEngine
     }
     // A stopped engine's reset tasks would sit in Created for good (TriggerResetAsync does not start them again).
     ThrowIfStopped();
-    if (RestartPending)
+    // The set is about to be replaced (see PrepareRestartAsync): wait for the restart, then answer by its outcome
+    // (#58 item 4). The outcome is the restart's own: the new set is published before the restart is done, so the set
+    // read above can already be the new one.
+    if (Volatile.Read(ref _restart) is { } restart)
     {
-      // The set is about to be replaced (see PrepareRestartAsync): wait for the restart, then answer by its outcome
-      // (#58 item 4).
-      await WaitForRestartAsync().ConfigureAwait(false);
+      var givenUp = await restart.Task.ConfigureAwait(false);
       ThrowIfStopped();
+      if (givenUp)
+        throw new InvalidOperationException($"Engine '{EngineName}' is not started again, so its tasks are not reset.");
       // Its set-up failed: no set was built, and nothing the reset asked for runs.
       if (_setUpException is { } setUpException)
         throw new InvalidOperationException(
           $"Engine '{EngineName}' could not set up its tasks again, so its tasks are not reset.", setUpException);
       // Built: the new set's tasks run fresh, which is what the reset asked for.
-      if (_tasks != tasks)
-        return;
-      // Given up (AbandonRestart).
-      throw new InvalidOperationException($"Engine '{EngineName}' is not started again, so its tasks are not reset.");
+      return;
     }
 
     if (resetDependentTasks)
@@ -1416,9 +1417,10 @@ public abstract partial class BaseEngine : IEngine
 
   /// <summary>
   /// Set while a restart is prepared and the next task set has not been built yet (see <see cref="StartAsync"/>);
-  /// completed when it has been built, or when the engine stops.
+  /// completed when it has been built, or when the engine stops, with false; with true when it is given up
+  /// (<see cref="AbandonRestart"/>).
   /// </summary>
-  private TaskCompletionSource _restart;
+  private TaskCompletionSource<bool> _restart;
 
   private bool RestartPending => Volatile.Read(ref _restart) != null;
 
@@ -1468,7 +1470,7 @@ public abstract partial class BaseEngine : IEngine
   {
     // Allocated only when none is armed; the compare-exchange still decides between two that arm at once.
     if (Volatile.Read(ref _restart) == null)
-      Interlocked.CompareExchange(ref _restart, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), null);
+      Interlocked.CompareExchange(ref _restart, new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously), null);
     ReleaseRestartIfCancelled();
   }
 
@@ -1529,9 +1531,10 @@ public abstract partial class BaseEngine : IEngine
   private Task WaitForRestartAsync() => Volatile.Read(ref _restart)?.Task ?? Task.CompletedTask;
 
   /// <summary>
-  /// Ends a prepared restart: the next task set has been built, or the engine stopped. Releases whoever waits for it.
+  /// Ends a prepared restart: the next task set has been built, or the engine stopped, or (<paramref name="givenUp"/>)
+  /// the restart is given up. Releases whoever waits for it.
   /// </summary>
-  private void CompleteRestart() => Interlocked.Exchange(ref _restart, null)?.TrySetResult();
+  private void CompleteRestart(bool givenUp = false) => Interlocked.Exchange(ref _restart, null)?.TrySetResult(givenUp);
 
   /// <summary>
   /// Gives up a prepared restart that will not be carried out (see <see cref="PrepareRestartAsync"/>): the engine is
@@ -1553,7 +1556,7 @@ public abstract partial class BaseEngine : IEngine
     // cancel that comes before it decides; the trailing call covers one that comes after it decided Faulted.
     SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Faulted,
       new InvalidOperationException($"Engine '{EngineName}' is not started again: {reason}"));
-    CompleteRestart();
+    CompleteRestart(givenUp: true);
     ReleaseRestartIfCancelled();
   }
 

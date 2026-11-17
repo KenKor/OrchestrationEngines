@@ -192,6 +192,33 @@ public class TaskSetReplacementTest
   }
 
   /// <summary>
+  /// Verifies that a reset asked for after the restart has published its new set, while it still starts it, returns
+  /// once the restart is done: the engine did start again (#58 item 4).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_AfterTheRestartPublishedItsSet_Returns()
+  {
+    var engine = await FailedEngineAsync();
+    await engine.ResetFailedTasksAsync();
+    Task reset = null;
+    // Starting is published after the new set and before the restart is done (see StartAsync).
+    engine.EngineStatusChanged += (_, e) =>
+    {
+      if (e.State == EngineState.Starting)
+        reset ??= engine.ResetTasksAsync(["Load"], resetDependentTasks: true);
+    };
+
+    await engine.StartAsync();
+
+    reset.Should().NotBeNull("the engine went to Starting");
+    await reset.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    engine.State.Should().Be(EngineState.Ready);
+    engine.Loads.Should().Be(2, "the new set is not reset and run again");
+    await engine.StopAsync();
+  }
+
+  /// <summary>
   /// Verifies that a reset asked for while a restart is prepared throws once the restart is given up, since nothing it
   /// asked for runs (#58 item 4).
   /// </summary>
@@ -227,6 +254,7 @@ public class TaskSetReplacementTest
     await engine.ResetFailedTasksAsync();
 
     var reset = engine.ResetTasksAsync(["Load"], resetDependentTasks: true);
+    await Task.Delay(MustStayPending, TestContext.Current.CancellationToken);
     reset.IsCompleted.Should().BeFalse("the engine has not started again yet");
     await engine.Invoking(e => e.StartAsync()).Should().ThrowAsync<InvalidOperationException>();
 
