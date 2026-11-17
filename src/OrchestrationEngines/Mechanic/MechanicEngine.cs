@@ -890,7 +890,8 @@ public partial class MechanicEngine : BaseEngine
       public Task Above { get; set; }
 
       /// <summary>
-      /// The last engine whose stop was given <see cref="Stop"/> to wait for (<see cref="StopToWaitFor"/>).
+      /// The last engine whose stop was given <see cref="Stop"/> to wait for (<see cref="StopToWaitFor"/>), so an
+      /// engine with several dependents in this cycle waits for it once, not once per edge.
       /// </summary>
       public string WaitedForBy { get; set; }
 
