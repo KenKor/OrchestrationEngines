@@ -13,7 +13,7 @@ internal static partial class CancellationExtensions
   /// <summary>
   /// Cancels <paramref name="source"/>. A callback registered on its token that throws is logged and swallowed: every
   /// callback still runs (<see cref="CancellationTokenSource.Cancel()"/> runs them all before it throws), and the
-  /// caller carries on with the state change that the cancellation belongs to.
+  /// caller carries on with the state change that the cancellation belongs to, also when the logger throws.
   /// </summary>
   /// <remarks>
   /// A source that is cancelled already is left alone: a second cancel would do nothing, and the library disposes a
@@ -39,8 +39,11 @@ internal static partial class CancellationExtensions
     {
       // A callback on a linked token source (a task's, under its engine's) throws from inside this one's callback, so
       // the exception arrives nested. A single one is logged as itself, so the log shows what threw, not the wrapper.
+      // A logger that throws must not end the cancel's caller either: a stop, a reset or a shutdown. Without a closure,
+      // which would capture the logger on every cancel.
       var flat = ex.Flatten();
-      LogCancelCallbackFailed(logger, flat.InnerExceptions.Count == 1 ? flat.InnerExceptions[0] : flat);
+      BestEffort.Log(static a => LogCancelCallbackFailed(a.logger, a.exception),
+        (logger, exception: flat.InnerExceptions.Count == 1 ? flat.InnerExceptions[0] : flat));
     }
   }
 

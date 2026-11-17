@@ -1171,6 +1171,8 @@ public partial class EngineTask
     }
     finally
     {
+      // InvokeEach does not throw, but the latch must not depend on that: a task whose latch never completes leaves
+      // whoever waits on it waiting for good.
       _completionTcs.TrySetResult(true);
     }
   }

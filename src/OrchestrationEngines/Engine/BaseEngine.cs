@@ -368,8 +368,10 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="value">The value.</param>
   /// <remarks>
   /// Each subscriber is called in turn; one that throws is logged and does not keep the others from the change. An
-  /// override calls the base method synchronously, with the same arguments: the error of a change to Faulted is the one
-  /// taken when the state changed (see <see cref="EngineStatusChanged"/>), and is looked up again otherwise.
+  /// override that throws is logged and swallowed as well: the exception does not reach whoever set the state, and the
+  /// changes after this one are still published. An override calls the base method synchronously, with the same
+  /// arguments: the error of a change to Faulted is the one taken when the state changed (see
+  /// <see cref="EngineStatusChanged"/>), and is looked up again otherwise.
   /// </remarks>
   protected virtual void OnEngineStatusChanged(EngineState oldValue, EngineState value)
   {
@@ -463,8 +465,10 @@ public abstract partial class BaseEngine : IEngine
       catch (Exception ex)
       {
         // Only an override gets here (the base method catches per subscriber). It must not hold back the changes queued
-        // after this one, nor fail whoever set the state.
-        LogStatusOverrideFailed(ex, change.newValue);
+        // after this one, nor fail whoever set the state, also when the logger throws. Without a closure: the loop's
+        // variables would be captured on every change, not only on this path.
+        BestEffort.Log(static a => a.engine.LogStatusOverrideFailed(a.ex, a.state),
+          (engine: this, ex, state: change.newValue));
       }
       finally
       {
