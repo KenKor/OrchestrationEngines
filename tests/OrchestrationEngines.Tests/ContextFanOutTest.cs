@@ -382,6 +382,8 @@ public class ContextFanOutTest
     hold.SetResult();
     // WhenAny of one task: wait until it ends, without its exception.
     await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
+    // The ended run returns once the start does; the load it started may still be running.
+    await Wait.UntilAsync(() => session.LoadedWith.Count == 2, MustComplete, "the start under way loads with workspace-B");
     session.LoadedWith.Should().Equal(["workspace-A", "workspace-B"], "the start under way loaded with workspace-B");
     contextGate.SetResult();
     await Task.WhenAll(first, second).WaitAsync(MustComplete, ct);
