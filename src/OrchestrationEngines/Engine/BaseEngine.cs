@@ -1148,8 +1148,8 @@ public abstract partial class BaseEngine : IEngine
   /// it (a caller, or a dependency's new run completing) waits for those dependencies' next run. A task whose reset
   /// throws is cancelled, so whoever waits on it is released, unless it had already completed: it then keeps its state
   /// (its fail reason cleared), but its completion latch was already replaced, so a wait on it ends only after a later
-  /// reset of the task succeeds.
-  /// The failure is reported once every level has been reset: the other tasks are reset anyway.
+  /// reset of the task succeeds. The failure is reported once every level has been reset: the other tasks are reset
+  /// anyway.
   /// </para>
   /// </remarks>
   private static async Task ResetInTwoPassesAsync(List<List<EngineTask>> levels)
