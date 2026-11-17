@@ -395,7 +395,8 @@ public partial class MechanicEngine : BaseEngine
   /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
   /// <exception cref="InvalidOperationException">
   /// The engine was not created (its kick-start's exception is the <see cref="Exception.InnerException"/>), never
-  /// started, or is not a <see cref="BaseEngine"/>.
+  /// started, or is not a <see cref="BaseEngine"/>; or a restart of it was prepared and then given up, or its set-up
+  /// failed (see <see cref="BaseEngine.ResetTasksAsync"/>).
   /// </exception>
   /// <exception cref="EngineTaskNotReadyException">
   /// The engine, or this mechanic, was stopped, before or during the reset, for example by a generation switch: the
