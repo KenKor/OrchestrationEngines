@@ -46,10 +46,11 @@ public class EngineKickStartTask : EngineTask
     public EngineDescriptor Descriptor { get; }
 
     /// <summary>
-    /// The engine instance being started or most recently started by this task.
+    /// The engine instance this task most recently started, once the start has returned; null until then.
     /// </summary>
     /// <remarks>
-    /// This reference is cleared on reset; a new instance may be associated on re-execution.
+    /// This reference is cleared on reset, and set again by the next run that starts the engine. A run ended by a reset
+    /// while it was starting the engine does not set it (#85).
     /// </remarks>
     public IEngine EngineInstance { get; set; }
 
@@ -63,7 +64,7 @@ public class EngineKickStartTask : EngineTask
     private BaseEngine _engineToRestart;
 
     /// <summary>
-    /// The engine a run is starting, from just before it calls the start until the start returns; null otherwise.
+    /// The engine a run is starting, from the start of the run until the start returns; null otherwise.
     /// </summary>
     /// <remarks>
     /// A reset that comes in meanwhile restarts this engine, though the run has not recorded it in
@@ -83,8 +84,6 @@ public class EngineKickStartTask : EngineTask
     /// </summary>
     private readonly object _gate = new();
 
-    private readonly MechanicEngine _mechanic;
-
     /// <summary>
     /// Creates a task that starts an engine and ensures it reaches Ready.
     /// </summary>
@@ -101,7 +100,6 @@ public class EngineKickStartTask : EngineTask
             token)
     {
         Descriptor = engineDescriptor;
-        _mechanic = m;
         RecoveryHelper = engineDescriptor.CreateRecoveryHelper(TimeProvider);
         _workAsync = runtimeToken => KickStartAsync(m, engineDescriptor, runtimeToken);
     }
@@ -120,34 +118,38 @@ public class EngineKickStartTask : EngineTask
         EngineDescriptor engineDescriptor,
         CancellationToken token = default)
     {
-        // Fix (RuntimeRecoveryTest): a kick-start that runs again after recovery finds the engine Faulted (or
-        // Stopped by a task's own cancellation, see NeedsResetBeforeRestart) from the previous attempt. Reset its
-        // failed tasks here, before the start, instead of in ExecuteRecoveryAsync:
-        // there the reset ran after the base had already fired SucceedRecovery, which re-runs this work at once, so
-        // the first retry found the engine still Faulted and failed without starting it (one restart wasted), and
-        // when the policy gave up the reset still ran, leaving the engine Created instead of Faulted.
-        if (NeedsResetBeforeRestart(EngineInstance))
-            await EngineInstance.ResetFailedTasksAsync().ConfigureAwait(false);
-
         if (!m.Engines.TryGetValue(engineDescriptor.Name, out var engine))
             throw new ArgumentException($"Unknown engine '{engineDescriptor.Name}'");
 
-        // A reset found the engine still Created, because a run it ended was starting it, so it could not prepare a
-        // restart then. That run has since started the engine with the previous context: restart it now (#85).
-        var toRestart = Volatile.Read(ref _engineToRestart);
-        if (toRestart != null && toRestart.State != EngineState.Created)
-            await toRestart.ResetAllTasksAsync().ConfigureAwait(false);
-
+        // Marked before the first wait: a reset that comes in during any of the waits below ends this run, and must
+        // restart the engine this run starts, with the context it starts it with (#85).
         int generation;
+        BaseEngine toRestart;
         lock (_gate)
         {
             generation = _generation;
             _starting = engine;
+            toRestart = _engineToRestart;
         }
 
         var started = false;
         try
         {
+            // Fix (RuntimeRecoveryTest): a kick-start that runs again after recovery finds the engine Faulted (or
+            // Stopped by a task's own cancellation, see NeedsResetBeforeRestart) from the previous attempt. Reset its
+            // failed tasks here, before the start, instead of in ExecuteRecoveryAsync:
+            // there the reset ran after the base had already fired SucceedRecovery, which re-runs this work at once, so
+            // the first retry found the engine still Faulted and failed without starting it (one restart wasted), and
+            // when the policy gave up the reset still ran, leaving the engine Created instead of Faulted.
+            if (NeedsResetBeforeRestart(EngineInstance))
+                await EngineInstance.ResetFailedTasksAsync().ConfigureAwait(false);
+
+            // A reset found the engine still Created, because a run it ended was starting it, so it could not prepare
+            // a restart then. That run may have started the engine since, with the previous context: restart it now.
+            // On an engine that is still Created with its restart prepared, this changes nothing (#85).
+            if (toRestart != null)
+                await toRestart.ResetAllTasksAsync().ConfigureAwait(false);
+
             await MechanicEngine.StartEngineAsync(engine).ConfigureAwait(false);
             started = true;
         }
@@ -239,7 +241,13 @@ public class EngineKickStartTask : EngineTask
     protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
     {
         base.OnFailedEntered(reasonFromTrigger, cancelled);
-        Interlocked.Exchange(ref _engineToRestart, null)?.AbandonRestart($"its kick-start ended without starting it ({FailReason})");
+        BaseEngine abandoned;
+        lock (_gate)
+        {
+            abandoned = _engineToRestart;
+            _engineToRestart = null;
+        }
+        abandoned?.AbandonRestart($"its kick-start ended without starting it ({FailReason})");
     }
 
     /// <summary>

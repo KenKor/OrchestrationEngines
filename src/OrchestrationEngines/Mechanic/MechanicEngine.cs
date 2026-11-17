@@ -552,18 +552,6 @@ public partial class MechanicEngine : BaseEngine
   /// <summary>
   /// Starts an engine if it is in Created state.
   /// </summary>
-  /// <param name="engineName">The engine name.</param>
-  internal Task<IEngine> StartEngineAsync(string engineName)
-  {
-    if (!_engines.TryGetValue(engineName, out var engine))
-      throw new ArgumentException($"Unknown engine '{engineName}'");
-
-    return StartEngineAsync(engine);
-  }
-
-  /// <summary>
-  /// Starts an engine if it is in Created state.
-  /// </summary>
   /// <param name="engine">The engine.</param>
   internal static async Task<IEngine> StartEngineAsync(IEngine engine)
   {
