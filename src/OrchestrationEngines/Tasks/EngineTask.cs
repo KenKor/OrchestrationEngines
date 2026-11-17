@@ -1105,8 +1105,8 @@ public partial class EngineTask
   /// </remarks>
   protected virtual void StartCallTimer()
   {
-    // End first: a reader without the lock then sees a duration that is too long, never the new start with the old
-    // end (a negative one).
+    // End first, so the writes themselves never pair the new start with the old end (a negative duration). A reader
+    // without the lock is not promised this order, nor whole values: making that hold is a separate change.
     RunEndedAtUtc = null;
     RunStartedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
   }

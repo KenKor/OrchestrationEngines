@@ -92,7 +92,7 @@ public class DispatcherLifecycleTest
     try
     {
       var ready = coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken);
-      await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the condition must be met in time");
+      await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the slow engine must start loading");
 
       var probe = coordinator.GetEngineAsync("Slow", 50, TestContext.Current.CancellationToken);
       (await probe.WaitAsync(MustComplete, TestContext.Current.CancellationToken)).Should().BeNull();
@@ -125,7 +125,7 @@ public class DispatcherLifecycleTest
     try
     {
       var ready = coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken);
-      await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the condition must be met in time");
+      await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the slow engine must start loading");
 
       (await coordinator.GetEngineAsync("Slow", true, 100, TestContext.Current.CancellationToken)).Should().BeNull();
 
@@ -187,7 +187,7 @@ public class DispatcherLifecycleTest
     try
     {
       ready = coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken);
-      await Wait.UntilAsync(() => Volatile.Read(ref attempts) >= 3, MustComplete, "the condition must be met in time");
+      await Wait.UntilAsync(() => Volatile.Read(ref attempts) >= 3, MustComplete, "the engine must fail three times");
 
       await Task.Delay(500, TestContext.Current.CancellationToken);
       Volatile.Read(ref attempts).Should().Be(3);
@@ -226,7 +226,7 @@ public class DispatcherLifecycleTest
     {
       var ready = coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken);
       await Wait.UntilAsync(() => underlying != null && underlying.WorkStarted,
-        MustComplete, "the condition must be met in time");
+        MustComplete, "the underlying engine must start loading");
 
       await Task.Delay(200, TestContext.Current.CancellationToken);
       (dependent?.StartCalled ?? false).Should().BeFalse();
