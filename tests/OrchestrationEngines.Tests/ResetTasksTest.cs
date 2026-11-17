@@ -61,6 +61,11 @@ public class ResetTasksTest
     /// </summary>
     public Action<string> OnDependencyCheck { get; set; }
 
+    /// <summary>
+    /// Runs as anything looks whether a task has started, with the task's name.
+    /// </summary>
+    public Action<string> OnStartedLook { get; set; }
+
     public int Runs(string name) => _runs.TryGetValue(name, out var runs) ? runs : 0;
 
     /// <summary>
@@ -108,6 +113,15 @@ public class ResetTasksTest
       {
         engine.OnDependencyCheck?.Invoke(Name);
         return base.DependenciesReady();
+      }
+
+      public override bool IsStarted
+      {
+        get
+        {
+          engine.OnStartedLook?.Invoke(Name);
+          return base.IsStarted;
+        }
       }
     }
   }
@@ -482,6 +496,36 @@ public class ResetTasksTest
 
     await act.Should().ThrowAsync<InvalidOperationException>();
     engine.Tasks.Values.Should().OnlyContain(t => t.State == EngineTaskState.CompletedWithSuccess);
+  }
+
+  /// <summary>
+  /// Verifies that a task added while the reset is ordered (after it read the engine's tasks) does not break the order:
+  /// in the second pass each task is reset after the tasks it depends on (A, then T, then T's dependents).
+  /// </summary>
+  /// <remarks>
+  /// The reset looks whether each task has started after it has collected the dependents and before it orders them; the
+  /// look adds X, a new dependent of T, in that window. Ordered over a set with X but counting T's dependents without
+  /// it, T was placed before its dependent D1, so A, which T depends on, ended up level with D1 and was reset after T.
+  /// </remarks>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_TaskAddedWhileOrdering_ResetsDependenciesFirst()
+  {
+    var engine = await ReadyAsync(new GraphEngine(T("A"), T("T", "A"), T("D1", "T"), T("D2", "D1"), T("D3", "D2")));
+    var resetOrder = new ConcurrentQueue<string>();
+    engine.OnReset = resetOrder.Enqueue;
+    var added = 0;
+    engine.OnStartedLook = _ =>
+    {
+      if (Interlocked.Exchange(ref added, 1) == 0)
+        engine.Add("X", "T");
+    };
+
+    await engine.ResetTasksAsync(["A"], resetDependentTasks: true);
+    engine.OnStartedLook = null;
+
+    added.Should().Be(1, "the reset looks whether its tasks have started");
+    resetOrder.Should().Equal("A", "T", "D1", "D2", "D3");
+    await engine.StopAsync();
   }
 
   /// <summary>
