@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
@@ -92,42 +93,23 @@ public class ThrowingCallbackTest
   /// <summary>
   /// One task whose work throws an exception with an empty message, with or without a recovery.
   /// </summary>
-  private sealed class EmptyMessageEngine : BaseEngine
+  private sealed class EmptyMessageEngine(bool withRecovery) : BaseEngine(NullLogger.Instance)
   {
-    private readonly bool _withRecovery;
-
-    public EmptyMessageEngine(bool withRecovery) : base(new FakeLogger())
-    {
-      _withRecovery = withRecovery;
-      Context = new NoContext();
-    }
-
     protected override void SetUpTasks()
     {
       var task = CreateTask("Load", _ => throw new Exception(""));
-      if (_withRecovery)
+      if (withRecovery)
         task.SetRecovery(TestRestartPolicies.NoWait(1));
     }
   }
 
   /// <summary>
-  /// A logger that throws on an entry whose exception has the message <paramref name="failOn"/>, as a failing logging
-  /// provider does, and passes every other entry to <paramref name="inner"/>.
+  /// A logger that throws, as a failing logging provider does, on a line logged with an exception whose message is
+  /// <paramref name="message"/>.
   /// </summary>
-  private sealed class ThrowingLogger(FakeLogger inner, string failOn) : ILogger
-  {
-    public IDisposable BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
-
-    public bool IsEnabled(LogLevel logLevel) => true;
-
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception,
-      Func<TState, Exception, string> formatter)
-    {
-      if (exception?.Message == failOn)
-        throw new InvalidOperationException("Logger failed.");
-      inner.Log(logLevel, eventId, state, exception, formatter);
-    }
-  }
+  private static OnMessageLogger LoggerThrowingOn(string message) =>
+    new((_, _, exception) => exception?.Message == message,
+      () => throw new InvalidOperationException("Logger failed."));
 
   private static async Task HangAsync(CancellationToken token, TaskCompletionSource<bool> running)
   {
@@ -211,7 +193,7 @@ public class ThrowingCallbackTest
   public async Task StartAsync_StatusSubscriberAndLoggerThrow_OthersStillReceiveEveryChange()
   {
     var ct = TestContext.Current.CancellationToken;
-    var engine = new PlainEngine(new ThrowingLogger(new FakeLogger(), "Status subscriber failed."));
+    var engine = new PlainEngine(LoggerThrowingOn("Status subscriber failed."));
     var seen = new ConcurrentQueue<EngineState>();
     engine.EngineStatusChanged += (_, _) => throw new InvalidOperationException("Status subscriber failed.");
     engine.EngineStatusChanged += (_, e) => seen.Enqueue(e.State);
@@ -256,7 +238,7 @@ public class ThrowingCallbackTest
   public async Task StartAsync_StatusOverrideAndLoggerThrow_LaterChangesStillPublished()
   {
     var ct = TestContext.Current.CancellationToken;
-    var engine = new ThrowingOverrideEngine(new ThrowingLogger(new FakeLogger(), "Override failed."));
+    var engine = new ThrowingOverrideEngine(LoggerThrowingOn("Override failed."));
     var seen = new ConcurrentQueue<EngineState>();
     engine.EngineStatusChanged += (_, e) => seen.Enqueue(e.State);
 
@@ -296,7 +278,7 @@ public class ThrowingCallbackTest
   public async Task StopAsync_CancelCallbackAndLoggerThrow_Stops()
   {
     var ct = TestContext.Current.CancellationToken;
-    var engine = new HangingEngine(new ThrowingLogger(new FakeLogger(), "Cancel callback failed."));
+    var engine = new HangingEngine(LoggerThrowingOn("Cancel callback failed."));
     await engine.StartAsync().WaitAsync(MustComplete, ct);
     await engine.Running.Task.WaitAsync(MustComplete, ct);
 

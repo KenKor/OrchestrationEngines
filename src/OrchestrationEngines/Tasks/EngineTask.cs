@@ -1169,10 +1169,10 @@ public partial class EngineTask
     {
       handlers.InvokeEach(handler => handler(this), ex => LogSubscriberFailed(Logger, ex, eventName));
     }
-    // InvokeEach does not throw, but the latch must not depend on that: a task whose latch never completes leaves
-    // whoever waits on it waiting for good.
     finally
     {
+      // InvokeEach does not throw, but the latch must not depend on that: a task whose latch never completes leaves
+      // whoever waits on it waiting for good.
       _completionTcs.TrySetResult(true);
     }
   }
