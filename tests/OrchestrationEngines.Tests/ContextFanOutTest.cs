@@ -55,8 +55,8 @@ public class ContextFanOutTest
   }
 
   /// <summary>
-  /// An engine that records, on each load, the value of the context it was set up with, and whose start, once
-  /// armed, ends only when the test lets it. Held after the set-up, its load has run by then, but the kick-start that
+  /// An engine that records the value of its context on each set-up (<see cref="SetUpWith"/>) and on each load
+  /// (<see cref="LoadedWith"/>), and whose start, once armed, ends only when the test lets it. Held after the set-up, its load has run by then, but the kick-start that
   /// started it is still waiting for the start. Held before the set-up, the engine is still Created while the
   /// kick-start starts it.
   /// </summary>
