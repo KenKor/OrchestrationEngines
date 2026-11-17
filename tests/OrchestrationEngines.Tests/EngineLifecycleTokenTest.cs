@@ -44,15 +44,6 @@ public class EngineLifecycleTokenTest
   }
 
   /// <summary>
-  /// A task that shows its current token source.
-  /// </summary>
-  private sealed class ProbeTask(Func<CancellationToken, Task> workAsync, CancellationToken engineToken = default)
-    : EngineTask("Probe", workAsync, requiredForRunning: true, NullLogger.Instance, engineToken)
-  {
-    public CancellationTokenSource Source => _linkedCts;
-  }
-
-  /// <summary>
   /// One <see cref="ProbeTask"/> whose work completes at once; a new one for each set.
   /// </summary>
   private sealed class ProbeEngine : BaseEngine
@@ -62,7 +53,7 @@ public class EngineLifecycleTokenTest
     public ProbeTask Probe { get; private set; }
 
     protected override void SetUpTasks() =>
-      Probe = (ProbeTask)AddTask("Probe", new ProbeTask(_ => Task.CompletedTask, CancellationToken));
+      Probe = (ProbeTask)AddTask("Probe", new ProbeTask("Probe", _ => Task.CompletedTask, engineToken: CancellationToken));
   }
 
   /// <summary>
@@ -83,19 +74,6 @@ public class EngineLifecycleTokenTest
     var published = new ConcurrentQueue<EngineStatusEventArgs>();
     engine.EngineStatusChanged += (_, e) => published.Enqueue(e);
     return published;
-  }
-
-  private static bool IsDisposed(CancellationToken token)
-  {
-    try
-    {
-      _ = token.WaitHandle;
-      return false;
-    }
-    catch (ObjectDisposedException)
-    {
-      return true;
-    }
   }
 
   /// <summary>
@@ -148,7 +126,7 @@ public class EngineLifecycleTokenTest
   public async Task Reset_DisposesThePreviousTokenSource()
   {
     var ct = TestContext.Current.CancellationToken;
-    var task = new ProbeTask(_ => Task.CompletedTask);
+    var task = new ProbeTask("Probe", _ => Task.CompletedTask);
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, ct);
     var previous = task.Source;
@@ -157,7 +135,7 @@ public class EngineLifecycleTokenTest
     await task.FireAsync(EngineTaskTrigger.Reset);
 
     task.Source.Should().NotBeSameAs(previous);
-    IsDisposed(previousToken).Should().BeTrue();
+    Tokens.IsDisposed(previousToken).Should().BeTrue();
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, ct);
     task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
@@ -182,9 +160,9 @@ public class EngineLifecycleTokenTest
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
 
     engine.Probe.Should().NotBeSameAs(replaced);
-    SpinWait.SpinUntil(() => IsDisposed(replacedToken), MustComplete).Should().BeTrue(
+    SpinWait.SpinUntil(() => Tokens.IsDisposed(replacedToken), MustComplete).Should().BeTrue(
       "the replaced task's source is released once its run has ended");
-    IsDisposed(engine.Probe.Source.Token).Should().BeFalse();
+    Tokens.IsDisposed(engine.Probe.Source.Token).Should().BeFalse();
     engine.State.Should().Be(EngineState.Ready);
   }
 
@@ -201,7 +179,7 @@ public class EngineLifecycleTokenTest
 
     await engine.StopAsync().WaitAsync(MustComplete, ct);
 
-    IsDisposed(engine.CancellationToken).Should().BeTrue();
+    Tokens.IsDisposed(engine.CancellationToken).Should().BeTrue();
     engine.CancellationToken.IsCancellationRequested.Should().BeTrue();
     engine.IsCancellationRequested.Should().BeTrue();
     await FluentActions.Awaiting(() => engine.StopAsync().WaitAsync(MustComplete, ct)).Should().NotThrowAsync(
@@ -473,7 +451,7 @@ public class EngineLifecycleTokenTest
   public async Task Reset_ThenResetAndCancel_DoNotThrow()
   {
     var ct = TestContext.Current.CancellationToken;
-    var task = new ProbeTask(token => Task.Delay(Timeout.Infinite, token));
+    var task = new ProbeTask("Probe", token => Task.Delay(Timeout.Infinite, token));
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.FireAsync(EngineTaskTrigger.Reset);
     await task.FireAsync(EngineTaskTrigger.Start);

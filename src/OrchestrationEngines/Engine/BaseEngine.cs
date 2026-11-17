@@ -100,6 +100,12 @@ public abstract partial class BaseEngine : IEngine
     new(copyOf, StringComparer.OrdinalIgnoreCase) { { name, task } };
 
   /// <summary>
+  /// Whether <paramref name="task"/> is in the set being built or the current set, so a refusal must leave its token
+  /// source alone. Called under <see cref="_taskSetChange"/>.
+  /// </summary>
+  private bool IsInTaskSet(EngineTask task) => (_buildingTaskSet ?? _taskSet).ContainsValue(task);
+
+  /// <summary>
   /// The set that <see cref="SetUpTasks"/> is building, which <see cref="AddTask"/> adds to; null outside a set-up.
   /// </summary>
   private Dictionary<string, EngineTask> _buildingTaskSet;
@@ -1513,15 +1519,12 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
   /// <returns>The task.</returns>
+  /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
   /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case);
   /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Func<CancellationToken, Task> workAsync,
       bool requiredForRunning = true)
-  {
-    CheckNameFree(name);
-    var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _token, TimeProvider);
-    return AddTask(name, task);
-  }
+    => CreateTask(name, () => new EngineTask(name, workAsync, requiredForRunning, Logger, _token, TimeProvider));
 
   /// <summary>
   /// Creates an Engine tasks with the specified parameters.
@@ -1535,35 +1538,40 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="requiredForRunning">True (default) if this task must be completed before the engine is considered ready.
   /// False for other tasks, e.g. a background or monitoring task.</param>
   /// <returns>The task.</returns>
+  /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
   /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case);
   /// see <see cref="AddTask"/>.</exception>
   protected EngineTask CreateTask(string name, Action<CancellationToken> workAsync, bool requiredForRunning = true)
-  {
-    CheckNameFree(name);
-    var task = new EngineTask(name, workAsync, requiredForRunning, Logger, _token, TimeProvider);
-    return AddTask(name, task);
-  }
+    => CreateTask(name, () => new EngineTask(name, workAsync, requiredForRunning, Logger, _token, TimeProvider));
 
   /// <summary>
-  /// Throws if the engine already has a task named <paramref name="name"/> (ignoring case): in the set being built during
-  /// a set-up, or in the current set after it. Called under <see cref="_taskSetChange"/>.
+  /// Checks the name before the task is built, so no task is built for a name already in use. A task built for a name
+  /// that another thread takes in the meantime is refused by <see cref="AddTask"/>, which releases its token source.
   /// </summary>
-  private void ThrowIfNameInUse(string name)
+  private EngineTask CreateTask(string name, Func<EngineTask> create)
   {
-    if ((_buildingTaskSet ?? _taskSet).TryGetValue(name, out var existing))
-      throw new ArgumentException($"Engine '{EngineName}' already has a task named '{existing.Name}', so '{name}' cannot be added (task names ignore case).", nameof(name));
-  }
-
-  /// <summary>
-  /// Refuses a name already in use before a task is built for it, so a refused task holds no token registration.
-  /// <see cref="AddTask"/> checks again, as the one that counts.
-  /// </summary>
-  private void CheckNameFree(string name)
-  {
+    ArgumentNullException.ThrowIfNull(name);
     lock (_taskSetChange)
     {
-      ThrowIfNameInUse(name);
+      if (NameRefusal(name, task: null) is { } refusal)
+        throw refusal;
     }
+    return AddTask(name, create());
+  }
+
+  /// <summary>
+  /// The refusal for adding <paramref name="task"/> under <paramref name="name"/>, or null if it may be added: refused
+  /// when the name is not the task's own (when a task is given; case ignored), or when the engine already has a task
+  /// under it (ignoring case), in the set being built during a set-up, or in the current set after it. Called under
+  /// <see cref="_taskSetChange"/>.
+  /// </summary>
+  private ArgumentException NameRefusal(string name, EngineTask task)
+  {
+    if (task != null && !string.Equals(name, task.Name, StringComparison.OrdinalIgnoreCase))
+      return new ArgumentException($"Engine '{EngineName}' cannot add task '{task.Name}' under the name '{name}': a task is added under its own name (task names ignore case).", nameof(name));
+    if ((_buildingTaskSet ?? _taskSet).TryGetValue(name, out var existing))
+      return new ArgumentException($"Engine '{EngineName}' already has a task named '{existing.Name}', so '{name}' cannot be added (task names ignore case).", nameof(name));
+    return null;
   }
 
   /// <summary>
@@ -1572,23 +1580,46 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="name">Name the task is identified by; names ignore case.</param>
   /// <param name="task">The task.</param>
   /// <returns>The task.</returns>
-  /// <exception cref="ArgumentException">The engine already has a task named <paramref name="name"/> (ignoring case),
-  /// in the set being built during a set-up, or in the current set after it. The set is left unchanged: putting the
-  /// task in place of the existing one would leave that one wired as a dependency but never started.</exception>
+  /// <exception cref="ArgumentNullException"><paramref name="name"/> or <paramref name="task"/> is null.</exception>
+  /// <exception cref="ArgumentException"><paramref name="name"/> is not the task's <see cref="EngineTask.Name"/> (case
+  /// ignored): the set's key and the name the task reports must agree. Or the engine already has a task named
+  /// <paramref name="name"/> (ignoring case), in the set being built during a set-up, or in the current set after it.
+  /// The set is left unchanged: putting the task in place of the existing one would leave that one wired as a
+  /// dependency but never started.</exception>
+  /// <remarks>
+  /// A task refused for its name, or for a null name, is spent: its token is cancelled and its token source released,
+  /// so it holds no registration on the engine's token. It cannot be added again; build a new one. A task that is
+  /// already in the set keeps its token.
+  /// </remarks>
   protected EngineTask AddTask(string name, EngineTask task)
   {
+    ArgumentNullException.ThrowIfNull(task);
+    ArgumentException refusal;
     lock (_taskSetChange)
     {
-      ThrowIfNameInUse(name);
-      if (_buildingTaskSet != null)
+      refusal = name == null ? new ArgumentNullException(nameof(name)) : NameRefusal(name, task);
+      if (refusal == null)
       {
-        _buildingTaskSet.Add(name, task);
+        if (_buildingTaskSet != null)
+        {
+          _buildingTaskSet.Add(name, task);
+        }
+        else
+        {
+          // Outside a set-up the published set is not changed: copy it.
+          Volatile.Write(ref _taskSet, NewTaskSet(_taskSet, name, task));
+        }
       }
-      else
+      else if (IsInTaskSet(task))
       {
-        // Outside a set-up the published set is not changed: copy it.
-        Volatile.Write(ref _taskSet, NewTaskSet(_taskSet, name, task));
+        throw refusal;
       }
+    }
+    if (refusal != null)
+    {
+      // Outside the lock: the release cancels the task's token, which runs its callbacks on this thread.
+      _ = task.ReleaseTokenAsync();
+      throw refusal;
     }
     if (task.RequiredForRunning)
     {

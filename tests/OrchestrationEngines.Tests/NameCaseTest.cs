@@ -120,4 +120,24 @@ public class NameCaseTest
       .Should().BeTrue();
     await engine.StopAsync();
   }
+
+  /// <summary>
+  /// Verifies that adding a task after the set-up under a name already in use, in another case, throws with a message
+  /// that names the engine and the name, and leaves the existing task in place.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_AddTask_NameInUseInAnotherCase_ThrowsAndKeepsTheExistingTask()
+  {
+    var engine = new LoadEngine { Context = new NoContext() };
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    var existing = engine.Tasks["Load"];
+
+    var add = Record.Exception(() => engine.AddLateTask("LOAD"));
+
+    add.Should().BeOfType<ArgumentException>().Which.Message.Should().Contain("LOAD").And.Contain(nameof(LoadEngine));
+    engine.Tasks.Should().ContainSingle().Which.Value.Should().BeSameAs(existing);
+    engine.State.Should().Be(EngineState.Ready);
+    await engine.StopAsync();
+  }
 }
