@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
@@ -28,16 +30,6 @@ public class EngineTaskTest
   {
     await task.FireAsync(EngineTaskTrigger.Start);
     await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-  }
-
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
   }
 
   /// <summary>
@@ -87,7 +79,7 @@ public class EngineTaskTest
     var task = NewTask("Load", token => Task.Delay(Timeout.Infinite, token), clock)
       .SetTimeOut(TimeSpan.FromMinutes(1));
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the run must wait for its time-out");
 
     clock.Advance(TimeSpan.FromSeconds(59));
     await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -114,7 +106,7 @@ public class EngineTaskTest
         .SetTimeOut(TimeSpan.FromMinutes(1))
         .SetRecovery(new RestartPolicy { MaxRestartsInWindow = 3, Window = TimeSpan.FromMinutes(10) });
       await task.FireAsync(EngineTaskTrigger.Start);
-      await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
+      await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the run must wait for its time-out");
 
       clock.Advance(TimeSpan.FromMinutes(1));
       await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -149,7 +141,7 @@ public class EngineTaskTest
         return Task.CompletedTask;
       }, clock).SetTimeOut(TimeSpan.FromMinutes(1));
       await task.FireAsync(EngineTaskTrigger.Start);
-      await WaitUntilAsync(() => clock.WaitingTimers == 1, "the time-out must run while the work does");
+      await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the time-out must run while the work does");
 
       clock.Advance(TimeSpan.FromMinutes(1));
       await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -206,7 +198,7 @@ public class EngineTaskTest
         }
       }, clock, engineStop.Token).SetTimeOut(TimeSpan.FromMinutes(90));
       await task.FireAsync(EngineTaskTrigger.Start);
-      await WaitUntilAsync(() => clock.WaitingTimers == 1, "the time-out must run while the work does");
+      await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the time-out must run while the work does");
 
       engineStop.Cancel();
       await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -242,7 +234,7 @@ public class EngineTaskTest
       return Task.CompletedTask;
     }, clock).SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(NoWait(maxRestarts: 5));
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the run must wait for its time-out");
 
     clock.Advance(TimeSpan.FromMinutes(1));
     await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -290,13 +282,14 @@ public class EngineTaskTest
     var task = NewTask("Load", _ => Interlocked.Increment(ref runs) == 1 ? throw new InvalidOperationException("Fails.") : gate.Task, clock)
       .SetRecovery(new CustomRestarter((_, _) => recovery.Task));
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => task.State == EngineTaskState.Recovering, "the failure must start the recovery");
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Recovering,
+      MustComplete, "the failure must start the recovery");
 
     clock.Advance(TimeSpan.FromSeconds(5));
     var restarted = clock.GetUtcNow().UtcDateTime;
     recovery.SetResult();
-    await WaitUntilAsync(() => task.State == EngineTaskState.Running && Volatile.Read(ref runs) == 2,
-      "the recovery runs the work again");
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Running && Volatile.Read(ref runs) == 2,
+      MustComplete, "the recovery runs the work again");
     clock.Advance(TimeSpan.FromSeconds(3));
 
     task.RunStartedAtUtc.Should().Be(restarted);
@@ -306,6 +299,68 @@ public class EngineTaskTest
     gate.SetResult();
     await task.InnerTask.WaitAsync(MustComplete, ct);
     task.RunEndedAtUtc.Should().Be(restarted + TimeSpan.FromSeconds(3));
+  }
+
+  /// <summary>
+  /// Verifies that a task that runs again after a recovery clears the end of its failed run before it takes its new
+  /// start from the clock. A reader without the lock then never pairs the new start with the old end, which would give
+  /// a negative duration.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_RunsAgainAfterRecovery_ClearsTheEndBeforeItSetsTheStart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var clock = new ReadRecordingClock();
+    var recovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var runs = 0;
+    var task = NewTask("Load", _ => Interlocked.Increment(ref runs) == 1 ? throw new InvalidOperationException("Fails.") : gate.Task, clock)
+      .SetRecovery(new CustomRestarter((_, _) => recovery.Task));
+    clock.Watched = task;
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Recovering,
+      MustComplete, "the failure must start the recovery");
+    task.RunEndedAtUtc.Should().NotBeNull("the failed run has ended");
+
+    recovery.SetResult();
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Running && Volatile.Read(ref runs) == 2,
+      MustComplete, "the recovery runs the work again");
+
+    clock.EndWhenRead(task.RunStartedAtUtc.Value).Should()
+      .BeNull("the end of the failed run is cleared before the new start is taken from the clock");
+
+    gate.SetResult();
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// A clock that moves one tick on every read and records, per read, the end time of the watched task at that moment.
+  /// </summary>
+  private sealed class ReadRecordingClock : TimeProvider
+  {
+    private readonly object _lock = new();
+    private readonly List<(DateTime Now, DateTime? End)> _reads = [];
+    private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    public EngineTask Watched { get; set; }
+
+    public override DateTimeOffset GetUtcNow()
+    {
+      lock (_lock)
+      {
+        _now = _now.AddTicks(1);
+        _reads.Add((_now.UtcDateTime, Watched?.RunEndedAtUtc));
+        return _now;
+      }
+    }
+
+    public DateTime? EndWhenRead(DateTime now)
+    {
+      lock (_lock)
+      {
+        return _reads.Single(r => r.Now == now).End;
+      }
+    }
   }
 
   /// <summary>
@@ -362,7 +417,8 @@ public class EngineTaskTest
     var recoveringTask = NewTask("Recovering", _ => throw new InvalidOperationException("Fails."))
       .SetRecovery(new CustomRestarter((_, _) => recovering.Task));
     await recoveringTask.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => recoveringTask.State == EngineTaskState.Recovering, "the failure must start the recovery");
+    await Wait.UntilAsync(() => recoveringTask.State == EngineTaskState.Recovering,
+      MustComplete, "the failure must start the recovery");
     await recoveringTask.FireAsync(EngineTaskTrigger.CompleteDependency);
     recoveringTask.State.Should().Be(EngineTaskState.Recovering);
     recovering.SetException(new InvalidOperationException("Recovery fails."));
@@ -390,8 +446,8 @@ public class EngineTaskTest
     await task.FireAsync(EngineTaskTrigger.Start);
     // Stateless sets the state before it runs the entry action that sets the message: wait for both, or under load the
     // message is read in between.
-    await WaitUntilAsync(() => task.State == EngineTaskState.Recovering && task.StateMessage != "Loading.",
-      "the failure must start the recovery");
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Recovering && task.StateMessage != "Loading.",
+      MustComplete, "the failure must start the recovery");
 
     task.StateMessage.Should().Be("Recovering after an error: The database is not reachable.");
     task.IsFailed.Should().BeFalse();
@@ -419,7 +475,7 @@ public class EngineTaskTest
         MaxBackoff = TimeSpan.FromMinutes(1),
       });
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the recovery must wait for its backoff");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the recovery must wait for its backoff");
 
     await task.FireAsync(EngineTaskTrigger.Reset);
     await Task.Delay(200, ct);
@@ -445,7 +501,8 @@ public class EngineTaskTest
     var task = NewTask("Load", _ => Interlocked.Increment(ref runs) == 1 ? throw new InvalidOperationException("First run fails.") : nextRun.Task)
       .SetRecovery(new CustomRestarter((_, _) => recovery.Task));
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => task.State == EngineTaskState.Recovering, "the failure must start the recovery");
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Recovering,
+      MustComplete, "the failure must start the recovery");
     await task.FireAsync(EngineTaskTrigger.Reset);
     await task.FireAsync(EngineTaskTrigger.Start);
     task.State.Should().Be(EngineTaskState.Running);

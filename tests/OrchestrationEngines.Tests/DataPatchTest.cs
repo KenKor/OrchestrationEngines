@@ -63,16 +63,6 @@ public class DataPatchTest
     return descriptor;
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that looking up a data patch whose underlying network failed to load returns null instead of waiting
   /// forever.
@@ -159,7 +149,8 @@ public class DataPatchTest
     await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
 
     await asBuilt.TriggerResetAsync().WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => asBuilt.State == EngineState.Ready, "the as-built network must load again");
+    await Wait.UntilAsync(() => asBuilt.State == EngineState.Ready,
+      MustComplete, "the as-built network must load again");
 
     asBuilt.Loads.Should().Be(2);
     planned.Loads.Should().Be(1);

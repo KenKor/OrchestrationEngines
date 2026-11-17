@@ -37,16 +37,6 @@ public class OptionalEngineTest
       .WithoutRestarts();
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that ensure ready does not wait for an optional engine, and that the coordinator reports Running while
   /// that engine is still loading.
@@ -68,7 +58,8 @@ public class OptionalEngineTest
 
     core.State.Should().Be(EngineState.Ready);
     stateWhileOptionalLoads.Should().Be(EngineCoordinatorState.Running, "only the required engines decide");
-    await WaitUntilAsync(() => coordinator.GetEngineIfReady("Optional") != null, "the optional engine finishes loading");
+    await Wait.UntilAsync(() => coordinator.GetEngineIfReady("Optional") != null,
+      MustComplete, "the optional engine finishes loading");
     coordinator.State.Should().Be(EngineCoordinatorState.Running);
   }
 
@@ -89,7 +80,7 @@ public class OptionalEngineTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
     optionalGate.SetException(new InvalidOperationException("The optional engine cannot load."));
-    await WaitUntilAsync(() => optional.State == EngineState.Faulted, "the optional engine fails");
+    await Wait.UntilAsync(() => optional.State == EngineState.Faulted, MustComplete, "the optional engine fails");
 
     core.State.Should().Be(EngineState.Ready);
     coordinator.State.Should().Be(EngineCoordinatorState.Running, "an optional engine's failure is not the application's");
@@ -111,7 +102,7 @@ public class OptionalEngineTest
     Register(coordinator, "Core", core, required: true);
     Register(coordinator, "Optional", optional, required: false);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => optional.State == EngineState.Faulted, "the optional engine fails");
+    await Wait.UntilAsync(() => optional.State == EngineState.Faulted, MustComplete, "the optional engine fails");
     coordinator.State.Should().Be(EngineCoordinatorState.Running);
 
     await coordinator.RefreshEngineContextAsync("Core", new NoContext(), ct).WaitAsync(MustComplete, ct);
@@ -175,7 +166,7 @@ public class OptionalEngineTest
     Register(coordinator, "Optional", optional, required: false);
 
     var ensureReady = coordinator.EnsureReadyAsync(ct);
-    await WaitUntilAsync(() => optional.State == EngineState.Ready, "the optional engine loads at once");
+    await Wait.UntilAsync(() => optional.State == EngineState.Ready, MustComplete, "the optional engine loads at once");
     var completedEarly = await Task.WhenAny(ensureReady, Task.Delay(MustStayPending, ct)) == ensureReady;
     var stateWhileCoreLoads = coordinator.State;
     coreGate.SetResult();

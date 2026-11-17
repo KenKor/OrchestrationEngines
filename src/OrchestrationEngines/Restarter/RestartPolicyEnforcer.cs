@@ -108,11 +108,12 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// <param name="policy">The restart policy configuration to enforce.</param>
   /// <param name="timeProvider">The clock; <see cref="TimeProvider.System"/> when <c>null</c>.</param>
   /// <param name="nextRandom">Returns a fraction in [0, 1) for each wait.</param>
+  /// <exception cref="ArgumentNullException"><paramref name="policy"/> or <paramref name="nextRandom"/> is null.</exception>
   internal RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider, Func<double> nextRandom)
   {
     _policy = policy ?? throw new ArgumentNullException(nameof(policy));
     _timeProvider = timeProvider ?? TimeProvider.System;
-    _nextRandom = nextRandom;
+    _nextRandom = nextRandom ?? throw new ArgumentNullException(nameof(nextRandom));
     _policy.Validate();
     CurrentBackoff = _policy.InitialBackoff;
   }

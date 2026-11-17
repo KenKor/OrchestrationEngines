@@ -35,17 +35,6 @@ public class GenerationSwitchEdgeCaseTest
 
   private static LoadEngine Quick() => new(Task.CompletedTask);
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      if (DateTime.UtcNow > deadline)
-        throw new TimeoutException($"Condition not met in time: {because}.");
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies a switch for an engine without a restart factory, as hosts register their engines: the next generation
   /// creates a fresh engine from the registered factory, the previous engine is stopped, and the replaced coordinator
@@ -110,7 +99,8 @@ public class GenerationSwitchEdgeCaseTest
     try
     {
       await coordinator.StartAsync().WaitAsync(MustComplete, ct);
-      await WaitUntilAsync(() => coordinator.GetEngineIfCreated("A") != null, "the first engine must exist");
+      await Wait.UntilAsync(() => coordinator.GetEngineIfCreated("A") != null,
+        MustComplete, "the first engine must exist");
 
       // No caller token on purpose: the wait then uses the mechanic's token, which the switch cancels.
 #pragma warning disable xUnit1051
@@ -138,7 +128,8 @@ public class GenerationSwitchEdgeCaseTest
   /// <summary>
   /// Verifies that a switch whose candidate cannot be copied (a null engine factory, which its setter does not check)
   /// throws and leaves the current coordinator current and running (#59, item 7a). The switch copies every candidate
-  /// before it creates the next coordinator, so no next coordinator is left behind to dispose.
+  /// before it creates the next coordinator, so no next coordinator is created at all. The exception is the copy's own
+  /// (the descriptor constructor's), not another <see cref="ArgumentException"/> on the switch path (#92).
   /// </summary>
   [Theory]
   [InlineData(false)]
@@ -147,6 +138,8 @@ public class GenerationSwitchEdgeCaseTest
   {
     var ct = TestContext.Current.CancellationToken;
     var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    var nextGenerations = 0;
+    coordinator.NextGenerationCreated = _ => Interlocked.Increment(ref nextGenerations);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var candidate = new EngineDescriptor("A", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
@@ -158,7 +151,8 @@ public class GenerationSwitchEdgeCaseTest
     {
       var act = () => coordinator.RestartWithDefinitionsAsync([candidate], waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
 
-      await act.Should().ThrowAsync<ArgumentException>();
+      (await act.Should().ThrowExactlyAsync<ArgumentNullException>()).WithParameterName("createEngineFactory");
+      Volatile.Read(ref nextGenerations).Should().Be(0, "the copy fails before the next coordinator is created");
       coordinator.Current.Should().BeSameAs(coordinator);
       coordinator.State.Should().Be(EngineCoordinatorState.Running);
     }

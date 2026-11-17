@@ -76,16 +76,6 @@ public class PreviousEngineReleaseTest
     return engine;
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that an engine that is not required for running (for example, an engine used only for editing) still takes over the engine it
   /// replaces: it is let go of only once the engine has started, not when the next generation is ready (which does not
@@ -99,15 +89,18 @@ public class PreviousEngineReleaseTest
     var coordinator = CreateCoordinator();
     coordinator.RegisterEngineDescriptor(Descriptor(Patch, required: false, previous => Offered(next, previous)));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => coordinator.GetEngineIfReady(Patch) != null, "the first engine must load");
+    await Wait.UntilAsync(() => coordinator.GetEngineIfReady(Patch) != null,
+      MustComplete, "the first engine must load");
     var previous = coordinator.GetEngineIfReady(Patch);
 
     var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
       .WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => nextCoordinator.GetEngineIfReady(Patch) != null, "the next engine must load");
+    await Wait.UntilAsync(() => nextCoordinator.GetEngineIfReady(Patch) != null,
+      MustComplete, "the next engine must load");
 
     next.TookOver.Should().BeSameAs(previous);
-    await WaitUntilAsync(() => next.Releases == 1, "the next engine must be told to let go once it has started");
+    await Wait.UntilAsync(() => next.Releases == 1,
+      MustComplete, "the next engine must be told to let go once it has started");
     next.Previous.Should().BeNull();
   }
 
@@ -128,7 +121,8 @@ public class PreviousEngineReleaseTest
     var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
       .WaitAsync(MustComplete, ct);
 
-    await WaitUntilAsync(() => nextPatch.Releases == 1, "the patch engine that never starts must let go of the previous engine");
+    await Wait.UntilAsync(() => nextPatch.Releases == 1,
+      MustComplete, "the patch engine that never starts must let go of the previous engine");
     nextPatch.Previous.Should().BeNull();
     nextPatch.TookOver.Should().BeNull("it never started");
     nextCoordinator.GetEngineIfReady(Patch).Should().BeNull();
@@ -142,8 +136,8 @@ public class PreviousEngineReleaseTest
   public async Task RestartWithDefinitions_NextEngineCreationFails_ThePreviousEngineCanBeCollected()
   {
     var (previous, nextCoordinator) = await SwitchWithFailingCreationAsync();
-    await WaitUntilAsync(() => nextCoordinator.GetEngineIfCreated(Patch) == null && nextCoordinator.State != EngineCoordinatorState.Created,
-      "the next generation must have started");
+    await Wait.UntilAsync(() => nextCoordinator.GetEngineIfCreated(Patch) == null &&
+      nextCoordinator.State != EngineCoordinatorState.Created, MustComplete, "the next generation must have started");
 
     // Work of the shutdown may still be finishing on the thread pool for a moment: collect a few times, briefly apart. A
     // real reference keeps the engine alive however long this waits.

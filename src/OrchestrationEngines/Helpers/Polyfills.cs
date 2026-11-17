@@ -241,8 +241,39 @@ namespace System
       public override double NextDouble() { lock (_lock) return base.NextDouble(); }
 
       public override void NextBytes(byte[] buffer) { lock (_lock) base.NextBytes(buffer); }
+    }
+  }
+}
 
-      protected override double Sample() { lock (_lock) return base.Sample(); }
+#endif
+
+#if !NETCOREAPP3_0_OR_GREATER
+
+namespace System.Threading
+{
+  /// <summary>
+  /// Cancellation token members that newer .NET versions offer.
+  /// </summary>
+  internal static class CancellationTokenPolyfills
+  {
+    extension(CancellationToken token)
+    {
+      /// <summary>
+      /// Stand-in for <c>CancellationToken.UnsafeRegister</c> (.NET Core 3.0 and later): registers
+      /// <paramref name="callback"/> without capturing the caller's execution context, so it runs in the context of the
+      /// thread that cancels.
+      /// </summary>
+      /// <param name="callback">What to run when the token is cancelled.</param>
+      /// <param name="state">What <paramref name="callback"/> is passed.</param>
+      /// <returns>The registration, to dispose when the callback is no longer wanted.</returns>
+      public CancellationTokenRegistration UnsafeRegister(Action<object> callback, object state)
+      {
+        // SuppressFlow throws when the flow is suppressed already; the registration captures nothing then anyway.
+        if (ExecutionContext.IsFlowSuppressed())
+          return token.Register(callback, state);
+        using (ExecutionContext.SuppressFlow())
+          return token.Register(callback, state);
+      }
     }
   }
 }

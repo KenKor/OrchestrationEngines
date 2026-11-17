@@ -36,16 +36,6 @@ public class EngineCoordinatorLifecycleTest
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .WithoutRestarts();
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that registering a second engine under the same name, in another case, is rejected.
   /// </summary>
@@ -89,7 +79,8 @@ public class EngineCoordinatorLifecycleTest
     var coordinator = CreateCoordinator();
     coordinator.RegisterEngineDescriptor(Descriptor(Name, new NetworkEngine((_, _) => throw new InvalidOperationException("The load failed."))));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines, "the failure must reach the coordinator");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines,
+      MustComplete, "the failure must reach the coordinator");
     var other = Descriptor("Other", new NetworkEngine((_, _) => Task.CompletedTask));
 
     coordinator.TryRegisterEngineDescriptor(other).Should().BeFalse();
@@ -127,13 +118,15 @@ public class EngineCoordinatorLifecycleTest
     var engine = new NetworkEngine((run, _) => run == 1 ? throw new InvalidOperationException("First load fails.") : Task.CompletedTask);
     coordinator.RegisterEngineDescriptor(Descriptor(Name, engine));
     (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeNull("the first load fails");
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines, "the failure must reach the coordinator");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines,
+      MustComplete, "the failure must reach the coordinator");
 
     await coordinator.InvalidateContextForEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
     var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
 
     loaded.Should().BeSameAs(engine);
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must run again");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator must run again");
   }
 
   /// <summary>
@@ -197,7 +190,7 @@ public class EngineCoordinatorLifecycleTest
     var coordinator = CreateCoordinator();
     coordinator.RegisterEngineDescriptor(Descriptor(Name, engine));
     var ready = coordinator.EnsureReadyAsync(ct);
-    await WaitUntilAsync(() => engine.State == EngineState.Starting, "the engine must be loading");
+    await Wait.UntilAsync(() => engine.State == EngineState.Starting, MustComplete, "the engine must be loading");
     coordinator.GetEngineIfReady(Name).Should().BeNull();
     coordinator.GetEngineIfCreated(Name).Should().BeSameAs(engine);
     var fresh = new NoContext();

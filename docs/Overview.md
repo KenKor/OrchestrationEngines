@@ -376,9 +376,9 @@ Cancellation handlers must not block. On .NET Framework (the `netstandard2.0` bu
 cancels the task's token: the one that stops the coordinator, engine or task, or the library's own on a time-out or a
 reset. It then runs inside the library's `Cancel()`, and under a library lock. A handler that blocks there holds up the
 stop (or the time-out's grace), and one that waits for something that needs the coordinator, engine or task being
-stopped can deadlock it. Make `await Task.Yield()` the first statement of such a handler, so `Cancel()` returns before
-the rest runs. On a thread with a `SynchronizationContext`, such as a WPF or WinForms UI thread, the rest then runs
-later on that same thread, so do any blocking part in `await Task.Run(...)`. A callback registered with
+stopped can deadlock it. Make `await Task.Yield()` the first statement of such a handler, so `Cancel()` does not wait
+for the rest of it. On a thread with a `SynchronizationContext`, such as a WPF or WinForms UI thread, the rest then
+runs later on that same thread, so do any blocking part in `await Task.Run(...)`. A callback registered with
 `token.Register(...)` runs synchronously on the cancelling thread on every target, so it must not block either.
 
 ---
@@ -511,6 +511,10 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
   usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
   state.
+- A switch that fails before it hands over (a rebuilt engine fails to stop, the next coordinator fails to start, or the
+  ready-wait fails or is cancelled) shuts the next coordinator down, or disposes it if it did not start, and throws its
+  own failure. The current coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and
+  a lookup of one of them gives null.
 
 ---
 
