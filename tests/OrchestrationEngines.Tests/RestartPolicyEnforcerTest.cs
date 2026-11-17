@@ -184,18 +184,6 @@ public class RestartPolicyEnforcerTest
   }
 
   /// <summary>
-  /// Verifies that the constructor that takes the jitter's random source refuses a null source (#88, item 1), instead
-  /// of failing with a <see cref="NullReferenceException"/> at the first restart with jitter.
-  /// </summary>
-  [Fact]
-  public void RestartPolicyEnforcer_NullRandomSource_ThrowsArgumentNullException()
-  {
-    var act = () => new RestartPolicyEnforcer(new RestartPolicy(), new ManualTimeProvider(), nextRandom: null);
-
-    act.Should().ThrowExactly<ArgumentNullException>().WithParameterName("nextRandom");
-  }
-
-  /// <summary>
   /// Verifies that the jitter is part of a policy's equality and hash code.
   /// </summary>
   [Fact]
@@ -413,5 +401,17 @@ public class RestartPolicyEnforcerTest
       var create = () => new RestartPolicyEnforcer(policy);
       create.Should().Throw<ArgumentOutOfRangeException>();
     }
+  }
+
+  /// <summary>
+  /// Verifies that the constructor that takes the jitter's random source refuses a null source (#88, item 1), instead
+  /// of failing with a <see cref="NullReferenceException"/> at the first restart with jitter.
+  /// </summary>
+  [Fact]
+  public void RestartPolicyEnforcer_Constructor_NullRandomSource_Throws()
+  {
+    var act = () => new RestartPolicyEnforcer(new RestartPolicy(), new ManualTimeProvider(), nextRandom: null);
+
+    act.Should().ThrowExactly<ArgumentNullException>().WithParameterName("nextRandom");
   }
 }
