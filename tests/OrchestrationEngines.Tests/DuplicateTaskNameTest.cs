@@ -1,5 +1,5 @@
 using System;
-using System.Threading;
+using System.Linq;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,6 +24,8 @@ public class DuplicateTaskNameTest
   private sealed class NamedTasksEngine(params string[] names) : BaseEngine(NullLogger.Instance)
   {
     public EngineTask Add(string name) => CreateTask(name, _ => Task.CompletedTask);
+
+    public void Add(string name, EngineTask task) => AddTask(name, task);
 
     protected override void SetUpTasks()
     {
@@ -54,48 +56,15 @@ public class DuplicateTaskNameTest
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
   }
 
-  /// <summary>
-  /// A task that reports whether the linked token source its constructor made has been disposed.
-  /// </summary>
-  private sealed class ProbeTask(string name)
-    : EngineTask(name, _ => Task.CompletedTask, requiredForRunning: false, NullLogger.Instance, CancellationToken.None)
+  private static async Task<NamedTasksEngine> StartedEngineAsync()
   {
-    public bool SourceDisposed
-    {
-      get
-      {
-        try
-        {
-          _ = _linkedCts.Token;
-          return false;
-        }
-        catch (ObjectDisposedException)
-        {
-          return true;
-        }
-      }
-    }
-  }
-
-  /// <summary>
-  /// An engine with one load task that adds tasks through <c>AddTask</c>, under the name the test gives.
-  /// </summary>
-  private sealed class AddingEngine() : BaseEngine(NullLogger.Instance)
-  {
-    protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
-
-    public void Add(string name, EngineTask task) => AddTask(name, task);
-
-    public void Create(string name) => CreateTask(name, _ => Task.CompletedTask);
-  }
-
-  private static async Task<AddingEngine> StartedAddingEngineAsync()
-  {
-    var engine = new AddingEngine { Context = new NoContext() };
+    var engine = new NamedTasksEngine("Load") { Context = new NoContext() };
     await engine.StartAsync();
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     return engine;
   }
+
+  private static ProbeTask NewTask(string name) => new(name, _ => Task.CompletedTask, requiredForRunning: false);
 
   /// <summary>
   /// Verifies that a task refused for a name already in use lets go of its linked token source, so it holds no
@@ -104,13 +73,35 @@ public class DuplicateTaskNameTest
   [Fact]
   public async Task AddTask_DuplicateName_ReleasesTheRefusedTasksTokenSource()
   {
-    var engine = await StartedAddingEngineAsync();
-    var refused = new ProbeTask("LOAD");
+    var engine = await StartedEngineAsync();
+    var refused = NewTask("LOAD");
+    var token = refused.Source.Token;
 
     var add = Record.Exception(() => engine.Add("LOAD", refused));
 
     add.Should().BeOfType<ArgumentException>();
-    await Wait.UntilAsync(() => refused.SourceDisposed, MustComplete, "the refused task's token source is released");
+    await Wait.UntilAsync(() => Tokens.IsDisposed(token), MustComplete, "the refused task's token source is released");
+  }
+
+  /// <summary>
+  /// Verifies that adding a task that is already in the set again, under its own name or another, is refused and
+  /// leaves that task's token source alone: releasing it would cancel a task the engine still runs.
+  /// </summary>
+  [Theory]
+  [InlineData("Load")]
+  [InlineData("Other")]
+  public async Task AddTask_TaskAlreadyInTheSet_ThrowsAndKeepsItsTokenSource(string name)
+  {
+    var engine = await StartedEngineAsync();
+    var existing = engine.Tasks["Load"];
+    var token = existing.CancellationToken;
+
+    var add = Record.Exception(() => engine.Add(name, existing));
+
+    add.Should().BeOfType<ArgumentException>();
+    engine.Tasks["Load"].Should().BeSameAs(existing);
+    Tokens.IsDisposed(token).Should().BeFalse();
+    token.IsCancellationRequested.Should().BeFalse();
   }
 
   /// <summary>
@@ -120,17 +111,18 @@ public class DuplicateTaskNameTest
   [Fact]
   public async Task AddTask_NameDiffersFromTheTasksName_ThrowsAndLeavesTheSetUnchanged()
   {
-    var engine = await StartedAddingEngineAsync();
-    var existing = engine.Tasks["Load"];
-    var refused = new ProbeTask("Late");
+    var engine = await StartedEngineAsync();
+    var before = engine.Tasks.Values.ToList();
+    var refused = NewTask("Late");
+    var token = refused.Source.Token;
 
     var add = Record.Exception(() => engine.Add("Other", refused));
 
     var thrown = add.Should().BeOfType<ArgumentException>().Which;
     thrown.ParamName.Should().Be("name");
-    thrown.Message.Should().Contain("Other").And.Contain("Late").And.Contain(nameof(AddingEngine));
-    engine.Tasks.Should().ContainSingle().Which.Value.Should().BeSameAs(existing);
-    await Wait.UntilAsync(() => refused.SourceDisposed, MustComplete, "the refused task's token source is released");
+    thrown.Message.Should().Contain("Other").And.Contain("Late").And.Contain(nameof(NamedTasksEngine));
+    engine.Tasks.Values.Should().Equal(before, ReferenceEquals);
+    await Wait.UntilAsync(() => Tokens.IsDisposed(token), MustComplete, "the refused task's token source is released");
   }
 
   /// <summary>
@@ -139,13 +131,13 @@ public class DuplicateTaskNameTest
   [Fact]
   public async Task AddTask_NameDiffersOnlyInCase_AddsTheTask()
   {
-    var engine = await StartedAddingEngineAsync();
-    var late = new ProbeTask("Late");
+    var engine = await StartedEngineAsync();
+    var late = NewTask("Late");
 
     engine.Add("LATE", late);
 
     engine.Tasks["late"].Should().BeSameAs(late);
-    late.SourceDisposed.Should().BeFalse();
+    Tokens.IsDisposed(late.CancellationToken).Should().BeFalse();
   }
 
   /// <summary>
@@ -155,13 +147,14 @@ public class DuplicateTaskNameTest
   [Fact]
   public async Task CreateTaskAndAddTask_NullName_ThrowForTheNameParameter()
   {
-    var engine = await StartedAddingEngineAsync();
+    var engine = await StartedEngineAsync();
+    var count = engine.Tasks.Count;
 
-    var create = Record.Exception(() => engine.Create(null));
-    var add = Record.Exception(() => engine.Add(null, new ProbeTask("Late")));
+    var create = Record.Exception(() => engine.Add(null));
+    var add = Record.Exception(() => engine.Add(null, NewTask("Late")));
 
     create.Should().BeOfType<ArgumentNullException>().Which.ParamName.Should().Be("name");
     add.Should().BeOfType<ArgumentNullException>().Which.ParamName.Should().Be("name");
-    engine.Tasks.Should().ContainSingle();
+    engine.Tasks.Should().HaveCount(count);
   }
 }
