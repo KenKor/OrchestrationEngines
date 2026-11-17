@@ -288,8 +288,12 @@ Resets:
   `resetDependentTasks` every task that depends on them, directly or not; the coordinator's
   `ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks)` does it for one engine, once its start has
   settled (it is `Ready`, or its start failed); after a generation switch, on the next generation. An unknown name
-  throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. The
-  tasks then run again: a Ready engine goes to `Starting` and back to `Ready`.
+  throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. Through
+  the coordinator, an engine that had started and is stopped before or during the reset throws an
+  `EngineTaskNotReadyException` for its kick-start, `Cancelled`, which a generation switch hands on to the next
+  generation; an engine that was not created throws an `InvalidOperationException` with its kick-start's exception
+  inside. The tasks then run again: a Ready engine
+  goes to `Starting` and back to `Ready`.
 - Every reset of several tasks (also `TriggerResetAsync`) goes in two passes. First it ends the current run of every
   task (its outcome is dropped, its token cancelled), dependents before the tasks they depend on, so no dependent goes
   on running on a dependency that is being reset; until its reset, a task whose run was ended ignores its dependencies'

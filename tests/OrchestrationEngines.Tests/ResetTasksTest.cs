@@ -556,6 +556,23 @@ public class ResetTasksTest
     await engine.StopAsync();
   }
 
+  /// <summary>
+  /// A coordinator whose engine factory builds a fresh <see cref="Chain"/> for every generation and records it in
+  /// <paramref name="engines"/>.
+  /// </summary>
+  private static EngineCoordinator CoordinatorRecording(ConcurrentQueue<GraphEngine> engines)
+  {
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Graph", _ =>
+      {
+        var engine = Chain();
+        engines.Enqueue(engine);
+        return Task.FromResult<IEngine>(engine);
+      })
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    return coordinator;
+  }
+
   private static EngineCoordinator CoordinatorWith(IEngine engine)
   {
     var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
@@ -614,6 +631,96 @@ public class ResetTasksTest
     (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Contain("has not started");
   }
 
+  private sealed class NoEngineException() : EngineTaskException(null, "The engine cannot be made.");
+
+  /// <summary>
+  /// Verifies that an engine that was not created, with nothing stopped (its factory threw an
+  /// <see cref="EngineTaskException"/>, so its creation ended Cancelled and its kick-start DependencyFailed), is
+  /// reported as not created with the kick-start's exception inside: the cause stays reachable (#58 item 15).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_EngineNotCreated_ThrowsNotCreatedWithTheCause()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var descriptor = coordinator.RegisterEngine("Graph", _ => throw new NoEngineException())
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    descriptor.RestartPolicy = null;
+
+    var act = () => coordinator.ResetTasksForEngineAsync("Graph", ["A"], resetDependentTasks: false, ct)
+      .WaitAsync(MustComplete, ct);
+
+    var thrown = (await act.Should().ThrowAsync<InvalidOperationException>()).Which;
+    thrown.Message.Should().Contain("was not created");
+    thrown.InnerException.Should().BeOfType<EngineTaskNotReadyException>()
+      .Which.State.Should().Be(EngineTaskState.DependencyFailed);
+  }
+
+  /// <summary>
+  /// Verifies that an engine stopped during the reset (here, as its task's reset begins) reports the stop as a
+  /// cancelled kick-start, the signal a caller that follows generation switches recognises (#58 items 5 and 11).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_EngineStoppedDuringTheReset_ThrowsTheStoppedSignal()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = Chain();
+    var coordinator = CoordinatorWith(engine);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    Task stop = null;
+    engine.OnReset = name =>
+    {
+      if (name == "A")
+        stop ??= engine.StopAsync();
+    };
+
+    var act = () => coordinator.ResetTasksForEngineAsync("Graph", ["A"], resetDependentTasks: false, ct)
+      .WaitAsync(MustComplete, ct);
+
+    (await act.Should().ThrowAsync<EngineTaskNotReadyException>()).Which.State.Should().Be(EngineTaskState.Cancelled);
+    stop.Should().NotBeNull();
+    await stop.WaitAsync(MustComplete, ct);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a generation switch that stops the engine during the reset hands the reset on to the next
+  /// generation's engine (#58 items 5 and 11).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_SwitchStopsTheEngineDuringTheReset_ResetsTheNextGenerationsEngine()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engines = new ConcurrentQueue<GraphEngine>();
+    var coordinator = CoordinatorRecording(engines);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var first = engines.Single();
+    Task<EngineCoordinator> switching = null;
+    var stoppedInTime = false;
+    first.OnReset = name =>
+    {
+      if (name != "C" || switching != null)
+        return;
+      switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+      // The switch stops this engine while its task is being reset.
+      stoppedInTime = SpinWait.SpinUntil(() => first.IsCancellationRequested, MustComplete);
+    };
+
+    await coordinator.ResetTasksForEngineAsync("Graph", ["C"], resetDependentTasks: false, ct).WaitAsync(MustComplete, ct);
+    var next = await switching.WaitAsync(MustComplete, ct);
+    try
+    {
+      stoppedInTime.Should().BeTrue();
+      await next.EnsureEngineTaskReadyAsync("Graph", "C", ct).WaitAsync(MustComplete, ct);
+      engines.Should().HaveCount(2);
+      engines.Last().Runs("C").Should().Be(2);
+    }
+    finally
+    {
+      await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
+  }
+
   /// <summary>
   /// Verifies that a coordinator replaced by a generation switch resets the next generation's engine.
   /// </summary>
@@ -622,14 +729,7 @@ public class ResetTasksTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engines = new ConcurrentQueue<GraphEngine>();
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Graph", _ =>
-      {
-        var engine = Chain();
-        engines.Enqueue(engine);
-        return Task.FromResult<IEngine>(engine);
-      })
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    var coordinator = CoordinatorRecording(engines);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
       .WaitAsync(MustComplete, ct);
