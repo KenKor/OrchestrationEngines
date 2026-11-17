@@ -18,8 +18,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EnsureTaskReadyTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// The exception the failing task's work throws.
   /// </summary>

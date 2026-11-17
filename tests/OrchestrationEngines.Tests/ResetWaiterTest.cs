@@ -15,7 +15,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class ResetWaiterTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private static readonly TimeSpan MustStayPending = TimeSpan.FromMilliseconds(200);
 
   /// <summary>

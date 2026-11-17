@@ -19,7 +19,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class KickStartRestartTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private const string Name = "E";
 
   /// <summary>

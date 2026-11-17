@@ -18,8 +18,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class DataPatchTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// A network engine with one load task, counting its loads; the test decides what a load does.
   /// </summary>

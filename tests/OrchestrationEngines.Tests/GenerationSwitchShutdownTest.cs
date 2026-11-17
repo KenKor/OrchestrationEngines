@@ -20,7 +20,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class GenerationSwitchShutdownTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private const string Name = "N";
 
   /// <summary>

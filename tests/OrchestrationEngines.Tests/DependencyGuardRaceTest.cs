@@ -92,9 +92,9 @@ public class DependencyGuardRaceTest
     await task.FireAsync(EngineTaskTrigger.Start);
 
     await dependency.FireAsync(EngineTaskTrigger.Start);
-    await dependency.InnerTask.WaitAsync(TimeSpan.FromSeconds(5), ct);
+    await dependency.InnerTask.WaitAsync(MustComplete, ct);
 
-    SpinWait.SpinUntil(() => task.Looks > 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the completion callback runs");
+    SpinWait.SpinUntil(() => task.Looks > 1, MustComplete).Should().BeTrue("the completion callback runs");
     dependency.State.Should().Be(EngineTaskState.CompletedWithSuccess);
   }
 

@@ -16,8 +16,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class RestartPolicyEnforcerTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   private static EngineTask NewTask(Func<CancellationToken, Task> workAsync) =>
     new("Load", workAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None);
 

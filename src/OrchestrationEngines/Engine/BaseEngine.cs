@@ -849,7 +849,9 @@ public abstract partial class BaseEngine : IEngine
         .Where(t => t.State == EngineTaskState.Created)
         .Select(t => t.FireAsync(EngineTaskTrigger.Start))
         .ToArray();
-    LogFiringStartTriggers();
+    // Logged only when there is something to start: a reset and a lookup also come here with nothing left in Created.
+    if (startTasks.Length > 0)
+      LogFiringStartTriggers();
     await Task.WhenAll(startTasks).ConfigureAwait(false);
   }
 

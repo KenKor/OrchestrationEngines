@@ -26,8 +26,6 @@ public sealed class StressCollection
 [Collection(StressCollection.Name)]
 public class TaskSetConcurrencyTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine with many quick tasks, so that building its task set takes a while.
   /// </summary>

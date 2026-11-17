@@ -16,8 +16,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineGenerationSwitchTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   private sealed class QuickEngine() : BaseEngine(NullLogger.Instance)
   {
     protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);

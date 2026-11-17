@@ -18,8 +18,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineLifecycleTokenTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// One required task that counts its runs, and fails while <see cref="Fail"/> is set.
   /// </summary>

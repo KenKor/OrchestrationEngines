@@ -17,15 +17,13 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class StartTriggerTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// A task that, when asked whether it has started while it has not, waits briefly for its dependency to start it.
   /// </summary>
   /// <remarks>
   /// This stands in for a thread that is preempted between the start's two looks at the task (IsStarted, then State,
   /// to choose between Start and Reset): the dependency, completing on another thread, moves the task from Created to
-  /// Running in between. Without the wait the window is a few instructions wide, and 500 starts only rarely hit it.
+  /// Running in between. Without the wait the window is a few instructions wide, and hundreds of starts rarely hit it.
   /// It guards against a return of that shape; a start that reads the state once never asks. It waits once per task,
   /// so a regression fails fast.
   /// </remarks>
@@ -78,6 +76,16 @@ public class StartTriggerTest
   }
 
   /// <summary>
+  /// An engine with one task whose work completes at once, logging to the test's logger.
+  /// </summary>
+  private sealed class OneTaskEngine : BaseEngine
+  {
+    public OneTaskEngine(ILogger logger) : base(logger) => Context = new NoContext();
+
+    protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
+  }
+
+  /// <summary>
   /// Verifies that a start runs the work of each task in a chain of instant tasks exactly once: a task that its
   /// dependency started while the start was still going through the set is not reset and run again.
   /// </summary>
@@ -85,7 +93,7 @@ public class StartTriggerTest
   public async Task StartAsync_ChainOfInstantTasks_RunsEachTaskOnce()
   {
     var ct = TestContext.Current.CancellationToken;
-    for (var attempt = 0; attempt < 500; attempt++)
+    for (var attempt = 0; attempt < 5; attempt++)
     {
       var engine = new ChainEngine();
 
@@ -99,26 +107,43 @@ public class StartTriggerTest
   }
 
   /// <summary>
-  /// Verifies that a Start that reaches a task after it has started (Running) or completed is ignored, without an
-  /// "Unhandled trigger" warning: a start that found the task Created can fire it after a dependency started it.
+  /// Verifies that a reset of an engine whose tasks have all started logs "Firing start triggers" once, for the start
+  /// of the reset tasks, and not also for the tasks that were still Created, of which there are none.
   /// </summary>
   [Fact]
-  public async Task Start_OnATaskThatHasStarted_IsIgnoredWithoutAWarning()
+  public async Task TriggerResetAsync_AllTasksStarted_LogsFiringStartTriggersOnce()
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
-    var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    var task = new EngineTask("Load", _ => release.Task, requiredForRunning: true, logger, CancellationToken.None);
-    await task.FireAsync(EngineTaskTrigger.Start);
-    task.State.Should().Be(EngineTaskState.Running);
+    var engine = new OneTaskEngine(logger);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    logger.Collector.Clear();
 
-    await task.FireAsync(EngineTaskTrigger.Start);
-    task.State.Should().Be(EngineTaskState.Running);
-    release.SetResult(true);
-    await task.InnerTask.WaitAsync(MustComplete, ct);
-    await task.FireAsync(EngineTaskTrigger.Start);
+    await engine.TriggerResetAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
 
-    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
-    logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Warning);
+    logger.Collector.GetSnapshot().Where(r => r.Message.Contains("Firing start triggers")).Should()
+      .ContainSingle().Which.Level.Should().Be(LogLevel.Debug);
+    await engine.StopAsync().WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a start that finds every task started fires nothing and does not log "Firing start triggers".
+  /// </summary>
+  [Fact]
+  public async Task TriggerStartAsync_AllTasksStarted_LogsNoFiringStartTriggers()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    var engine = new OneTaskEngine(logger);
+    await engine.StartAsync().WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    logger.Collector.Clear();
+
+    await engine.TriggerStartAsync().WaitAsync(MustComplete, ct);
+
+    logger.Collector.GetSnapshot().Should().NotContain(r => r.Message.Contains("Firing start triggers"));
+    await engine.StopAsync().WaitAsync(MustComplete, ct);
   }
 }

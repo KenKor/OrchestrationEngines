@@ -21,8 +21,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class RuntimeRecoveryTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine shaped like a process host: a required start task that fails the first <paramref name="failedStarts"/>
   /// times, and a background watcher (not required for running) that fails the first <paramref name="failedWatches"/>

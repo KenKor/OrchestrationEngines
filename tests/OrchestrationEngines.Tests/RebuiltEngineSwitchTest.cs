@@ -18,8 +18,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class RebuiltEngineSwitchTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine that records whether it released its data.
   /// </summary>

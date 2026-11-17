@@ -17,7 +17,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class PreviousEngineReleaseTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private const string Base = "Base";
   private const string Patch = "Patch";
 

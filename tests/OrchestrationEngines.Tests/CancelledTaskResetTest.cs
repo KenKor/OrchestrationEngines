@@ -16,8 +16,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class CancelledTaskResetTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine with a load whose first run is cancelled from outside, and an index that depends on the load.
   /// </summary>

@@ -22,8 +22,6 @@ namespace OrchestrationEngines.Tests;
 /// </remarks>
 public class EngineTaskLogLevelTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   private static EngineTask NewTask(string name, Func<CancellationToken, Task> work, ILogger logger,
     TimeProvider clock = null) =>
     new(name, work, requiredForRunning: true, logger, CancellationToken.None, clock);
@@ -84,6 +82,41 @@ public class EngineTaskLogLevelTest
     await dependent.FireAsync(EngineTaskTrigger.Start);
 
     dependent.State.Should().Be(EngineTaskState.DependencyFailed);
+    logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Warning);
+  }
+
+  /// <summary>
+  /// Verifies that a Start that reaches a task after it has started (Running, Recovering) or completed is ignored,
+  /// without an "Unhandled trigger" warning: a start that found the task Created can fire it after a dependency started
+  /// it.
+  /// </summary>
+  [Fact]
+  public async Task Start_OnATaskThatHasStarted_IsIgnoredWithoutAWarning()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    var failFirstRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var recovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var runs = 0;
+    var task = NewTask("Load", _ => Interlocked.Increment(ref runs) == 1 ? failFirstRun.Task : Task.CompletedTask,
+      logger)
+      .SetRecovery(new CustomRestarter((_, _) => recovery.Task));
+    await task.FireAsync(EngineTaskTrigger.Start);
+    task.State.Should().Be(EngineTaskState.Running);
+
+    await task.FireAsync(EngineTaskTrigger.Start);
+    task.State.Should().Be(EngineTaskState.Running);
+    failFirstRun.SetException(new InvalidOperationException("No data."));
+    await Wait.UntilAsync(() => task.State == EngineTaskState.Recovering,
+      MustComplete, "the failure must start the recovery");
+    await task.FireAsync(EngineTaskTrigger.Start);
+    task.State.Should().Be(EngineTaskState.Recovering);
+    recovery.SetResult();
+    await task.InnerTask.WaitAsync(MustComplete, ct);
+    await task.FireAsync(EngineTaskTrigger.Start);
+
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    Volatile.Read(ref runs).Should().Be(2, "the Starts did not run the work again");
     logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Warning);
   }
 

@@ -21,8 +21,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class TaskSetSetUpFailureTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine whose set-up the test chooses per start.
   /// </summary>

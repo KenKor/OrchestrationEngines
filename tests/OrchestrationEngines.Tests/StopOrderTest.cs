@@ -19,7 +19,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class StopOrderTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
   private static readonly TimeSpan MustStayPending = TimeSpan.FromMilliseconds(200);
 
   /// <summary>

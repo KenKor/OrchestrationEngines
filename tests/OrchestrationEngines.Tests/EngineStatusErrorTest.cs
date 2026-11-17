@@ -17,8 +17,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineStatusErrorTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine whose tasks the test sets up.
   /// </summary>

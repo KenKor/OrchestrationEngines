@@ -21,8 +21,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineReadinessApiTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine with two load tasks that wait for a gate, one created with asynchronous and one with synchronous work.
   /// </summary>

@@ -16,8 +16,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class StateMachinePublicationTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// A task whose work completes at once, that shows its state machine and numbers each one it builds.
   /// </summary>

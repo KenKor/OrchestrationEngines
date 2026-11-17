@@ -130,7 +130,7 @@ public class EngineDescriptorRecoveryTest
 
     var next = await coordinator
       .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), token: ct)
-      .WaitAsync(TimeSpan.FromSeconds(5), ct);
+      .WaitAsync(MustComplete, ct);
     var copy = next.GetRegisteredDefinitions().Single();
 
     var helpers = LifecycleTasks(copy).Select(t => t.RecoveryHelper).ToArray();

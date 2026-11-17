@@ -20,8 +20,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class ResetTasksTest
 {
-  private static readonly TimeSpan MustComplete = TimeSpan.FromSeconds(5);
-
   /// <summary>
   /// An engine whose tasks and dependencies are given as a list, and which counts each task's runs.
   /// </summary>
