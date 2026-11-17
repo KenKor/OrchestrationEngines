@@ -1128,8 +1128,8 @@ public partial class EngineCoordinator : IDisposable
   /// A generation switch during the wait is answered by the next generation, which resets its engine, as with
   /// <see cref="EnsureEngineTaskReadyAsync"/>. The wait for the engine to start lasts until it is Ready or its start
   /// has failed (see <see cref="MechanicEngine.ResetEngineTasksAsync"/>). A task that hangs during the engine's first
-  /// start can be reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, then
-  /// <see cref="BaseEngine.ResetTasksAsync"/>), or its run bounded with the task's <see cref="EngineTask.Timeout"/>.
+  /// start can be reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>,
+  /// then <see cref="BaseEngine.ResetTasksAsync"/>), or its run bounded with the task's <see cref="EngineTask.Timeout"/>.
   /// </remarks>
   /// <exception cref="InvalidOperationException">
   /// The engine was not created (its kick-start's exception is the <see cref="Exception.InnerException"/>), never

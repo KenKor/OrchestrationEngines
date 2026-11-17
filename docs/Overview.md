@@ -289,7 +289,7 @@ Resets:
   `ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks)` does it for one engine, once its start has
   settled (it is `Ready`, or its start failed); after a generation switch, on the next generation. A task that hangs
   during the engine's first start can be reset without that wait through the engine itself
-  (`GetEngineIfCreated(engineName)`, then `BaseEngine.ResetTasksAsync`), or its run bounded with the task's `Timeout`. An unknown name
+  (`GetEngineIfCreated(engineName)`, cast to `BaseEngine`, then `ResetTasksAsync`), or its run bounded with the task's `Timeout`. An unknown name
   throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. Through
   the coordinator, an engine that had started and is stopped before or during the reset throws an
   `EngineTaskNotReadyException` for its kick-start, `Cancelled`, which a generation switch hands on to the next
