@@ -794,6 +794,64 @@ public class StopOrderTest
   }
 
   /// <summary>
+  /// Verifies that a stop of only the two ends of a chain of 10,000 engines, which passes the order on through the
+  /// 9,998 engines between them without stopping them, stops the head first and the tail after it without running out
+  /// of stack. The head's stop is held until every pass-through wait is in place, and ends on a thread with a small
+  /// stack (256 KB) without asynchronous continuations, so whatever waits for it runs inline there.
+  /// </summary>
+  [Fact]
+  public async Task StopEngines_ChainOf10000EnginesStoppingOnlyItsEnds_StopsTheHeadFirst()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    const int length = 10_000;
+    var stops = new ConcurrentQueue<string>();
+    var gate = new TaskCompletionSource();
+    var mechanic = CreateChain(length, stops, gate.Task);
+
+    var stop = mechanic.StopEnginesAsync(["E0", $"E{length - 1}"]);
+    stops.Should().Equal([$"E{length - 1}"], "the tail must still be waiting when the head's stop ends");
+    var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
+    thread.Start();
+    thread.Join();
+    await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
+
+    stops.Should().Equal([$"E{length - 1}", "E0"]);
+  }
+
+  /// <summary>
+  /// Verifies that a stop of only the two ends of a chain of 5,000 cycles (A{i} and B{i} depend on each other, and
+  /// A{i} on A{i-1}), which passes the order on through every cycle between them without stopping it, stops the head
+  /// first and the tail after it without running out of stack. As in
+  /// <see cref="StopEngines_ChainOf10000EnginesStoppingOnlyItsEnds_StopsTheHeadFirst"/>, the head's stop ends on a
+  /// thread with a small stack (256 KB), so whatever waits for it runs inline there.
+  /// </summary>
+  [Fact]
+  public async Task StopEngines_ChainOf5000CyclesStoppingOnlyItsEnds_StopsTheHeadFirst()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    const int cycles = 5_000;
+    var stops = new ConcurrentQueue<string>();
+    var gate = new TaskCompletionSource();
+    var mechanic = CreateMechanic(null, null, Enumerable.Range(0, cycles)
+      .SelectMany(i => new[]
+      {
+        ($"A{i}", (IEngine)new CountingEngine($"A{i}", stops, i == cycles - 1 ? gate.Task : null),
+          i == 0 ? new[] { $"B{i}" } : [$"B{i}", $"A{i - 1}"]),
+        ($"B{i}", (IEngine)new CountingEngine($"B{i}", stops), new[] { $"A{i}" }),
+      })
+      .ToArray());
+
+    var stop = mechanic.StopEnginesAsync(["A0", $"A{cycles - 1}"]);
+    stops.Should().Equal([$"A{cycles - 1}"], "the tail must still be waiting when the head's stop ends");
+    var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
+    thread.Start();
+    thread.Join();
+    await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
+
+    stops.Should().Equal([$"A{cycles - 1}", "A0"]);
+  }
+
+  /// <summary>
   /// Verifies that an engine whose stop is cancelled (its cleanup cut short) gets a warning, is not reported as a
   /// failure, and does not keep its dependency running.
   /// </summary>
