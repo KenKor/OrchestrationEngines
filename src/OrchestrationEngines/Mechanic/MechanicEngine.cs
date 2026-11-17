@@ -712,18 +712,20 @@ public partial class MechanicEngine : BaseEngine
     var first = new List<Task>();
     while (stops.Count < engines.Count)
     {
-      var inACycle = ready.Count == 0;
-      var name = inACycle ? graph.NextInACycle(stops) : ready.Dequeue();
+      var breaksACycle = ready.Count == 0;
+      var name = breaksACycle ? graph.NextInACycle(stops) : ready.Dequeue();
 
       first.Clear();
       if (graph.Dependents.TryGetValue(name, out var dependents))
         foreach (var dependent in dependents)
           if (stops.TryGetValue(dependent, out var stop))
           {
-            first.Add(stop);
+            if (graph.StopToWaitFor(name, dependent, stop) is { } wait)
+              first.Add(wait);
             last.Remove(dependent);
           }
-      graph.AddCycleStops(name, inACycle, stops, first);
+      if (breaksACycle)
+        first.Add(graph.StopsAbove(name, stops));
       stops[name] = graph.Stops(name)
         ? StopAfterAsync(name, engines[name], first.ToArray(), graph, failures)
         : first.Count == 0 ? Task.CompletedTask : Task.WhenAll(first);
@@ -751,12 +753,9 @@ public partial class MechanicEngine : BaseEngine
     private readonly string[] _order;
     private List<string> _dependentsFirst;
     private int _next;
-    // Found with _dependentsFirst: each engine's component (its cycle, or itself alone), as an index into
-    // _componentStarts, where the component's engines begin in _dependentsFirst; and for each cycle, its stop.
-    private Dictionary<string, int> _componentOf;
-    private List<int> _componentStarts;
-    private Dictionary<int, CycleStop> _cycleStops;
-    private Dictionary<int, Task[]> _stopsAbove;
+    // Found with _dependentsFirst, so null until a cycle is found: each engine's component (its cycle, or itself
+    // alone).
+    private Dictionary<string, Component> _componentOf;
 
     /// <param name="context">
     /// The mechanic's context, whose descriptors give the dependencies; <c>null</c> for none.
@@ -785,7 +784,7 @@ public partial class MechanicEngine : BaseEngine
     /// When no engine is ready although some have no stop yet, so a cycle holds them: the next engine without a stop
     /// in an order where every cycle comes after the cycles and engines that depend on it. Every engine that depends on
     /// it from outside its cycle, directly or not, has a stop then; its stop waits for theirs through
-    /// <see cref="AddCycleStops"/>.
+    /// <see cref="StopsAbove"/>.
     /// </summary>
     /// <remarks>
     /// The order is found once per walk, on the first call; the calls then move one cursor through it, so a walk that
@@ -801,103 +800,108 @@ public partial class MechanicEngine : BaseEngine
     }
 
     /// <summary>
-    /// Adds to <paramref name="first"/>, which holds the stops of the engines that depend on <paramref name="name"/>,
-    /// what else its stop waits for once a cycle was found: for such an engine in another cycle, the stops of that
-    /// whole cycle; and where the walk breaks a cycle at <paramref name="name"/>, the stops of the engines outside the
-    /// cycle that depend on any engine in it, again with their whole cycles. So a stop ends only after those of every engine
-    /// outside its cycle that depends on it, directly or not.
+    /// What the stop of <paramref name="name"/> waits for, for <paramref name="dependent"/>, an engine that depends on
+    /// it and whose stop is <paramref name="stop"/>: that stop, or once a cycle was found and the dependent is in
+    /// another cycle, the stop of that whole cycle. <c>null</c> when the stop of that cycle was already returned for
+    /// <paramref name="name"/>.
     /// </summary>
-    /// <param name="name">The engine whose stop the walk makes next.</param>
-    /// <param name="breaksACycle">Whether <see cref="NextInACycle"/> returned <paramref name="name"/>.</param>
-    /// <param name="stops">The stops so far, by engine.</param>
-    /// <param name="first">The stops to wait for.</param>
-    public void AddCycleStops(string name, bool breaksACycle, Dictionary<string, Task> stops, List<Task> first)
+    public Task StopToWaitFor(string name, string dependent, Task stop)
     {
       // No cycle found yet: no engine with a stop is in one.
       if (_componentOf == null)
-        return;
-      var component = _componentOf[name];
-      foreach (var dependent in DependentsOf(name))
-        if (_componentOf[dependent] != component && _cycleStops.TryGetValue(_componentOf[dependent], out var cycle))
-          first.Add(cycle.Stop);
-      if (breaksACycle)
-        first.AddRange(StopsAbove(component, stops));
+        return stop;
+      var cycle = _componentOf[dependent];
+      if (cycle.Stop == null || cycle == _componentOf[name])
+        return stop;
+      if (ReferenceEquals(cycle.WaitedForBy, name))
+        return null;
+      cycle.WaitedForBy = name;
+      return cycle.Stop;
     }
 
     /// <summary>
     /// Records the stop of <paramref name="name"/>, for the stop of its cycle (if it is in one) to wait for.
     /// </summary>
-    public void Started(string name, Task stop)
-    {
-      if (_componentOf != null && _cycleStops.TryGetValue(_componentOf[name], out var cycle))
-        cycle.Add(stop);
-    }
+    public void Started(string name, Task stop) => _componentOf?[name].Started(stop);
 
     /// <summary>
-    /// For each cycle or engine outside <paramref name="component"/> that depends on an engine in it, its stop: found
-    /// once per component, when the walk first breaks it, which is after all of them have a stop.
+    /// Where the walk breaks a cycle at <paramref name="name"/>: what its stop waits for besides the stops of its
+    /// direct dependents, the stops of the engines outside the cycle that depend on any engine in it, each with its
+    /// whole cycle. So a stop ends only after those of every engine outside its cycle that depends on it, directly or
+    /// not. Found once per cycle, when the walk first breaks it, which is after all of them have a stop.
     /// </summary>
-    private Task[] StopsAbove(int component, Dictionary<string, Task> stops)
+    /// <param name="name">The engine <see cref="NextInACycle"/> returned.</param>
+    /// <param name="stops">The stops so far, by engine.</param>
+    public Task StopsAbove(string name, Dictionary<string, Task> stops)
     {
-      _stopsAbove ??= new Dictionary<int, Task[]>();
-      if (_stopsAbove.TryGetValue(component, out var above))
-        return above;
+      var component = _componentOf[name];
+      if (component.Above != null)
+        return component.Above;
 
       var waits = new List<Task>();
       var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-      var seenCycles = new HashSet<int>();
-      foreach (var member in Members(component))
+      var seenCycles = new HashSet<Component>();
+      foreach (var member in component.Members)
         foreach (var dependent in DependentsOf(member))
         {
           var other = _componentOf[dependent];
           if (other == component)
             continue;
-          if (_cycleStops.TryGetValue(other, out var cycle))
+          if (other.Stop != null)
           {
             if (seenCycles.Add(other))
-              waits.Add(cycle.Stop);
+              waits.Add(other.Stop);
           }
           else if (seen.Add(dependent))
             waits.Add(stops[dependent]);
         }
-      above = waits.ToArray();
-      _stopsAbove[component] = above;
-      return above;
+      component.Above = waits.Count == 0 ? Task.CompletedTask : Task.WhenAll(waits);
+      return component.Above;
     }
 
     /// <summary>
-    /// The stop of a cycle: ends once the stops of all its engines have ended, also when it is awaited before each of
-    /// them has a stop.
+    /// A strongly connected component of the graph: a cycle, or one engine outside every cycle.
     /// </summary>
-    private sealed class CycleStop
+    private sealed class Component
     {
-      private readonly int _size;
       private readonly List<Task> _stops;
-      private readonly TaskCompletionSource<Task> _all = new();
+      private readonly TaskCompletionSource<Task> _all;
 
-      /// <param name="size">How many engines the cycle has.</param>
-      public CycleStop(int size)
+      /// <param name="members">The component's engines.</param>
+      public Component(string[] members)
       {
-        _size = size;
-        _stops = new List<Task>(size);
+        Members = members;
+        if (members.Length < 2)
+          return;
+        _stops = new List<Task>(members.Length);
+        _all = new TaskCompletionSource<Task>();
         Stop = _all.Task.Unwrap();
       }
 
+      public string[] Members { get; }
+
+      /// <summary>
+      /// For a cycle, its stop: ends once the stops of all its engines have ended, also when it is awaited before
+      /// each of them has a stop. <c>null</c> for one engine outside every cycle.
+      /// </summary>
       public Task Stop { get; }
 
-      public void Add(Task stop)
+      /// <summary>What a break of this cycle waits for (<see cref="StopsAbove"/>); <c>null</c> until found.</summary>
+      public Task Above { get; set; }
+
+      /// <summary>
+      /// The last engine whose stop was given <see cref="Stop"/> to wait for (<see cref="StopToWaitFor"/>).
+      /// </summary>
+      public string WaitedForBy { get; set; }
+
+      public void Started(Task stop)
       {
+        if (_all == null)
+          return;
         _stops.Add(stop);
-        if (_stops.Count == _size)
+        if (_stops.Count == Members.Length)
           _all.SetResult(Task.WhenAll(_stops));
       }
-    }
-
-    private IEnumerable<string> Members(int component)
-    {
-      var end = component + 1 < _componentStarts.Count ? _componentStarts[component + 1] : _dependentsFirst.Count;
-      for (var i = _componentStarts[component]; i < end; i++)
-        yield return _dependentsFirst[i];
     }
 
     /// <summary>
@@ -908,9 +912,7 @@ public partial class MechanicEngine : BaseEngine
     private List<string> DependentsFirst()
     {
       var comparer = StringComparer.OrdinalIgnoreCase;
-      _componentOf = new Dictionary<string, int>(comparer);
-      _componentStarts = new List<int>();
-      _cycleStops = new Dictionary<int, CycleStop>();
+      _componentOf = new Dictionary<string, Component>(comparer);
       var index = new Dictionary<string, int>(comparer);
       var low = new Dictionary<string, int>(comparer);
       var order = new List<string>(_order.Length);
@@ -953,19 +955,18 @@ public partial class MechanicEngine : BaseEngine
           if (low[name] != index[name])
             continue;
           // A component is complete: every component it reaches through dependents is in the order already.
-          _componentStarts.Add(order.Count);
+          var start = order.Count;
           string member;
           do
           {
             member = open.Pop();
             isOpen.Remove(member);
-            _componentOf[member] = _componentStarts.Count - 1;
             order.Add(member);
           }
           while (!comparer.Equals(member, name));
-          var size = order.Count - _componentStarts[_componentStarts.Count - 1];
-          if (size > 1)
-            _cycleStops[_componentStarts.Count - 1] = new CycleStop(size);
+          var component = new Component(order.GetRange(start, order.Count - start).ToArray());
+          foreach (var engine in component.Members)
+            _componentOf[engine] = component;
         }
       }
       return order;
@@ -1018,7 +1019,12 @@ public partial class MechanicEngine : BaseEngine
     ConcurrentQueue<Exception> failures)
   {
     // These never fault.
-    await Task.WhenAll(first).ConfigureAwait(false);
+    var dependents = Task.WhenAll(first);
+    if (!dependents.IsCompleted)
+      // Goes on from the thread pool, not inline in the stop that ended last: in a long chain of stops that end at once
+      // the continuations would otherwise run one inside the other, and on .NET Framework overflow the stack.
+      await dependents.ContinueWith(static _ => { }, CancellationToken.None, TaskContinuationOptions.None,
+        TaskScheduler.Default).ConfigureAwait(false);
 
     try
     {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -57,24 +58,13 @@ public class StopOrderTest
   /// <summary>
   /// An engine that only records that it was stopped, for walks over many engines.
   /// </summary>
-  private sealed class CountingEngine(string name, ConcurrentQueue<string> stops) : BaseEngine(NullLogger.Instance)
-  {
-    protected override void SetUpTasks()
-    {
-    }
-
-    public override Task StopAsync()
-    {
-      stops.Enqueue(name);
-      return Task.CompletedTask;
-    }
-  }
-
-  /// <summary>
-  /// An engine that records that it was stopped, and whose stop ends when <paramref name="held"/> does, running what
-  /// waits for it inline.
-  /// </summary>
-  private sealed class HeldEngine(string name, ConcurrentQueue<string> stops, Task held)
+  /// <param name="name">The engine's name.</param>
+  /// <param name="stops">Receives the name when the engine is stopped.</param>
+  /// <param name="held">
+  /// What the stop returns, so it ends when this does, running what waits for it inline; <c>null</c> for a stop that
+  /// ends at once.
+  /// </param>
+  private sealed class CountingEngine(string name, ConcurrentQueue<string> stops, Task held = null)
     : BaseEngine(NullLogger.Instance)
   {
     protected override void SetUpTasks()
@@ -84,9 +74,25 @@ public class StopOrderTest
     public override Task StopAsync()
     {
       stops.Enqueue(name);
-      return held;
+      return held ?? Task.CompletedTask;
     }
   }
+
+  /// <summary>
+  /// A mechanic over a chain of <paramref name="length"/> engines, each depending on the one before it, whose head
+  /// (the last, which nothing depends on) returns <paramref name="headHeld"/> from its stop.
+  /// </summary>
+  private static MechanicEngine CreateChain(int length, ConcurrentQueue<string> stops, Task headHeld = null) =>
+    CreateMechanic(null, null, Enumerable.Range(0, length)
+      .Select(i => (
+        $"E{i}",
+        (IEngine)new CountingEngine($"E{i}", stops, i == length - 1 ? headHeld : null),
+        i == 0 ? Array.Empty<string>() : [$"E{i - 1}"]))
+      .ToArray());
+
+  /// <summary>The stops of a chain made by <see cref="CreateChain"/>, dependents first.</summary>
+  private static IEnumerable<string> ChainStops(int length) =>
+    Enumerable.Range(0, length).Reverse().Select(i => $"E{i}");
 
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
@@ -765,21 +771,16 @@ public class StopOrderTest
     const int length = 10_000;
     var stops = new ConcurrentQueue<string>();
     var gate = new TaskCompletionSource();
-    var engines = Enumerable.Range(0, length)
-      .Select(i => (
-        $"E{i}",
-        i == length - 1 ? new HeldEngine($"E{i}", stops, gate.Task) : (IEngine)new CountingEngine($"E{i}", stops),
-        i == 0 ? Array.Empty<string>() : [$"E{i - 1}"]))
-      .ToArray();
-    var mechanic = CreateMechanic(null, null, engines);
+    var mechanic = CreateChain(length, stops, gate.Task);
 
     var stop = mechanic.StopAsync();
+    stops.Should().Equal(["E9999"], "the other stops must still be waiting when the head's stop ends");
     var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
     thread.Start();
     thread.Join();
     await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
-    stops.Should().Equal(Enumerable.Range(0, length).Reverse().Select(i => $"E{i}"));
+    stops.Should().Equal(ChainStops(length));
   }
 
   /// <summary>
@@ -792,11 +793,7 @@ public class StopOrderTest
     var ct = TestContext.Current.CancellationToken;
     const int length = 10_000;
     var stops = new ConcurrentQueue<string>();
-    var engines = Enumerable.Range(0, length)
-      .Select(i => (
-        $"E{i}", (IEngine)new CountingEngine($"E{i}", stops), i == 0 ? Array.Empty<string>() : [$"E{i - 1}"]))
-      .ToArray();
-    var mechanic = CreateMechanic(null, null, engines);
+    var mechanic = CreateChain(length, stops);
 
     Task stop = null;
     var thread = new Thread(() => stop = mechanic.StopAsync(), maxStackSize: 256 * 1024);
@@ -804,7 +801,7 @@ public class StopOrderTest
     thread.Join();
     await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
-    stops.Should().Equal(Enumerable.Range(0, length).Reverse().Select(i => $"E{i}"));
+    stops.Should().Equal(ChainStops(length));
   }
 
   /// <summary>
