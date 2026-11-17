@@ -63,7 +63,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// unchanged. Version comparison is intentionally simple (integer inequality). It is zero or greater, and set by
   /// the constructor or <see cref="SetVersion"/>.
   /// </remarks>
-  public int Version { get; private set; } = 1;
+  public int Version { get; private set; }
 
   /// <summary>
   /// Factory used to create a <em>fresh</em> engine instance.
@@ -221,6 +221,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <param name="version">
   /// Integer definition version for restart-diff decisions.
   /// </param>
+  /// <exception cref="ArgumentNullException"><paramref name="name"/> or <paramref name="createEngineFactory"/> is null.</exception>
   public EngineDescriptor(
       string name,
       Func<CancellationToken, Task<IEngine>> createEngineFactory,
@@ -228,8 +229,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
       int version = 1)
   {
     SetVersion(version);
+    // Name's init accessor checks too, for an object initializer; this check is here so that a null name passed to the
+    // constructor is reported as the parameter "name", not as the property.
     Name = name ?? throw new ArgumentNullException(nameof(name));
-    EngineFactory = createEngineFactory ?? throw new ArgumentException(nameof(createEngineFactory));
+    EngineFactory = createEngineFactory ?? throw new ArgumentNullException(nameof(createEngineFactory));
     RequiredForRunning = requiredForRunning;
   }
 

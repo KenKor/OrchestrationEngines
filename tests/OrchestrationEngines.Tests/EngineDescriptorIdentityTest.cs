@@ -28,6 +28,28 @@ public class EngineDescriptorIdentityTest
   }
 
   /// <summary>
+  /// Verifies that a null engine factory passed to the constructor throws an ArgumentNullException for its parameter.
+  /// </summary>
+  [Fact]
+  public void EngineDescriptor_NullFactory_ThrowsArgumentNullExceptionForTheParameter()
+  {
+    var make = () => new EngineDescriptor("A", null);
+
+    make.Should().ThrowExactly<ArgumentNullException>().WithParameterName("createEngineFactory");
+  }
+
+  /// <summary>
+  /// Verifies that a null name passed to the constructor is reported as its parameter, not as the property.
+  /// </summary>
+  [Fact]
+  public void EngineDescriptor_NullName_ThrowsArgumentNullExceptionForTheParameter()
+  {
+    var make = () => new EngineDescriptor(null, Factory);
+
+    make.Should().ThrowExactly<ArgumentNullException>().WithParameterName("name");
+  }
+
+  /// <summary>
   /// Verifies that the name can only be set when the descriptor is made (an init accessor): a registered descriptor
   /// cannot be renamed, which would leave the registry keyed by its old name.
   /// </summary>
@@ -48,9 +70,7 @@ public class EngineDescriptorIdentityTest
   [Fact]
   public void EngineDescriptor_Version_HasNoPublicSetter()
   {
-    var setter = typeof(EngineDescriptor).GetProperty(nameof(EngineDescriptor.Version)).SetMethod;
-
-    (setter == null || !setter.IsPublic).Should().BeTrue();
+    typeof(EngineDescriptor).GetProperty(nameof(EngineDescriptor.Version)).GetSetMethod().Should().BeNull();
   }
 
   /// <summary>
