@@ -56,6 +56,21 @@ public class TaskSetReplacementTest
   }
 
   /// <summary>
+  /// An engine whose second set-up fails.
+  /// </summary>
+  private sealed class FailingSetUpEngine() : BaseEngine(NullLogger.Instance)
+  {
+    private int _setUps;
+
+    protected override void SetUpTasks()
+    {
+      if (Interlocked.Increment(ref _setUps) == 2)
+        throw new InvalidOperationException("The second set-up fails.");
+      CreateTask("Load", _ => throw new InvalidOperationException("The load fails."));
+    }
+  }
+
+  /// <summary>
   /// Starts the engine and waits until its first load has failed while its watcher runs.
   /// </summary>
   private static async Task<RetriedEngine> FailedEngineAsync()
@@ -151,6 +166,92 @@ public class TaskSetReplacementTest
     await engine.StopAsync();
 
     await waiting.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    engine.State.Should().Be(EngineState.Stopped);
+  }
+
+  /// <summary>
+  /// Verifies that a reset asked for while a restart is prepared waits until the engine has started again, and then
+  /// returns without resetting the new set: its tasks run fresh, which is what the reset asked for (#58 item 4).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_DuringPreparedRestart_WaitsForTheNewSet()
+  {
+    var engine = await FailedEngineAsync();
+    await engine.ResetFailedTasksAsync();
+
+    var reset = engine.ResetTasksAsync(["Load"], resetDependentTasks: true);
+    await Task.Delay(MustStayPending, TestContext.Current.CancellationToken);
+    reset.IsCompleted.Should().BeFalse("the engine has not started again yet");
+    await engine.StartAsync();
+
+    await reset.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    engine.State.Should().Be(EngineState.Ready);
+    engine.Loads.Should().Be(2, "the new set is not reset and run again");
+    await engine.StopAsync();
+  }
+
+  /// <summary>
+  /// Verifies that a reset asked for while a restart is prepared throws once the restart is given up, since nothing it
+  /// asked for runs (#58 item 4).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_DuringAbandonedRestart_Throws()
+  {
+    var engine = await FailedEngineAsync();
+    await engine.ResetFailedTasksAsync();
+
+    var reset = engine.ResetTasksAsync(["Load"], resetDependentTasks: true);
+    await Task.Delay(MustStayPending, TestContext.Current.CancellationToken);
+    reset.IsCompleted.Should().BeFalse("the restart has not been given up yet");
+    engine.AbandonRestart("the test gives it up");
+
+    var thrown = await reset.Invoking(r => r.WaitAsync(MustComplete, TestContext.Current.CancellationToken))
+      .Should().ThrowAsync<InvalidOperationException>();
+    thrown.Which.Message.Should().Contain("is not started again");
+    engine.State.Should().Be(EngineState.Faulted);
+    engine.Loads.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that a reset asked for while a restart is prepared throws, with the set-up's exception inside, when the
+  /// restart's set-up fails: no new set was built, so nothing it asked for runs (#58 item 4).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_DuringRestartWhoseSetUpFails_Throws()
+  {
+    var engine = new FailingSetUpEngine { Context = new NoContext() };
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    engine.State.Should().Be(EngineState.Faulted);
+    await engine.ResetFailedTasksAsync();
+
+    var reset = engine.ResetTasksAsync(["Load"], resetDependentTasks: true);
+    reset.IsCompleted.Should().BeFalse("the engine has not started again yet");
+    await engine.Invoking(e => e.StartAsync()).Should().ThrowAsync<InvalidOperationException>();
+
+    var thrown = await reset.Invoking(r => r.WaitAsync(MustComplete, TestContext.Current.CancellationToken))
+      .Should().ThrowAsync<InvalidOperationException>();
+    thrown.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+      .Which.Message.Should().Be("The second set-up fails.");
+  }
+
+  /// <summary>
+  /// Verifies that a reset asked for while a restart is prepared throws the "stopped" exception when the engine is
+  /// stopped instead of started again (#58 item 4, with items 5 and 11).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_DuringPreparedRestart_ThenStopped_ThrowsStopped()
+  {
+    var engine = await FailedEngineAsync();
+    await engine.ResetFailedTasksAsync();
+
+    var reset = engine.ResetTasksAsync(["Load"], resetDependentTasks: true);
+    await engine.StopAsync();
+
+    var thrown = await reset.Invoking(r => r.WaitAsync(MustComplete, TestContext.Current.CancellationToken))
+      .Should().ThrowAsync<InvalidOperationException>();
+    thrown.Which.Message.Should().Contain("is stopped");
     engine.State.Should().Be(EngineState.Stopped);
   }
 }

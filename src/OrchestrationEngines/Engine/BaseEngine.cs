@@ -988,13 +988,17 @@ public abstract partial class BaseEngine : IEngine
   /// The runs of dependents are ended before those of the tasks they depend on, and no started task of the set starts
   /// again on a dependency of the set that is still to be reset (see <see cref="TriggerResetAsync"/>). A task named twice or
   /// reached twice is reset once. A reset ends the current run: its outcome is dropped and its token cancelled; it does
-  /// not wait for the work to end, so work that ignores its token goes on until it checks. While a restart is prepared nothing is reset, as with
-  /// <see cref="TriggerResetAsync"/>: the set is about to be replaced.
+  /// not wait for the work to end, so work that ignores its token goes on until it checks. While a restart is prepared
+  /// (the kick-start's retry, see <see cref="ResetFailedTasksAsync"/>), the set is about to be replaced: the reset waits
+  /// until the engine has started again, which can take the retry's backoff, and then returns without resetting the new
+  /// set, whose tasks run fresh. If the restart is given up (<see cref="AbandonRestart"/>), its set-up fails, or the
+  /// engine is stopped meanwhile, it throws. <see cref="TriggerResetAsync"/> does not wait: it returns at once.
   /// </remarks>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
   /// <param name="resetDependentTasks">Whether to reset the tasks that depend on them too.</param>
   /// <exception cref="ArgumentException">The engine has no task of one of the names.</exception>
-  /// <exception cref="InvalidOperationException">The engine is stopped, so its tasks would not run again.</exception>
+  /// <exception cref="InvalidOperationException">The engine is stopped, so its tasks would not run again; or a restart
+  /// was prepared and then given up, or its set-up failed (the set-up's exception inside), so no new set runs.</exception>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks that depend on the tasks to reset form a cycle
   /// (possible only for tasks added after the set-up); nothing is reset.</exception>
   public async Task ResetTasksAsync(IEnumerable<string> taskNames, bool resetDependentTasks)
@@ -1010,12 +1014,36 @@ public abstract partial class BaseEngine : IEngine
       named.Add(task);
     }
     // A stopped engine's reset tasks would sit in Created for good (TriggerResetAsync does not start them again).
-    if (IsCancellationRequested)
-      throw new InvalidOperationException($"Engine '{EngineName}' is stopped, so its tasks cannot be run again.");
+    ThrowIfStopped();
+    if (RestartPending)
+    {
+      // The set is about to be replaced (see PrepareRestartAsync): wait for the restart, then answer by its outcome
+      // (#58 item 4).
+      await WaitForRestartAsync().ConfigureAwait(false);
+      ThrowIfStopped();
+      // Its set-up failed: no set was built, and nothing the reset asked for runs.
+      if (_setUpException is { } setUpException)
+        throw new InvalidOperationException(
+          $"Engine '{EngineName}' could not set up its tasks again, so its tasks are not reset.", setUpException);
+      // Built: the new set's tasks run fresh, which is what the reset asked for.
+      if (_tasks != tasks)
+        return;
+      // Given up (AbandonRestart).
+      throw new InvalidOperationException($"Engine '{EngineName}' is not started again, so its tasks are not reset.");
+    }
 
     if (resetDependentTasks)
       AddAllDependents(named.ToArray(), named, DirectDependents(tasks.Values));
     await TriggerResetAsync(named.ToArray()).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// Throws the "stopped" <see cref="InvalidOperationException"/> of <see cref="ResetTasksAsync"/> if the engine is stopped.
+  /// </summary>
+  private void ThrowIfStopped()
+  {
+    if (IsCancellationRequested)
+      throw new InvalidOperationException($"Engine '{EngineName}' is stopped, so its tasks cannot be run again.");
   }
 
   /// <summary>
