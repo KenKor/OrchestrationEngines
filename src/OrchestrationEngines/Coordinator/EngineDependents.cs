@@ -10,7 +10,7 @@ internal static class EngineDependents
 {
   /// <summary>
   /// For each engine that <paramref name="includes"/>, the included engines whose descriptors depend on it, by name
-  /// (case-insensitive). An engine that no included descriptor depends on has no entry; null names are skipped.
+  /// (case-insensitive). An engine that no included descriptor depends on has no entry; null dependency names are skipped.
   /// </summary>
   /// <param name="descriptors">The descriptors whose <see cref="EngineDescriptor.DependsOn"/> are reversed.</param>
   /// <param name="includes">Whether an engine, by name, is part of the graph.</param>
