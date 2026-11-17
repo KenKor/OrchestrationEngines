@@ -749,6 +749,17 @@ public class StopOrderTest
   }
 
   /// <summary>
+  /// Runs <paramref name="action"/> on a new thread with a small stack (256 KB) and waits for it, so a test of a deep
+  /// chain does not depend on how big the caller's stack happens to be.
+  /// </summary>
+  private static void RunOnSmallStack(Action action)
+  {
+    var thread = new Thread(() => action(), maxStackSize: 256 * 1024);
+    thread.Start();
+    thread.Join();
+  }
+
+  /// <summary>
   /// Verifies that a chain of 10,000 engines whose head (the engine nothing depends on, stopped first) ends its stop
   /// only after the walk has returned still stops dependents first without running out of stack: the other stops then
   /// run as continuations, one after the other. The head's stop ends on a thread with a small stack (256 KB).
@@ -764,9 +775,7 @@ public class StopOrderTest
 
     var stop = mechanic.StopAsync();
     stops.Should().Equal(["E9999"], "the other stops must still be waiting when the head's stop ends");
-    var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
-    thread.Start();
-    thread.Join();
+    RunOnSmallStack(() => gate.SetResult());
     await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
     stops.Should().Equal(ChainStops(length));
@@ -785,9 +794,7 @@ public class StopOrderTest
     var mechanic = CreateChain(length, stops);
 
     Task stop = null;
-    var thread = new Thread(() => stop = mechanic.StopAsync(), maxStackSize: 256 * 1024);
-    thread.Start();
-    thread.Join();
+    RunOnSmallStack(() => stop = mechanic.StopAsync());
     await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
     stops.Should().Equal(ChainStops(length));
@@ -810,9 +817,7 @@ public class StopOrderTest
 
     var stop = mechanic.StopEnginesAsync(["E0", $"E{length - 1}"]);
     stops.Should().Equal([$"E{length - 1}"], "the tail must still be waiting when the head's stop ends");
-    var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
-    thread.Start();
-    thread.Join();
+    RunOnSmallStack(() => gate.SetResult());
     await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
     stops.Should().Equal([$"E{length - 1}", "E0"]);
@@ -843,9 +848,7 @@ public class StopOrderTest
 
     var stop = mechanic.StopEnginesAsync(["A0", $"A{cycles - 1}"]);
     stops.Should().Equal([$"A{cycles - 1}"], "the tail must still be waiting when the head's stop ends");
-    var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
-    thread.Start();
-    thread.Join();
+    RunOnSmallStack(() => gate.SetResult());
     await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
     stops.Should().Equal([$"A{cycles - 1}", "A0"]);
