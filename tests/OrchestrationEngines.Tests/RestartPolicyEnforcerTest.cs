@@ -48,16 +48,6 @@ public class RestartPolicyEnforcerTest
     return (task, backoff);
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that the wait before each restart doubles, from the initial backoff up to the maximum backoff.
   /// </summary>
@@ -139,7 +129,7 @@ public class RestartPolicyEnforcerTest
       }.GetEnforcer(clock));
 
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the restart must wait for its backoff");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the restart must wait for its backoff");
 
     clock.Advance(TimeSpan.FromSeconds(9));
     await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -173,7 +163,7 @@ public class RestartPolicyEnforcerTest
       Jitter = jitter,
     }, clock, nextRandom: () => 0.5);
     var (_, backoff) = await StartFailingRunAsync(enforcer);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the restart must wait for its backoff");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the restart must wait for its backoff");
     enforcer.CurrentBackoff.Should().Be(TimeSpan.FromSeconds(20), "the backoff doubles without the jitter");
 
     clock.Advance(TimeSpan.FromMilliseconds(expectedWaitMs - 1));

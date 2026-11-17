@@ -1105,8 +1105,10 @@ public partial class EngineTask
   /// </remarks>
   protected virtual void StartCallTimer()
   {
-    RunStartedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
+    // End first: a reader without the lock then sees a duration that is too long, never the new start with the old
+    // end (a negative one).
     RunEndedAtUtc = null;
+    RunStartedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
   }
 
   /// <summary>Stops measuring the current task run.</summary>

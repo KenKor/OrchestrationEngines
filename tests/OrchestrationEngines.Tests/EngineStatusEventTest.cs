@@ -69,16 +69,6 @@ public class EngineStatusEventTest
       descriptor.AddDependsOn(dependsOn);
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that an engine announces Starting and then Ready, once each, while it starts.
   /// </summary>
@@ -135,7 +125,8 @@ public class EngineStatusEventTest
     log.Clear();
 
     await engine.TriggerResetAsync().WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => log.For("E").LastOrDefault() == EngineState.Ready, "the reset engine loads again");
+    await Wait.UntilAsync(() => log.For("E").LastOrDefault() == EngineState.Ready,
+      MustComplete, "the reset engine loads again");
 
     log.For("E").Should().Equal(EngineState.Starting, EngineState.Ready);
   }
@@ -154,7 +145,7 @@ public class EngineStatusEventTest
     Register(coordinator, "E", engine, log);
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => engine.State == EngineState.Faulted, "the load throws");
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the load throws");
 
     log.For("E").Last().Should().Be(EngineState.Faulted);
     var failed = engine.Tasks.Values.Single(t => t.IsFailed);
@@ -241,7 +232,8 @@ public class EngineStatusEventTest
     log.Clear();
 
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => session.State == EngineState.Stopped && kernel.State == EngineState.Stopped, "shutdown stops the engines");
+    await Wait.UntilAsync(() => session.State == EngineState.Stopped && kernel.State == EngineState.Stopped,
+      MustComplete, "shutdown stops the engines");
 
     coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
     log.For("Session").Should().Equal(EngineState.Stopped);

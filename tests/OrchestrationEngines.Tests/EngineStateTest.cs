@@ -60,16 +60,6 @@ public class EngineStateTest
     }
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that an engine with a cancelled and a failed task reports Faulted, the more severe state, also when the
   /// cancelled task comes first.
@@ -81,8 +71,9 @@ public class EngineStateTest
 
     await engine.StartAsync();
 
-    await WaitUntilAsync(() => engine.Tasks.Values.All(t => t.IsFailed), "both tasks must end");
-    await WaitUntilAsync(() => engine.State == EngineState.Faulted, "a failed task makes the engine Faulted");
+    await Wait.UntilAsync(() => engine.Tasks.Values.All(t => t.IsFailed), MustComplete, "both tasks must end");
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted,
+      MustComplete, "a failed task makes the engine Faulted");
   }
 
   /// <summary>
@@ -95,8 +86,8 @@ public class EngineStateTest
 
     await engine.StartAsync();
 
-    await WaitUntilAsync(() => engine.Tasks.Values.All(t => t.IsCompleted), "both tasks must end");
-    await WaitUntilAsync(() => engine.State == EngineState.Stopped, "a cancelled task stops the engine");
+    await Wait.UntilAsync(() => engine.Tasks.Values.All(t => t.IsCompleted), MustComplete, "both tasks must end");
+    await Wait.UntilAsync(() => engine.State == EngineState.Stopped, MustComplete, "a cancelled task stops the engine");
   }
 
   /// <summary>
@@ -110,7 +101,8 @@ public class EngineStateTest
 
     await engine.StartAsync();
 
-    await WaitUntilAsync(() => engine.State == EngineState.Ready, "the background task must not hold up readiness");
+    await Wait.UntilAsync(() => engine.State == EngineState.Ready,
+      MustComplete, "the background task must not hold up readiness");
     engine.Tasks["Monitor"].IsCompleted.Should().BeFalse();
     monitor.SetResult();
   }
@@ -129,7 +121,8 @@ public class EngineStateTest
     await engine.EnsureAllReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
 
     engine.Tasks["Load"].IsCompletedWithSuccess.Should().BeTrue();
-    await WaitUntilAsync(() => engine.Tasks["Monitor"].State == EngineTaskState.Running, "the monitor must have been started");
+    await Wait.UntilAsync(() => engine.Tasks["Monitor"].State == EngineTaskState.Running,
+      MustComplete, "the monitor must have been started");
     monitor.SetResult();
   }
 
@@ -143,7 +136,8 @@ public class EngineStateTest
 
     await engine.StartAsync();
 
-    await WaitUntilAsync(() => engine.State == EngineState.Stopped, "an engine without a context is not Ready");
+    await Wait.UntilAsync(() => engine.State == EngineState.Stopped,
+      MustComplete, "an engine without a context is not Ready");
   }
 
   /// <summary>
@@ -159,7 +153,8 @@ public class EngineStateTest
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
     await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must be running");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator must be running");
     var freshContext = new NoContext();
 
     await coordinator.RefreshEngineContextAsync(Name, freshContext, TestContext.Current.CancellationToken);
@@ -183,7 +178,8 @@ public class EngineStateTest
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
     await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must be running");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator must be running");
 
     var refresh = () => coordinator.RefreshEngineContextAsync("Unknown", new NoContext(), TestContext.Current.CancellationToken);
 

@@ -56,16 +56,6 @@ public class TaskSetReplacementTest
     }
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Starts the engine and waits until its first load has failed while its watcher runs.
   /// </summary>
@@ -74,7 +64,7 @@ public class TaskSetReplacementTest
     var engine = new RetriedEngine { Context = new NoContext() };
     await engine.StartAsync();
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-    await WaitUntilAsync(() => engine.ActiveWatchers == 1, "the watcher must run");
+    await Wait.UntilAsync(() => engine.ActiveWatchers == 1, MustComplete, "the watcher must run");
     engine.State.Should().Be(EngineState.Faulted);
     return engine;
   }
@@ -113,7 +103,7 @@ public class TaskSetReplacementTest
     await engine.ResetFailedTasksAsync();
 
     await oldWatcherWaiter.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-    await WaitUntilAsync(() => engine.ActiveWatchers == 0, "the replaced set's watcher must stop");
+    await Wait.UntilAsync(() => engine.ActiveWatchers == 0, MustComplete, "the replaced set's watcher must stop");
     engine.State.Should().Be(EngineState.Created);
     await engine.TriggerStartAsync();
     await engine.TriggerResetAsync([oldLoad]);
@@ -125,7 +115,7 @@ public class TaskSetReplacementTest
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     engine.State.Should().Be(EngineState.Ready);
     engine.Loads.Should().Be(2);
-    await WaitUntilAsync(() => engine.ActiveWatchers == 1, "only the new set's watcher runs");
+    await Wait.UntilAsync(() => engine.ActiveWatchers == 1, MustComplete, "only the new set's watcher runs");
     await engine.StopAsync();
   }
 
@@ -144,7 +134,7 @@ public class TaskSetReplacementTest
     await oldWatcherWaiter.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     engine.State.Should().Be(EngineState.Ready);
-    await WaitUntilAsync(() => engine.ActiveWatchers == 1, "only the new set's watcher runs");
+    await Wait.UntilAsync(() => engine.ActiveWatchers == 1, MustComplete, "only the new set's watcher runs");
     await engine.StopAsync();
   }
 

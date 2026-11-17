@@ -351,16 +351,6 @@ public class EnsureTaskReadyTest
     thrown.Which.ParamName.Should().Be("taskName");
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static EngineCoordinator CoordinatorWith(Func<CancellationToken, Task<IEngine>> create,
     Func<CancellationToken, Task<IEngineContext>> contextFactory = null, Action<EngineDescriptor> configure = null)
   {
@@ -605,7 +595,7 @@ public class EnsureTaskReadyTest
         MaxBackoff = TimeSpan.FromSeconds(1),
       });
     _ = coordinator.StartAsync();
-    await WaitUntilAsync(() => engine.State == EngineState.Faulted, "the first load must fail");
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the first load must fail");
 
     await coordinator.EnsureEngineTaskReadyAsync("Retried", "Load", ct).WaitAsync(MustComplete, ct);
 

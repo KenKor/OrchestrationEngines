@@ -67,16 +67,6 @@ public class RuntimeRecoveryTest
     coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that the recovery set on the descriptor starts an engine again whose load failed, and that the
   /// coordinator is Running once a start succeeds.
@@ -90,7 +80,7 @@ public class RuntimeRecoveryTest
     Register(coordinator, "Kernel", kernel).SetRestartPolicy(NoWait(3));
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Ready, "the third start succeeds");
+    await Wait.UntilAsync(() => kernel.State == EngineState.Ready, MustComplete, "the third start succeeds");
 
     kernel.Starts.Should().Be(3);
     coordinator.State.Should().Be(EngineCoordinatorState.Running);
@@ -110,7 +100,7 @@ public class RuntimeRecoveryTest
     Register(coordinator, "Kernel", kernel).SetRestartPolicy(NoWait(2));
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the recovery gives up");
+    await Wait.UntilAsync(() => kernel.State == EngineState.Faulted, MustComplete, "the recovery gives up");
 
     kernel.Starts.Should().Be(3, "one start and two restarts");
     coordinator.State.Should().NotBe(EngineCoordinatorState.Running);
@@ -140,7 +130,7 @@ public class RuntimeRecoveryTest
       descriptor.RestartPolicy = NoWaitInARow(2);
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the recovery gives up");
+    await Wait.UntilAsync(() => kernel.State == EngineState.Faulted, MustComplete, "the recovery gives up");
     // Give a restart that should not happen the time to happen.
     await Task.Delay(200, ct);
 
@@ -163,7 +153,7 @@ public class RuntimeRecoveryTest
     Register(coordinator, "Kernel", kernel);
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Ready, "the default policy starts it again");
+    await Wait.UntilAsync(() => kernel.State == EngineState.Ready, MustComplete, "the default policy starts it again");
 
     kernel.Starts.Should().Be(2);
   }
@@ -181,7 +171,7 @@ public class RuntimeRecoveryTest
     Register(coordinator, "Kernel", kernel).RestartPolicy = null;
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the first start fails");
+    await Wait.UntilAsync(() => kernel.State == EngineState.Faulted, MustComplete, "the first start fails");
     // Give a restart that should not happen the time to happen.
     await Task.Delay(200, ct);
 
@@ -204,7 +194,7 @@ public class RuntimeRecoveryTest
     descriptor.SetRecoveryHelper(NoWaitInARow(1).GetEnforcer());
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.State == EngineState.Faulted, "the helper gives up");
+    await Wait.UntilAsync(() => kernel.State == EngineState.Faulted, MustComplete, "the helper gives up");
     // Give a restart that should not happen the time to happen.
     await Task.Delay(200, ct);
 
@@ -224,7 +214,8 @@ public class RuntimeRecoveryTest
     Register(coordinator, "Kernel", kernel);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    await WaitUntilAsync(() => kernel.Watches == 3 && kernel.Watcher.State == EngineTaskState.Running, "the third watch runs");
+    await Wait.UntilAsync(() => kernel.Watches == 3 && kernel.Watcher.State == EngineTaskState.Running,
+      MustComplete, "the third watch runs");
 
     kernel.State.Should().Be(EngineState.Ready);
     kernel.Starts.Should().Be(1, "only the watcher ran again");
@@ -245,7 +236,7 @@ public class RuntimeRecoveryTest
     Register(coordinator, "Kernel", kernel);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    await WaitUntilAsync(() => kernel.Watcher.IsFailed, "the watcher's recovery gives up");
+    await Wait.UntilAsync(() => kernel.Watcher.IsFailed, MustComplete, "the watcher's recovery gives up");
 
     kernel.Watches.Should().Be(3, "one run and two restarts");
     kernel.State.Should().Be(EngineState.Ready);
@@ -267,17 +258,20 @@ public class RuntimeRecoveryTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     // A task is Running before its work is scheduled; wait for the work itself, or the reset may cancel the first
     // watch before it counted.
-    await WaitUntilAsync(() => kernel.Watches == 1 && kernel.Watcher.State == EngineTaskState.Running, "the watcher runs");
+    await Wait.UntilAsync(() => kernel.Watches == 1 && kernel.Watcher.State == EngineTaskState.Running,
+      MustComplete, "the watcher runs");
 
     await kernel.TriggerResetAsync().WaitAsync(MustComplete, ct);
     var engine = await coordinator.GetEngineAsync("Kernel", throwErrorIfNotFound: true, token: ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => kernel.Watches == 2 && kernel.Watcher.State == EngineTaskState.Running, "the watcher runs again");
+    await Wait.UntilAsync(() => kernel.Watches == 2 && kernel.Watcher.State == EngineTaskState.Running,
+      MustComplete, "the watcher runs again");
 
     engine.Should().BeSameAs(kernel);
     kernel.Starts.Should().Be(2);
     kernel.Watches.Should().Be(2);
     kernel.State.Should().Be(EngineState.Ready);
     // The coordinator learns of state changes through events, a moment after the engines made them.
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator stays Running");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator stays Running");
   }
 }

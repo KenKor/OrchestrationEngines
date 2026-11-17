@@ -64,16 +64,6 @@ public class PreviousRunTest
     }
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that a task that timed out and recovers runs its work again only once the timed-out work, which ignores
   /// its token, has ended.
@@ -87,7 +77,8 @@ public class PreviousRunTest
       .SetTimeOut(TimeSpan.FromMinutes(90))
       .SetRecovery(NoWait(maxRestarts: 5));
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => work.Runs == 1 && clock.WaitingTimers == 1, "the work must run with its time-out");
+    await Wait.UntilAsync(() => work.Runs == 1 && clock.WaitingTimers == 1,
+      MustComplete, "the work must run with its time-out");
 
     clock.Advance(TimeSpan.FromMinutes(90));
     await Task.Delay(MustStayPending, TestContext.Current.CancellationToken);
@@ -113,15 +104,17 @@ public class PreviousRunTest
     var work = new Work();
     var task = new EngineTask("Load", work.RunAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None, clock);
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => work.Runs == 1, "the first run must have started");
+    await Wait.UntilAsync(() => work.Runs == 1, MustComplete, "the first run must have started");
 
     await task.FireAsync(EngineTaskTrigger.Reset);
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the next run must wait, with its warning timer");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1,
+      MustComplete, "the next run must wait, with its warning timer");
     (task.StateMessage ?? "").Should().NotContain("previous run", "the message only changes once the wait takes long");
 
     clock.Advance(EngineTask.PreviousRunWarningAfter);
-    await WaitUntilAsync(() => task.StateMessage.Contains("has not noticed its cancellation"), "the wait must warn");
+    await Wait.UntilAsync(() => task.StateMessage.Contains("has not noticed its cancellation"),
+      MustComplete, "the wait must warn");
     work.Runs.Should().Be(1, "the warning does not start the next run");
 
     work.ReleaseFirstRun();
@@ -159,7 +152,7 @@ public class PreviousRunTest
       }
     }, requiredForRunning: true, NullLogger.Instance, CancellationToken.None);
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => Volatile.Read(ref runs) == 1, "the first run must have started");
+    await Wait.UntilAsync(() => Volatile.Read(ref runs) == 1, MustComplete, "the first run must have started");
 
     await task.FireAsync(EngineTaskTrigger.Reset);
     await task.FireAsync(EngineTaskTrigger.Start);
@@ -221,7 +214,8 @@ public class PreviousRunTest
     var enrich = new Work();
     var engine = new RetriedEngine(enrich) { Context = new NoContext() };
     await engine.StartAsync();
-    await WaitUntilAsync(() => engine.Loads == 1 && enrich.Runs == 1, "the load must have failed while the enrichment runs");
+    await Wait.UntilAsync(() => engine.Loads == 1 && enrich.Runs == 1,
+      MustComplete, "the load must have failed while the enrichment runs");
 
     await engine.ResetFailedTasksAsync();
     await engine.StartAsync();
@@ -274,12 +268,12 @@ public class PreviousRunTest
     var inherited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var engine = new InheritingEngine(inherited.Task) { Context = new NoContext(), TimeProvider = clock };
     await engine.StartAfterInheritedWorkAsync();
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the load must wait, with its warning timer");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the load must wait, with its warning timer");
     engine.Loads.Should().Be(0, "the load waits for the inherited work");
 
     clock.Advance(EngineTask.PreviousRunWarningAfter);
-    await WaitUntilAsync(() => (engine.Tasks["Load"].StateMessage ?? "").Contains("has not noticed its cancellation"),
-      "the wait must warn");
+    await Wait.UntilAsync(() => (engine.Tasks["Load"].StateMessage ?? "").Contains("has not noticed its cancellation"),
+      MustComplete, "the wait must warn");
     engine.Loads.Should().Be(0, "the warning does not start the load");
 
     inherited.SetResult();
