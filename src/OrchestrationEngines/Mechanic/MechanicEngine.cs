@@ -964,7 +964,9 @@ public partial class MechanicEngine : BaseEngine
             order.Add(member);
           }
           while (!comparer.Equals(member, name));
-          var component = new Component(order.GetRange(start, order.Count - start).ToArray());
+          var members = new string[order.Count - start];
+          order.CopyTo(start, members, 0, members.Length);
+          var component = new Component(members);
           foreach (var engine in component.Members)
             _componentOf[engine] = component;
         }
