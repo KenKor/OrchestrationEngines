@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -179,6 +180,12 @@ public class EngineKickStartTask : EngineTask
         // Validate final engine state.
         if (engine.State >= EngineState.Stopped)
         {
+            // One of its tasks was cancelled by its own work (an EngineTaskException): another start cannot change
+            // that, so this task ends Cancelled the same way instead of being retried (#90).
+            if (CancelledByItsWork(engine) is { } cancelled)
+                throw new EngineCancelledByItsWorkException(this,
+                    $"Engine '{engineDescriptor.Name}' is not started again: its task '{cancelled.Name}' ended with \"{cancelled.FailReason}\".");
+
             // Escalate to failure so recovery policy can decide next steps.
             throw new EngineNotStartedException(
                 $"Engine execution failed: '{engineDescriptor.Name}', {engine}.");
@@ -205,6 +212,15 @@ public class EngineKickStartTask : EngineTask
         BaseEngine { State: EngineState.Stopped, IsCancellationRequested: false } => true,
         _ => false,
     };
+
+    /// <summary>
+    /// Returns the task of a Stopped <paramref name="engine"/> that its own work cancelled with an
+    /// <see cref="EngineTaskException"/>, or null if there is none.
+    /// </summary>
+    private static EngineTask CancelledByItsWork(IEngine engine) =>
+        engine is BaseEngine { State: EngineState.Stopped } baseEngine
+            ? baseEngine.Tasks.Values.FirstOrDefault(t => t.State == EngineTaskState.Cancelled && t.CancelledByTheWork)
+            : null;
 
     /// <summary>
     /// Resets this task and the associated engine tasks in preparation for re-execution.
@@ -259,6 +275,12 @@ public class EngineKickStartTask : EngineTask
     /// An <see cref="EvaluateException"/>, as before, so that code that catches that still does.
     /// </remarks>
     private sealed class EngineNotStartedException(string message) : EvaluateException(message);
+
+    /// <summary>
+    /// Thrown when the engine stopped because one of its tasks was cancelled by its own work: not retried.
+    /// </summary>
+    private sealed class EngineCancelledByItsWorkException(EngineTask et, string message)
+        : EngineTaskException(et, message);
 
     /// <summary>
     /// The logger of the kick-start task: it logs an engine that did not start as a warning, not as an error, while the

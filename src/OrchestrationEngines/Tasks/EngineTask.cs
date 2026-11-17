@@ -285,6 +285,12 @@ public partial class EngineTask
   /// </summary>
   public bool WasCancelled { get; private set; }
 
+  /// <summary>
+  /// Whether the task's last run ended Cancelled because its work threw an <see cref="EngineTaskException"/>: a
+  /// condition another attempt cannot change. Cleared by a reset.
+  /// </summary>
+  internal bool CancelledByTheWork { get; private set; }
+
   // ---------------------------
   // Recovery
   // ---------------------------
@@ -1188,9 +1194,12 @@ public partial class EngineTask
     var failed = _dependsOn.FirstOrDefault(d => d.State.IsFailed());
     if (failed == null)
       return "Dependency failed.";
-    return failed.WasCancelled
-      ? $"Cancelled because '{failed.Name}', which it depends on, was cancelled."
-      : $"Dependency '{failed.Name}' failed: {failed.FailReason}";
+    if (!failed.WasCancelled)
+      return $"Dependency '{failed.Name}' failed: {failed.FailReason}";
+    // A cancellation by the work says why; any other cancellation's reason is only how it was cancelled.
+    return failed.CancelledByTheWork
+      ? $"Cancelled because '{failed.Name}', which it depends on, was cancelled. {failed.FailReason}"
+      : $"Cancelled because '{failed.Name}', which it depends on, was cancelled.";
   }
 
   /// <summary>
@@ -1229,6 +1238,7 @@ public partial class EngineTask
 
       FailReason = null;
       FailException = null;
+      CancelledByTheWork = false;
       RunStartedAtUtc = null;
       RunEndedAtUtc = null;
       LogReset(Logger);
@@ -1407,9 +1417,12 @@ public partial class EngineTask
   /// the next run.
   /// </param>
   /// <param name="exception">The exception the work or recovery threw, to record first (see <see cref="FailException"/>).</param>
+  /// <param name="byTheWork">
+  /// Whether the work threw an <see cref="EngineTaskException"/> (see <see cref="CancelledByTheWork"/>).
+  /// </param>
   /// <returns>False if the run is stale and nothing was fired.</returns>
   private async Task<bool> FireIfCurrentAsync(int run, EngineTaskTrigger trigger, string reason = "", string failReason = null,
-    bool cancelRun = false, Exception exception = null)
+    bool cancelRun = false, Exception exception = null, bool byTheWork = false)
   {
     await _triggerLock.WaitAsync().ConfigureAwait(false);
     try
@@ -1421,6 +1434,8 @@ public partial class EngineTask
       if (exception != null || trigger is EngineTaskTrigger.Succeed or EngineTaskTrigger.SucceedRecovery)
         FailException = exception;
 
+      // Before the trigger: the tasks that depend on this one read it when it enters Failed (see DependencyFailReason).
+      CancelledByTheWork = byTheWork;
       if (trigger == EngineTaskTrigger.Cancel)
         FailReason = failReason ?? CancellationReason();
       else if (failReason != null)
@@ -1636,7 +1651,7 @@ public partial class EngineTask
       // from Running goes to Recovering while the token is live and a RecoveryHelper is set, so the run's token is
       // cancelled first (under the trigger lock, and only for the current run).
       await FireIfCurrentAsync(run, EngineTaskTrigger.Cancel, failReason: $"Cancelled by the work: {ex.Message}",
-          cancelRun: true)
+          cancelRun: true, byTheWork: true)
         .ConfigureAwait(false);
     }
     catch (Exception ex)

@@ -18,8 +18,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineTaskTest
 {
-  private sealed class TestTaskException(EngineTask et) : EngineTaskException(et, "The task cannot go on.");
-
   private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null,
     CancellationToken engineToken = default) =>
     new(name, workAsync, requiredForRunning: true, NullLogger.Instance, engineToken, clock);

@@ -71,25 +71,24 @@ public class KickStartRestartTest
   }
 
   /// <summary>
-  /// Verifies that an engine whose load throws an EngineTaskException is still started again under the descriptor's
-  /// restart policy (#59, item 1): the load task itself is not retried and ends Cancelled, which stops the engine
-  /// rather than faulting it, and the kick-start starts a Stopped engine whose token is live again.
+  /// Verifies that an engine whose load throws an EngineTaskException is not started again (#90): the load task ends
+  /// Cancelled without a retry, which stops the engine, and the kick-start does not start it again under the
+  /// descriptor's restart policy either, since another attempt cannot change the condition. A lookup gets null.
   /// </summary>
   [Fact]
-  public async Task EngineKickStartTask_LoadThrowsEngineTaskException_StartsTheEngineAgain()
+  public async Task EngineKickStartTask_LoadThrowsEngineTaskException_DoesNotStartTheEngineAgain()
   {
     var ct = TestContext.Current.CancellationToken;
-    var engine = new NetworkEngine((load, _) => load == 1 ? throw new LoadException() : Task.CompletedTask);
+    var engine = new NetworkEngine((load, _) => load == 1 ? throw new TestTaskException() : Task.CompletedTask);
     var coordinator = CreateCoordinator(engine);
 
     var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
 
-    loaded.Should().BeSameAs(engine);
-    engine.Starts.Should().Be(2);
-    engine.Loads.Should().Be(2);
+    loaded.Should().BeNull();
+    engine.Starts.Should().Be(1);
+    engine.Loads.Should().Be(1);
+    engine.State.Should().Be(EngineState.Stopped);
   }
-
-  private sealed class LoadException() : EngineTaskException(null, "The load cannot go on.");
 
   /// <summary>
   /// Verifies that a lookup that arrives while the kick-start waits to retry a failed engine waits for the retry and
