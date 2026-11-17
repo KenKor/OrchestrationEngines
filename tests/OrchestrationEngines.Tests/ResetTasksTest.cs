@@ -403,6 +403,7 @@ public class ResetTasksTest
     engine.Tasks["A"].State.Should().Be(EngineTaskState.Running);
     // Ends once A's run has reported its outcome, and with it A's callback to B (B is not locked: X is being reset).
     var aRun = engine.Tasks["A"].LatestRunEnded;
+    aRun.IsCompleted.Should().BeFalse("A's run waits for the release, so this is that run");
     var aReported = false;
     engine.OnReset = name =>
     {
