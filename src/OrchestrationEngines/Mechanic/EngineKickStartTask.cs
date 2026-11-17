@@ -28,7 +28,7 @@ namespace OrchestrationEngines.Mechanic;
 /// </list>
 /// </para>
 /// </remarks>
-public class EngineKickStartTask : EngineTask
+public partial class EngineKickStartTask : EngineTask
 {
     /// <summary>
     /// Postfix appended to the engine name to form the task name for kick-starting.
@@ -79,8 +79,22 @@ public class EngineKickStartTask : EngineTask
     private int _generation;
 
     /// <summary>
-    /// Guards <see cref="_generation"/>, <see cref="_starting"/>, <see cref="EngineInstance"/> and
-    /// <see cref="_engineToRestart"/> between a run and a reset that ends it.
+    /// The engine this task gave up while a run it ended was still starting it, with the reason; null otherwise. That run
+    /// gives it up again once its start returns, since the start leaves it running on the previous context (#86 item 7).
+    /// </summary>
+    private (BaseEngine Engine, string Reason)? _givenUpWhileStarting;
+
+    /// <summary>
+    /// The give-up of an engine that a run this task ended had started already (see <see cref="OnFailedEntered"/>). The
+    /// next run waits until it has ended, or it finds the engine still Ready on the previous context and completes, and the
+    /// give-up then faults the engine under it.
+    /// </summary>
+    private Task _pendingGiveUp = Task.CompletedTask;
+
+    /// <summary>
+    /// Guards <see cref="_generation"/>, <see cref="_starting"/>, <see cref="EngineInstance"/>,
+    /// <see cref="_engineToRestart"/>, <see cref="_givenUpWhileStarting"/> and <see cref="_pendingGiveUp"/> between a run
+    /// and a reset that ends it.
     /// </summary>
     private readonly object _gate = new();
 
@@ -123,7 +137,15 @@ public class EngineKickStartTask : EngineTask
         if (!m.Engines.TryGetValue(engineDescriptor.Name, out var engine))
             throw new ArgumentException($"Unknown engine '{engineDescriptor.Name}'");
 
-        // Marked before the first wait: a reset that comes in during any of the waits below ends this run, and must
+        // A give-up of the engine that an earlier run started with the previous context may still be under way: let it end
+        // first. It does not throw. A reset that came in meanwhile has ended this run.
+        Task pendingGiveUp;
+        lock (_gate)
+            pendingGiveUp = _pendingGiveUp;
+        await pendingGiveUp.ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+
+        // Marked before the first wait below: a reset that comes in during any of those waits ends this run, and must
         // restart the engine this run starts, with the context it starts it with (#85).
         int generation;
         BaseEngine toRestart;
@@ -132,9 +154,11 @@ public class EngineKickStartTask : EngineTask
             generation = _generation;
             _starting = engine;
             toRestart = _engineToRestart;
+            _givenUpWhileStarting = null;
         }
 
         var started = false;
+        (BaseEngine Engine, string Reason)? giveUpAgain = null;
         try
         {
             // Fix (RuntimeRecoveryTest): a kick-start that runs again after recovery finds the engine Faulted (or
@@ -167,8 +191,18 @@ public class EngineKickStartTask : EngineTask
                     EngineInstance = engine;
                     _engineToRestart = null;
                 }
+                // A newer run gave this engine up while this one was still starting it: the start has undone that.
+                if (_givenUpWhileStarting is { } givenUp && givenUp.Engine == engine)
+                {
+                    _givenUpWhileStarting = null;
+                    if (started)
+                        giveUpAgain = givenUp;
+                }
             }
         }
+
+        if (giveUpAgain is { } again)
+            await GiveUpAsync(again.Engine, again.Reason).ConfigureAwait(false);
 
         // Drive the engine to Ready (initialization complete).
         // A reset of this task ends this run and prepares a restart of the engine, which only the next run carries out;
@@ -240,17 +274,59 @@ public class EngineKickStartTask : EngineTask
     /// released instead of waiting until it stops.
     /// </summary>
     /// <inheritdoc/>
+    /// <remarks>
+    /// A reset that found the engine still Created, because a run it ended was starting it, prepared no restart. That run
+    /// starts the engine with the previous context. The engine is then given up as well (Faulted, as when the restart
+    /// was prepared), and not left Ready on the previous context, which looks the same as a right answer (#86 item 7):
+    /// by that run once its start returns, or here if it has returned already.
+    /// </remarks>
     protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
     {
         base.OnFailedEntered(reasonFromTrigger, cancelled);
         BaseEngine abandoned;
+        string reason;
         lock (_gate)
         {
             abandoned = _engineToRestart;
             _engineToRestart = null;
+            if (abandoned == null)
+                return;
+            reason = $"its kick-start ended without starting it ({FailReason})";
+            if (_starting == abandoned)
+            {
+                _givenUpWhileStarting = (abandoned, reason);
+            }
+            else if (abandoned is { State: EngineState.Starting or EngineState.Ready })
+            {
+                // Started meanwhile; the next run waits until this has ended.
+                _pendingGiveUp = Task.Run(() => GiveUpAsync(abandoned, reason));
+                return;
+            }
         }
-        abandoned?.AbandonRestart($"its kick-start ended without starting it ({FailReason})");
+        abandoned.AbandonRestart(reason);
     }
+
+    /// <summary>
+    /// Gives up an engine that a run this task ended started with the previous context: ends its tasks, as a restart
+    /// does, and gives that restart up, so the engine ends Faulted (Stopped if it is stopped meanwhile) and whoever waits
+    /// until it is ready is released (#86 item 7).
+    /// </summary>
+    /// <remarks>Does not throw: a failure is logged, since nobody waits for its outcome.</remarks>
+    private async Task GiveUpAsync(BaseEngine engine, string reason)
+    {
+        try
+        {
+            await engine.ResetAllTasksAsync().ConfigureAwait(false);
+            engine.AbandonRestart(reason);
+        }
+        catch (Exception ex)
+        {
+            BestEffort.Log(() => LogGiveUpFailed(Logger, ex, engine.EngineName, reason));
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not give up engine '{EngineName}': {Reason}")]
+    private static partial void LogGiveUpFailed(ILogger logger, Exception exception, string engineName, string reason);
 
     /// <summary>
     /// Thrown when the engine stopped or faulted instead of becoming Ready.

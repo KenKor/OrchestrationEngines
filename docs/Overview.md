@@ -224,7 +224,9 @@ Key properties:
   throws an `ArgumentException`. A call that arrives while a switch that rebuilds the engine from scratch runs, before
   it hands over, waits until the switch has started the next generation and goes there too. On a coordinator that is
   shut down otherwise it throws: an `OperationCanceledException` with the dispatcher (the default), whose queue no
-  longer takes work, and an `InvalidOperationException` without it
+  longer takes work, and an `InvalidOperationException` without it. When the new context fails, the engine is given
+  up and ends Faulted ("not started again"), not Ready on the previous context, also when a start for an earlier
+  invalidation was still under way
 
 Important implementations:
 
