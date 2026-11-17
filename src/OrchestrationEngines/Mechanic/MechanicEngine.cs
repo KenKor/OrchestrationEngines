@@ -716,7 +716,7 @@ public partial class MechanicEngine : BaseEngine
         first.Add(graph.StopsAbove(name, stops));
       stops[name] = graph.Stops(name)
         ? StopAfterAsync(name, engines[name], first.ToArray(), graph, failures)
-        : first.Count == 0 ? Task.CompletedTask : FromThreadPool(Task.WhenAll(first));
+        : FromThreadPool(Task.WhenAll(first));
       graph.Started(name, stops[name]);
       last.Add(name);
 
