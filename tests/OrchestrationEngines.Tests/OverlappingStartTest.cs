@@ -164,4 +164,35 @@ public class OverlappingStartTest
     engine.SetUpCount.Should().Be(1, "the start that waited came after the stop");
     engine.State.Should().Be(EngineState.Stopped);
   }
+
+  /// <summary>
+  /// Verifies that a start on a stopped engine returns at once, also while an earlier start is still running: stopping
+  /// is final, so it has nothing to wait for. Without the fix, it waited until the earlier start had ended.
+  /// </summary>
+  [Fact]
+  public async Task StartAsync_StartAfterAStopWhileAnotherRuns_ReturnsAtOnce()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    var engine = new OverlapEngine();
+    engine.SetUps.Enqueue(Held(entered, release, e => e.Probe("A", _ => Task.CompletedTask)));
+
+    var first = Task.Run(engine.StartAsync, ct);
+    entered.Wait(MustComplete, ct).Should().BeTrue("the first set-up starts");
+    await engine.StopAsync().WaitAsync(MustComplete, ct);
+    var afterStop = engine.StartAsync();
+
+    try
+    {
+      afterStop.IsCompleted.Should().BeTrue("a start on a stopped engine returns at once");
+    }
+    finally
+    {
+      release.Set();
+    }
+    await first.WaitAsync(MustComplete, ct);
+    engine.SetUpCount.Should().Be(1);
+    engine.State.Should().Be(EngineState.Stopped);
+  }
 }
