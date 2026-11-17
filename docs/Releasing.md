@@ -29,7 +29,7 @@ warning.
 | Licence: Mozilla Public License 2.0 | `LICENSE`, and `PackageLicenseExpression` (`MPL-2.0`) in `Directory.Build.props` |
 | Copyright holder: Spatial Eye B.V. | `Copyright` in `Directory.Build.props` |
 | Main author: Spatial Eye B.V., then the contributors | `Authors` in `Directory.Build.props` |
-| Licence notice: once in the README, with the full text in `LICENSE`; no notice in each source file | `README.md`, `LICENSE` |
+| Licence notice: once in the README, with the full text in `LICENSE`; no notice in each source file | Licence in `README.md`, full text in `LICENSE` |
 | Contributions: accepted under the MPL-2.0, no contributor agreement or sign-off | Contributing in `README.md` |
 | Package name: `OrchestrationEngines` | `PackageId` in the `.csproj` |
 
