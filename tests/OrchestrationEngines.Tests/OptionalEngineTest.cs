@@ -112,6 +112,46 @@ public class OptionalEngineTest
   }
 
   /// <summary>
+  /// Verifies that invalidating an optional engine's context returns the coordinator to Running: no required engine
+  /// changes state, so no mechanic status event brings the coordinator back from Initializing.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_OptionalEngine_ReturnsToRunning()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var core = new GatedEngine(Task.CompletedTask);
+    var optional = new GatedEngine(Task.CompletedTask);
+    var coordinator = CreateCoordinator();
+    Register(coordinator, "Core", core, required: true);
+    Register(coordinator, "Optional", optional, required: false);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => optional.State == EngineState.Ready, MustComplete, "the optional engine loads");
+
+    await coordinator.InvalidateContextForEngineAsync("Optional", ct).WaitAsync(MustComplete, ct);
+
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running, MustComplete,
+      "the required engines are still Ready");
+    await Wait.UntilAsync(() => optional.State == EngineState.Ready, MustComplete, "the optional engine loads again");
+  }
+
+  /// <summary>
+  /// Verifies that an invalidation the mechanic rejects (an unknown engine) leaves the coordinator Running.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_UnknownEngine_ThrowsAndStaysRunning()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = CreateCoordinator();
+    Register(coordinator, "Core", new GatedEngine(Task.CompletedTask), required: true);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var act = () => coordinator.InvalidateContextForEngineAsync("Unknown", ct).WaitAsync(MustComplete, ct);
+
+    await act.Should().ThrowAsync<ArgumentException>();
+    coordinator.State.Should().Be(EngineCoordinatorState.Running);
+  }
+
+  /// <summary>
   /// Verifies that the coordinator still waits for a required engine when an optional engine loaded first: optional
   /// engines must not make the coordinator Running early either.
   /// </summary>
