@@ -48,6 +48,12 @@ public partial class EngineCoordinator : IDisposable
   // once it has started (null if it did not start); null when no such switch runs. See NextGenerationAsync.
   private RebuildingSwitch _rebuildingSwitch;
 
+  // The context operations (invalidations and refreshes) in flight, and whether one of them began while the coordinator
+  // was Running; both under _sync. Only the last one to end may bring the coordinator back to Running (see
+  // EndContextOperation).
+  private int _contextOperationsInFlight;
+  private bool _contextOperationFromRunning;
+
   private volatile bool _disposed;
 
   // Set on the next coordinator of a switch that failed before it handed over, before the switch shuts it down: a
@@ -1068,11 +1074,11 @@ public partial class EngineCoordinator : IDisposable
   /// <summary>
   /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
   /// <paramref name="onGeneration"/> on the next generation once this one was replaced, else on this one, started if
-  /// needed. A generation switch during the call (its engine stopped: a cancellation, or a Cancelled task) is answered
-  /// by the next generation, if it has the engine.
+  /// needed and <paramref name="start"/> is set. A generation switch during the call (its engine stopped: a
+  /// cancellation, or a Cancelled task) is answered by the next generation, if it has the engine.
   /// </summary>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
-    CancellationToken token)
+    CancellationToken token, bool start = true)
   {
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
     if (Successor is { } replaced)
@@ -1083,7 +1089,8 @@ public partial class EngineCoordinator : IDisposable
 
     try
     {
-      await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      if (start)
+        await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       await onMechanic().ConfigureAwait(false);
     }
     // Pre-check the switch in the filter, so an exception with no switch behind it is not caught; NextGenerationAsync
@@ -1238,15 +1245,21 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="name">Name of the engine whose context is invalidated.</param>
   /// <param name="token">Cancellation token controlling the dispatched invalidation request.</param>
   /// <remarks>
-  /// This forces re-initialization of the affected engine and its dependents.
+  /// This forces re-initialization of the affected engine and its dependents. It does not start a coordinator that has
+  /// not started. On a coordinator that a generation switch replaced, the newer generation invalidates its engine (see
+  /// <see cref="Successor"/>), as with <see cref="ResetTasksForEngineAsync"/>.
   /// </remarks>
-  /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/>.</exception>
+  /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
+  /// generation, once this coordinator was replaced).</exception>
   /// <exception cref="InvalidOperationException">The coordinator is shut down, so the engines would not start
   /// again, and it runs without a dispatcher (<c>useDispatcher: false</c>).</exception>
   /// <exception cref="OperationCanceledException">The coordinator is shut down and runs with a dispatcher (the
   /// default): its queue no longer takes work. Or <paramref name="token"/> was cancelled.</exception>
   public Task InvalidateContextForEngineAsync(string name, CancellationToken token = default)
-    => DispatchAsync(() => InvalidateContextForEngineAsyncInt(name), token);
+    => ForEngineAsync(name,
+      generation => generation.InvalidateContextForEngineAsync(name, token),
+      () => DispatchAsync(() => InvalidateContextForEngineAsyncInt(name), token),
+      token, start: false);
 
   /// <summary>
   /// Internal implementation of <see cref="InvalidateContextForEngineAsync(string, CancellationToken)"/>.
@@ -1259,7 +1272,7 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   public async Task InvalidateContextForEngineAsyncInt(string name)
   {
-    var wasRunning = FireFromRunning(EngineCoordinatorTrigger.InvalidateContext);
+    BeginContextOperation(EngineCoordinatorTrigger.InvalidateContext);
     try
     {
       await Mechanic.InvalidateContextForEngineAsync(name).ConfigureAwait(false);
@@ -1268,7 +1281,7 @@ public partial class EngineCoordinator : IDisposable
     {
       // An optional engine's invalidation, or one the mechanic rejected, leaves the required tasks completed. A required
       // engine that loads again keeps them open, and its own Ready event brings the coordinator back.
-      ReturnToRunningIfRequiredReady(wasRunning);
+      EndContextOperation();
     }
   }
 
@@ -1291,10 +1304,18 @@ public partial class EngineCoordinator : IDisposable
   /// <see cref="IEngineContext"/> to the live engine via its <c>Context</c> setter, which fires the
   /// engine's own <c>ContextChanged</c> hook. It is the engine's responsibility to decide, from the
   /// old vs. new context, what (if anything) needs to be invalidated/reset. Use this when the caller
-  /// has already determined that a full engine restart is not required.
+  /// has already determined that a full engine restart is not required. It does not start a coordinator that has not
+  /// started. On a coordinator that a generation switch replaced, the context goes to the newer generation's engine
+  /// (see <see cref="Successor"/>), as with <see cref="ResetTasksForEngineAsync"/>.
   /// </remarks>
+  /// <exception cref="ArgumentNullException"><paramref name="context"/> is null.</exception>
+  /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
+  /// generation, once this coordinator was replaced).</exception>
   public Task RefreshEngineContextAsync(string name, IEngineContext context, CancellationToken token = default)
-    => DispatchAsync(() => RefreshEngineContextAsyncInt(name, context), token);
+    => ForEngineAsync(name,
+      generation => generation.RefreshEngineContextAsync(name, context, token),
+      () => DispatchAsync(() => RefreshEngineContextAsyncInt(name, context), token),
+      token, start: false);
 
   /// <summary>
   /// Internal implementation of <see cref="RefreshEngineContextAsync(string, IEngineContext, CancellationToken)"/>.
@@ -1303,7 +1324,7 @@ public partial class EngineCoordinator : IDisposable
   {
     ArgumentNullException.ThrowIfNull(context);
 
-    var wasRunning = FireFromRunning(EngineCoordinatorTrigger.RefreshEngine);
+    BeginContextOperation(EngineCoordinatorTrigger.RefreshEngine);
     try
     {
       Mechanic.RegisterContext(name, context);
@@ -1311,40 +1332,50 @@ public partial class EngineCoordinator : IDisposable
     finally
     {
       // A refresh leaves the mechanic's tasks completed: the engine itself decides what to reload.
-      ReturnToRunningIfRequiredReady(wasRunning);
+      EndContextOperation();
     }
 
     return Task.CompletedTask;
   }
 
   /// <summary>
-  /// Fires <paramref name="trigger"/>, which takes the coordinator to Initializing, and returns whether it was Running
-  /// before (see <see cref="ReturnToRunningIfRequiredReady"/>).
+  /// Begins a context operation (an invalidation or a refresh): fires <paramref name="trigger"/>, which takes the
+  /// coordinator to Initializing, and counts the operation as in flight (see <see cref="EndContextOperation"/>).
   /// </summary>
-  private bool FireFromRunning(EngineCoordinatorTrigger trigger)
+  private void BeginContextOperation(EngineCoordinatorTrigger trigger)
   {
     lock (_sync)
     {
       var wasRunning = State == EngineCoordinatorState.Running;
       AppMachine.Fire(trigger);
-      return wasRunning;
+      _contextOperationsInFlight++;
+      if (wasRunning)
+        _contextOperationFromRunning = true;
     }
   }
 
   /// <summary>
-  /// Returns a coordinator that was Running before a refresh or an invalidation to Running, when the required engines
-  /// are still Ready afterwards.
+  /// Ends a context operation. The last one in flight returns a coordinator that was Running when one of them began to
+  /// Running, when the required engines are still Ready afterwards.
   /// </summary>
   /// <remarks>
   /// The coordinator follows the mechanic. An operation that leaves the required tasks completed causes no mechanic
-  /// status change that would bring the coordinator back from Initializing, so it is brought back here.
+  /// status change that would bring the coordinator back from Initializing, so it is brought back here. Only the last
+  /// one may do it: without the dispatcher, an operation that ends first could otherwise find the required tasks still
+  /// completed while another one is about to reset them, and the coordinator would stay Running through that reload.
   /// </remarks>
-  private void ReturnToRunningIfRequiredReady(bool wasRunning)
+  private void EndContextOperation()
   {
     lock (_sync)
     {
+      // Fix (ContextOperationGenerationTest): overlapping operations without the dispatcher; the last one decides.
+      if (--_contextOperationsInFlight > 0)
+        return;
+      var fromRunning = _contextOperationFromRunning;
+      _contextOperationFromRunning = false;
       // Fix (OptionalEngineTest): required engines only, as in Mechanic_EngineStatusChanged.
-      if (wasRunning && State == EngineCoordinatorState.Initializing && _mechanic?.IsRequiredCompletedWithSuccess() == true)
+      if (fromRunning && State == EngineCoordinatorState.Initializing
+          && _mechanic?.IsRequiredCompletedWithSuccess() == true)
         AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
     }
   }
