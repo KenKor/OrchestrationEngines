@@ -26,7 +26,6 @@ public class StateMachinePublicationTest
   {
     private readonly ConcurrentDictionary<StateMachine<EngineTaskState, EngineTaskTrigger>, int> _numbers = new();
 
-    // Written only under the task's init lock, which serializes the builds.
     private int _built;
 
     public int Built => Volatile.Read(ref _built);
@@ -42,9 +41,8 @@ public class StateMachinePublicationTest
     protected override StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
     {
       var machine = base.CreateStateMachine();
-      // Numbered before it is published: the builds are serialized by the task's init lock.
-      _numbers[machine] = _built;
-      Volatile.Write(ref _built, _built + 1);
+      // Numbered before it is published. The init lock serializes the builds; the increment does not rely on it.
+      _numbers[machine] = Interlocked.Increment(ref _built) - 1;
       return machine;
     }
   }
