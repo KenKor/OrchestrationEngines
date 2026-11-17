@@ -48,11 +48,9 @@ public partial class EngineCoordinator : IDisposable
   // once it has started (null if it did not start); null when no such switch runs. See NextGenerationAsync.
   private RebuildingSwitch _rebuildingSwitch;
 
-  // The context operations (invalidations and refreshes) in flight, and whether one of them began while the coordinator
-  // was Running; both under _sync. Only the last one to end may bring the coordinator back to Running (see
-  // EndContextOperation).
+  // The context operations (invalidations and refreshes) in flight, under _sync. While one is in flight, only the last
+  // one to end may bring the coordinator back to Running (see EndContextOperation).
   private int _contextOperationsInFlight;
-  private bool _contextOperationFromRunning;
 
   private volatile bool _disposed;
 
@@ -343,7 +341,10 @@ public partial class EngineCoordinator : IDisposable
         // Fix (OptionalEngineTest): required engines only. The mechanic reports Ready as soon as its required
         // tasks are done; checking every task here left the coordinator Initializing for good whenever an engine
         // registered with requiredForRunning: false was still loading (or had failed) at that moment.
-        if (_mechanic.IsRequiredCompletedWithSuccess())
+        // Fix (ContextOperationTest): not while a context operation is in flight. One that has not reset its engine yet
+        // would otherwise find the coordinator Running, which ignores the reload's Starting event. The last operation
+        // to end signals readiness instead (see EndContextOperation).
+        if (_contextOperationsInFlight == 0 && _mechanic.IsRequiredCompletedWithSuccess())
           AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
       }
     }
@@ -1073,10 +1074,11 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
-  /// <paramref name="onGeneration"/> on the next generation once this one was replaced, else on this one, started if
-  /// needed and <paramref name="start"/> is set. A generation switch during the call that ends it with a cancellation
-  /// or a Cancelled task (its engine stopped) is answered by the next generation, if it has the engine; a call that
-  /// completes on this generation before the switch hands over is not repeated there.
+  /// <paramref name="onGeneration"/> on the next generation once this one was replaced, or once a switch that rebuilds
+  /// the engine from scratch has started it, else on this one, started if needed and <paramref name="start"/> is set. A
+  /// generation switch during the call that ends it with a cancellation or a Cancelled task (its engine stopped) is
+  /// answered by the next generation, if it has the engine; a call that completes on this generation before the switch
+  /// hands over is not repeated there.
   /// </summary>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
     CancellationToken token, bool start = true)
@@ -1085,6 +1087,16 @@ public partial class EngineCoordinator : IDisposable
     if (Successor is { } replaced)
     {
       await onGeneration(replaced).ConfigureAwait(false);
+      return;
+    }
+
+    // Fix (ContextOperationTest): a switch that rebuilds this engine from scratch stops it before it hands over. A call on
+    // this generation would then throw, be lost on the stopped engine, or start it again: wait for the next generation
+    // and ask it, as the catch below does for a call the stop interrupts. If it did not start, this generation answers.
+    if (Volatile.Read(ref _rebuildingSwitch) != null
+        && await NextGenerationAsync(engineName, token).ConfigureAwait(false) is { } nextGeneration)
+    {
+      await onGeneration(nextGeneration).ConfigureAwait(false);
       return;
     }
 
@@ -1249,8 +1261,8 @@ public partial class EngineCoordinator : IDisposable
   /// This forces re-initialization of the affected engine and its dependents. It does not start a coordinator that has
   /// not started. On a coordinator that a generation switch has replaced (once it has handed over, see
   /// <see cref="Successor"/>), the newer generation invalidates its engine, as with
-  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch runs, before it hands over, can still
-  /// act on this generation.
+  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch that rebuilds the engine from scratch
+  /// runs, before it hands over, waits until the switch has started the next generation and goes there too.
   /// </remarks>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
   /// generation, once this coordinator was replaced).</exception>
@@ -1310,8 +1322,8 @@ public partial class EngineCoordinator : IDisposable
   /// has already determined that a full engine restart is not required. It does not start a coordinator that has not
   /// started. On a coordinator that a generation switch has replaced (once it has handed over, see
   /// <see cref="Successor"/>), the context goes to the newer generation's engine, as with
-  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch runs, before it hands over, can still
-  /// act on this generation.
+  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch that rebuilds the engine from scratch
+  /// runs, before it hands over, waits until the switch has started the next generation and goes there too.
   /// </remarks>
   /// <exception cref="ArgumentNullException"><paramref name="context"/> is null.</exception>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
@@ -1351,23 +1363,22 @@ public partial class EngineCoordinator : IDisposable
   {
     lock (_sync)
     {
-      var wasRunning = State == EngineCoordinatorState.Running;
       AppMachine.Fire(trigger);
       _contextOperationsInFlight++;
-      if (wasRunning)
-        _contextOperationFromRunning = true;
     }
   }
 
   /// <summary>
-  /// Ends a context operation. The last one in flight returns a coordinator that was Running when one of them began to
-  /// Running, when the required engines are still Ready afterwards.
+  /// Ends a context operation. The last one in flight brings an Initializing coordinator to Running when the required
+  /// engines are Ready.
   /// </summary>
   /// <remarks>
-  /// The coordinator follows the mechanic. An operation that leaves the required tasks completed causes no mechanic
-  /// status change that would bring the coordinator back from Initializing, so it is brought back here. Only the last
-  /// one may do it: without the dispatcher, an operation that ends first could otherwise find the required tasks still
-  /// completed while another one is about to reset them, and the coordinator would stay Running through that reload.
+  /// The coordinator follows the mechanic, but not while operations are in flight: the mechanic's Ready event is not
+  /// passed on then (see Mechanic_EngineStatusChanged). Without the dispatcher, an operation that ends first, or an
+  /// engine that reloads after one, could otherwise find the required tasks completed while another operation is about
+  /// to reset them, and the coordinator would stay Running through that reload. So the last one brings the coordinator
+  /// back here: after an operation that left the required tasks completed (no status change follows), and after a Ready
+  /// event that came while operations were in flight, also when none of them began while the coordinator was Running.
   /// </remarks>
   private void EndContextOperation()
   {
@@ -1376,11 +1387,8 @@ public partial class EngineCoordinator : IDisposable
       // Fix (OptionalEngineTest): overlapping operations without the dispatcher; the last one decides.
       if (--_contextOperationsInFlight > 0)
         return;
-      var fromRunning = _contextOperationFromRunning;
-      _contextOperationFromRunning = false;
       // Fix (OptionalEngineTest): required engines only, as in Mechanic_EngineStatusChanged.
-      if (fromRunning && State == EngineCoordinatorState.Initializing
-          && _mechanic?.IsRequiredCompletedWithSuccess() == true)
+      if (State == EngineCoordinatorState.Initializing && _mechanic?.IsRequiredCompletedWithSuccess() == true)
         AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
     }
   }
