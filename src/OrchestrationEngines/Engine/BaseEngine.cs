@@ -574,9 +574,8 @@ public abstract partial class BaseEngine : IEngine
           // Keep looking: a failed task elsewhere makes the engine Faulted, not Stopped.
           anyCancelled = true;
           break;
+        // Between two runs, a resetting task counts as Faulted, though it has no cause to report.
         case EngineTaskState.Resetting:
-          // Between two runs, it counts as Faulted, though it has no cause to report.
-          return EngineState.Faulted;
         case var failed when FaultsEngine(failed):
           return EngineState.Faulted;
       }

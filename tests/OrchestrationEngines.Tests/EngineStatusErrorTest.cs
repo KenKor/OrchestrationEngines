@@ -137,6 +137,7 @@ public class EngineStatusErrorTest
     var ct = TestContext.Current.CancellationToken;
     var thrown = new InvalidOperationException("A failed.");
     var releaseLater = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var clock = new ManualTimeProvider();
     var engine = new TasksEngine(e =>
     {
       // Added before A, so a search in the set's order finds them first.
@@ -148,16 +149,14 @@ public class EngineStatusErrorTest
       });
       var a = e.Task("A", _ => throw thrown);
       dependent.AddDependsOn(a);
-    }) { Hold = true };
+    }) { Hold = true, TimeProvider = clock };
     var log = new EventLog(engine);
 
     await engine.StartAsync();
     await Wait.UntilAsync(() => engine.Tasks["Dependent"].State == EngineTaskState.DependencyFailed,
       MustComplete, "A fails");
-    // Later's run must end on a later tick of the clock (on .NET Framework, about every 15 ms): a tie goes to the set's
-    // order, which puts Later first.
-    await Wait.UntilAsync(() => TimeProvider.System.GetUtcNow().UtcDateTime > engine.Tasks["A"].RunEndedAtUtc,
-      MustComplete, "the clock moves past A's end");
+    // Later's run must end at a later time than A's: a tie goes to the set's order, which puts Later first.
+    clock.Advance(TimeSpan.FromSeconds(1));
     releaseLater.SetResult();
     await Wait.UntilAsync(() => engine.Tasks["Later"].State == EngineTaskState.Failed, MustComplete, "Later throws");
     engine.Hold = false;
