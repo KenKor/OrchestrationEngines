@@ -627,8 +627,39 @@ public abstract partial class BaseEngine : IEngine
   /// <exception cref="CyclicEngineTaskDependencyException"></exception>
   public void CheckForCyclicDependecies() => EngineTask.CheckForCycles(_tasks.Values);
 
+  /// <summary>
+  /// The last start that was called: the next start waits until it has ended (see <see cref="StartAsync"/>). Completes
+  /// when that start ends, whether it succeeded or failed, so waiting for it never throws. A chain instead of a
+  /// <see cref="SemaphoreSlim"/>, so that starts run in the order they were called.
+  /// </summary>
+  private Task _lastStart = Task.CompletedTask;
+
   /// <inheritdoc/>
-  public virtual Task StartAsync()
+  public virtual async Task StartAsync()
+  {
+    // Fix (OverlappingStartTest): overlapping starts run one after the other. Two set-ups at once both took the work
+    // the next set waits for (see StartAfter), so the second set ran next to it, and a failing one replaced the set the
+    // other had just published. Stopping is final: a start on a stopped engine returns at once, without waiting for
+    // the start before it, and a start whose wait ends after a stop does nothing.
+    if (ReleaseRestartIfCancelled())
+      return;
+    var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var before = Interlocked.Exchange(ref _lastStart, ended.Task);
+    try
+    {
+      await before.ConfigureAwait(false);
+      await StartAloneAsync().ConfigureAwait(false);
+    }
+    finally
+    {
+      ended.SetResult();
+    }
+  }
+
+  /// <summary>
+  /// The start itself, run by one start at a time (see <see cref="StartAsync"/>).
+  /// </summary>
+  private Task StartAloneAsync()
   {
     // Stopping is final: a stopped engine is not started again. An engine cancelled other than by StopAsync (its parent
     // token, CancelAll) may not have published Stopped yet: ComputeState says Stopped once the token is cancelled. A
@@ -777,7 +808,7 @@ public abstract partial class BaseEngine : IEngine
           Volatile.Write(ref _taskSet, NewTaskSet());
           _setUpException = ex;
         }
-        // The tasks built before the failure never ran. (An overlapping set-up may have published the set already.)
+        // The tasks built before the failure never ran.
         if (unpublished != null)
           ReleaseTokens(unpublished.Values);
         // A cancellation by a stop is part of the stop, not a failure. Any other failure is logged, also during a stop.
@@ -798,7 +829,7 @@ public abstract partial class BaseEngine : IEngine
 
       if (stoppedDuringSetUp)
       {
-        // Its tasks never ran. (An overlapping set-up may have taken the set already.)
+        // Its tasks never ran.
         if (dropped != null)
           ReleaseTokens(dropped.Values);
         ReleaseRestartIfCancelled();
