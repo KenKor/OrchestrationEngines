@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Tasks;
@@ -28,8 +29,8 @@ public class EngineLifecycleTokenTest
 
     public CountingEngine() : base(NullLogger.Instance) => Context = new NoContext();
 
-    public CountingEngine(CancellationToken engineToken) : base(NullLogger.Instance, engineToken) =>
-      Context = new NoContext();
+    public CountingEngine(CancellationToken engineToken, ILogger logger = null)
+      : base(logger ?? NullLogger.Instance, engineToken) => Context = new NoContext();
 
     public int Runs => Volatile.Read(ref _runs);
 
@@ -419,6 +420,32 @@ public class EngineLifecycleTokenTest
     engine.State.Should().Be(EngineState.Stopped);
     published.Should().NotContain(e => e.State == EngineState.Faulted);
     published.Should().OnlyContain(e => e.Error == null);
+  }
+
+  /// <summary>
+  /// Verifies that a cancel of the parent token that lands while a restart is being given up, after the pending check
+  /// and before the state is decided, leaves the engine Stopped: the state gate sees the cancel, so the engine is never
+  /// published as Faulted. The engine's logger cancels the parent when it logs that the engine is not started again,
+  /// which is in that window.
+  /// </summary>
+  [Fact]
+  public async Task AbandonRestart_ParentCancelledWhileGivingUp_LeavesTheEngineStopped()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    using var parent = new CancellationTokenSource();
+    var engine = new CountingEngine(parent.Token,
+      new OnMessageLogger("The engine is not started again", () => parent.Cancel()));
+    await StartReadyAndResetAsync(engine, ct);
+    var published = CaptureStatus(engine);
+
+    engine.AbandonRestart("its kick-start failed");
+
+    parent.IsCancellationRequested.Should().BeTrue("a restart was pending, so the line was logged and the logger cancelled the parent");
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.State.Should().Be(EngineState.Stopped);
+    published.Should().NotContain(e => e.State == EngineState.Faulted,
+      "the state gate saw the cancel; a state-only check stays green against the bug, since the trailing release "
+      + "recomputes Stopped either way");
   }
 
   /// <summary>
