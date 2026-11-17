@@ -915,7 +915,16 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="tasks">The tasks.</param>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks of the engine that depend on one of
   /// <paramref name="tasks"/> form a cycle (possible only for tasks added after the set-up); nothing is reset.</exception>
-  public async Task TriggerResetAsync(IEnumerable<EngineTask> tasks = null)
+  public Task TriggerResetAsync(IEnumerable<EngineTask> tasks = null) =>
+    TriggerResetCoreAsync(tasks, taskSet: null, dependents: null);
+
+  /// <summary>
+  /// <see cref="TriggerResetAsync"/>, with the engine's tasks and their map of direct dependents
+  /// (<see cref="DirectDependents"/>) when the caller has already built it, or null for both (see
+  /// <see cref="DependentsFirst"/>).
+  /// </summary>
+  private async Task TriggerResetCoreAsync(IEnumerable<EngineTask> tasks, IEnumerable<EngineTask> taskSet,
+    Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     // A set that a prepared restart replaces is not reset and started again (see PrepareRestartAsync).
     if (RestartPending)
@@ -937,7 +946,7 @@ public abstract partial class BaseEngine : IEngine
     var notStarted = resetTasks.Where(t => t.State == EngineTaskState.Created).ToArray();
     var toReset = resetTasks.Except(notStarted).ToArray();
     // Ordered before any reset, so a cycle throws with nothing reset.
-    var levels = DependentsFirst(toReset);
+    var levels = DependentsFirst(toReset, taskSet, dependents);
     LogFiringResetTriggers();
     // A reset that throws (an OnResetEnteredAsync override) leaves the other tasks reset, in Created: they are started
     // and the state recomputed anyway, and only then is the reset's failure rethrown (#58, items 3 and 23).
@@ -1034,9 +1043,17 @@ public abstract partial class BaseEngine : IEngine
       return;
     }
 
+    // Built once: the reset's ordering (DependentsFirst) uses the same map, over the same set.
+    IEnumerable<EngineTask> taskSet = null;
+    Dictionary<EngineTask, List<EngineTask>> dependents = null;
     if (resetDependentTasks)
-      AddAllDependents(named.ToArray(), named, DirectDependents(tasks.Values));
-    await TriggerResetAsync(named.ToArray()).ConfigureAwait(false);
+    {
+      // A published set is never changed (see _tasks): no copy needed.
+      taskSet = tasks.Values;
+      dependents = DirectDependents(taskSet);
+      AddAllDependents(named, named, dependents);
+    }
+    await TriggerResetCoreAsync(named.ToArray(), taskSet, dependents).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1101,12 +1118,19 @@ public abstract partial class BaseEngine : IEngine
   /// or not, form a cycle (possible only for tasks added after the set-up, which
   /// <see cref="CheckForCyclicDependecies()"/> did not see). The task in the exception is the one of
   /// <paramref name="tasks"/> that the cycle depends on, which need not be in the cycle itself.</exception>
-  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks)
+  /// <param name="tasks">The tasks to put in levels.</param>
+  /// <param name="taskSet">The engine's tasks as the caller read them, holding <paramref name="tasks"/>; null to read
+  /// them here.</param>
+  /// <param name="dependents">The map of direct dependents over <paramref name="taskSet"/> (see
+  /// <see cref="DirectDependents"/>), if the caller has already built it; null to build it here. A map over another set
+  /// would miscount: a task added since has a dependency's count go down without having been counted.</param>
+  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks, IEnumerable<EngineTask> taskSet,
+    Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     if (tasks.Length == 0)
       return new List<List<EngineTask>>();
-    var all = _tasks.Values.Union(tasks).ToArray();
-    var dependents = DirectDependents(all);
+    var all = (taskSet ?? _tasks.Values).Union(tasks).ToArray();
+    dependents ??= DirectDependents(all);
     // Kahn's algorithm over the reversed graph: a task is placed once all its direct dependents are.
     var remaining = all.ToDictionary(t => t, t => dependents.TryGetValue(t, out var d) ? d.Count : 0);
     var level = all.ToDictionary(t => t, _ => 0);
