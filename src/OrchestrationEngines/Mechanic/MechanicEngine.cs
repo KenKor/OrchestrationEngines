@@ -716,7 +716,7 @@ public partial class MechanicEngine : BaseEngine
         first.Add(graph.StopsAbove(name, stops));
       stops[name] = graph.Stops(name)
         ? StopAfterAsync(name, engines[name], first.ToArray(), graph, failures)
-        : first.Count == 0 ? Task.CompletedTask : Task.WhenAll(first);
+        : FromThreadPool(first);
       graph.Started(name, stops[name]);
       last.Add(name);
 
@@ -1010,12 +1010,7 @@ public partial class MechanicEngine : BaseEngine
     ConcurrentQueue<Exception> failures)
   {
     // These never fault.
-    var dependents = Task.WhenAll(first);
-    if (!dependents.IsCompleted)
-      // Goes on from the thread pool, not inline in the stop that ended last: in a long chain of stops that end at once
-      // the continuations would otherwise run one inside the other, and on .NET Framework overflow the stack.
-      await dependents.ContinueWith(static _ => { }, CancellationToken.None, TaskContinuationOptions.None,
-        TaskScheduler.Default).ConfigureAwait(false);
+    await FromThreadPool(first).ConfigureAwait(false);
 
     try
     {
@@ -1032,6 +1027,23 @@ public partial class MechanicEngine : BaseEngine
       BestEffort.Log(() => LogEngineFailedToStop(Logger, ex, name));
     }
   }
+
+  /// <summary>
+  /// A task that ends once <paramref name="task"/> has ended (however it ended), going on from the thread pool, not
+  /// inline in whatever ended <paramref name="task"/>: in a long chain of stops that end at once, waits that go on inline
+  /// run one inside the other, and on .NET Framework overflow the stack. Already ended when <paramref name="task"/> has.
+  /// </summary>
+  private static Task FromThreadPool(Task task) =>
+    task.IsCompleted
+      ? Task.CompletedTask
+      : task.ContinueWith(static _ => { }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+
+  /// <summary>
+  /// <see cref="FromThreadPool(Task)"/> for the end of all of <paramref name="tasks"/>, without a
+  /// <see cref="Task.WhenAll(IEnumerable{Task})"/> when there is only one. Reads <paramref name="tasks"/> at once.
+  /// </summary>
+  private static Task FromThreadPool(IReadOnlyList<Task> tasks) =>
+    FromThreadPool(tasks.Count == 1 ? tasks[0] : Task.WhenAll(tasks));
 
   /// <summary>
   /// Awaits <paramref name="stop"/>; if it has not finished after <see cref="StopWarningDelay"/>, logs a warning that
