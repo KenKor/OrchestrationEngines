@@ -24,7 +24,7 @@ internal static class EngineDependents
     var dependentsByEngine = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
     foreach (var descriptor in descriptors)
     {
-      if (descriptor.Name == null || !includes(descriptor.Name))
+      if (!includes(descriptor.Name))
         continue;
       foreach (var dependency in descriptor.DependsOn)
       {
