@@ -70,6 +70,24 @@ public class StopOrderTest
     }
   }
 
+  /// <summary>
+  /// An engine that records that it was stopped, and whose stop ends when <paramref name="held"/> does, running what
+  /// waits for it inline.
+  /// </summary>
+  private sealed class HeldEngine(string name, ConcurrentQueue<string> stops, Task held)
+    : BaseEngine(NullLogger.Instance)
+  {
+    protected override void SetUpTasks()
+    {
+    }
+
+    public override Task StopAsync()
+    {
+      stops.Enqueue(name);
+      return held;
+    }
+  }
+
   private static async Task WaitUntilAsync(Func<bool> condition, string because)
   {
     var deadline = DateTime.UtcNow + MustComplete;
@@ -638,6 +656,130 @@ public class StopOrderTest
     order.Should().HaveCount(22);
     foreach (var i in pairs)
       order.IndexOf($"A{i}").Should().BeGreaterThan(order.IndexOf("X"), $"X depends on A{i} through B{i}");
+  }
+
+  /// <summary>
+  /// Verifies that where cycles made after start (each Ai ↔ Bi) are broken, the stop waits for the engine outside the
+  /// cycle that depends on it through the other member (Ui, depending on Bi): while every Ui's stop is held, no Ai or
+  /// Bi stops, whichever member the walk breaks the cycle at.
+  /// </summary>
+  [Fact]
+  public async Task Stop_CyclesBelowHeldEngines_WaitForThem()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    var pairs = Enumerable.Range(0, 10).ToArray();
+    var above = pairs.Select(i => new RecordingEngine($"U{i}", stops)).ToArray();
+    var engines = pairs.SelectMany(i => new[]
+      {
+        ($"A{i}", (IEngine)Open($"A{i}", stops), new[] { $"B{i}" }),
+        ($"B{i}", (IEngine)Open($"B{i}", stops), new[] { $"A{i}" }),
+        ($"U{i}", (IEngine)above[i], new[] { $"B{i}" }),
+      })
+      .ToArray();
+    var mechanic = CreateMechanic(null, null, engines);
+
+    var stop = mechanic.StopAsync();
+    await Task.WhenAll(above.Select(u => u.StopEntered.Task)).WaitAsync(MustComplete, ct);
+    await Task.Delay(MustStayPending, ct);
+    stops.Should().OnlyContain(name => name.StartsWith("U"), "Ai and Bi wait for Ui, which depends on both");
+    foreach (var u in above)
+      u.Gate.SetResult();
+    await stop.WaitAsync(MustComplete, ct);
+
+    stops.Should().HaveCount(30);
+  }
+
+  /// <summary>
+  /// Verifies that an engine below a cycle made after start (Zi, which Xi of Xi ↔ Yi depends on) waits for the whole
+  /// cycle: while every Yi's stop is held, no Zi stops, whichever member the walk breaks the cycle at.
+  /// </summary>
+  [Fact]
+  public async Task Stop_EnginesBelowCycles_WaitForTheWholeCycle()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    var cycles = Enumerable.Range(0, 10).ToArray();
+    var held = cycles.Select(i => new RecordingEngine($"Y{i}", stops)).ToArray();
+    var engines = cycles.SelectMany(i => new[]
+      {
+        ($"X{i}", (IEngine)Open($"X{i}", stops), new[] { $"Y{i}", $"Z{i}" }),
+        ($"Y{i}", (IEngine)held[i], new[] { $"X{i}" }),
+        ($"Z{i}", (IEngine)Open($"Z{i}", stops), Array.Empty<string>()),
+      })
+      .ToArray();
+    var mechanic = CreateMechanic(null, null, engines);
+
+    var stop = mechanic.StopAsync();
+    await Task.WhenAll(held.Select(y => y.StopEntered.Task)).WaitAsync(MustComplete, ct);
+    await Task.Delay(MustStayPending, ct);
+    stops.Should().NotContain(name => name.StartsWith("Z"), "Zi waits for Yi, which depends on it through Xi");
+    foreach (var y in held)
+      y.Gate.SetResult();
+    await stop.WaitAsync(MustComplete, ct);
+
+    stops.Should().HaveCount(30);
+  }
+
+  /// <summary>
+  /// Verifies that with cycles made after start one above the other (each Ai ↔ Bi below X ↔ Y, X depending on every
+  /// Bi), no Ai or Bi stops while Y's stop is held: Y depends on each of them through X, whichever member of X ↔ Y the
+  /// walk breaks that cycle at.
+  /// </summary>
+  [Fact]
+  public async Task Stop_CycleAboveAnotherCycle_LowerOneWaitsForTheWholeUpperOne()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var stops = new ConcurrentQueue<string>();
+    var pairs = Enumerable.Range(0, 10).ToArray();
+    var y = new RecordingEngine("Y", stops);
+    var engines = pairs.SelectMany(i => new[]
+      {
+        ($"A{i}", (IEngine)Open($"A{i}", stops), new[] { $"B{i}" }),
+        ($"B{i}", (IEngine)Open($"B{i}", stops), new[] { $"A{i}" }),
+      })
+      .Append(("X", Open("X", stops), pairs.Select(i => $"B{i}").Append("Y").ToArray()))
+      .Append(("Y", y, ["X"]))
+      .ToArray();
+    var mechanic = CreateMechanic(null, null, engines);
+
+    var stop = mechanic.StopAsync();
+    await y.StopEntered.Task.WaitAsync(MustComplete, ct);
+    await Task.Delay(MustStayPending, ct);
+    stops.Should().BeSubsetOf(["X", "Y"], "every Ai and Bi waits for Y, which depends on them through X");
+    y.Gate.SetResult();
+    await stop.WaitAsync(MustComplete, ct);
+
+    stops.Should().HaveCount(22);
+  }
+
+  /// <summary>
+  /// Verifies that a chain of 10,000 engines whose head (the engine nothing depends on, stopped first) ends its stop
+  /// only after the walk has returned still stops dependents first without running out of stack: the other stops then
+  /// run as continuations, one after the other. The head's stop ends on a thread with a small stack (256 KB).
+  /// </summary>
+  [Fact]
+  public async Task Stop_ChainOf10000EnginesAfterAHeldHead_StopsDependentsFirst()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    const int length = 10_000;
+    var stops = new ConcurrentQueue<string>();
+    var gate = new TaskCompletionSource();
+    var engines = Enumerable.Range(0, length)
+      .Select(i => (
+        $"E{i}",
+        i == length - 1 ? new HeldEngine($"E{i}", stops, gate.Task) : (IEngine)new CountingEngine($"E{i}", stops),
+        i == 0 ? Array.Empty<string>() : [$"E{i - 1}"]))
+      .ToArray();
+    var mechanic = CreateMechanic(null, null, engines);
+
+    var stop = mechanic.StopAsync();
+    var thread = new Thread(() => gate.SetResult(), maxStackSize: 256 * 1024);
+    thread.Start();
+    thread.Join();
+    await stop.WaitAsync(TimeSpan.FromSeconds(30), ct);
+
+    stops.Should().Equal(Enumerable.Range(0, length).Reverse().Select(i => $"E{i}"));
   }
 
   /// <summary>
