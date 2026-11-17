@@ -28,7 +28,7 @@ namespace OrchestrationEngines.Mechanic;
 /// </list>
 /// </para>
 /// </remarks>
-public class EngineKickStartTask : EngineTask
+public partial class EngineKickStartTask : EngineTask
 {
     /// <summary>
     /// Postfix appended to the engine name to form the task name for kick-starting.
@@ -85,8 +85,16 @@ public class EngineKickStartTask : EngineTask
     private (BaseEngine Engine, string Reason)? _givenUpWhileStarting;
 
     /// <summary>
+    /// The give-up of an engine that a run this task ended had started already (see <see cref="OnFailedEntered"/>). The
+    /// next run waits until it has ended, or it finds the engine still Ready on the previous context and completes, and the
+    /// give-up then faults the engine under it.
+    /// </summary>
+    private Task _pendingGiveUp = Task.CompletedTask;
+
+    /// <summary>
     /// Guards <see cref="_generation"/>, <see cref="_starting"/>, <see cref="EngineInstance"/>,
-    /// <see cref="_engineToRestart"/> and <see cref="_givenUpWhileStarting"/> between a run and a reset that ends it.
+    /// <see cref="_engineToRestart"/>, <see cref="_givenUpWhileStarting"/> and <see cref="_pendingGiveUp"/> between a run
+    /// and a reset that ends it.
     /// </summary>
     private readonly object _gate = new();
 
@@ -129,7 +137,15 @@ public class EngineKickStartTask : EngineTask
         if (!m.Engines.TryGetValue(engineDescriptor.Name, out var engine))
             throw new ArgumentException($"Unknown engine '{engineDescriptor.Name}'");
 
-        // Marked before the first wait: a reset that comes in during any of the waits below ends this run, and must
+        // A give-up of the engine that an earlier run started with the previous context may still be under way: let it end
+        // first. It does not throw. A reset that came in meanwhile has ended this run.
+        Task pendingGiveUp;
+        lock (_gate)
+            pendingGiveUp = _pendingGiveUp;
+        await pendingGiveUp.ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+
+        // Marked before the first wait below: a reset that comes in during any of those waits ends this run, and must
         // restart the engine this run starts, with the context it starts it with (#85).
         int generation;
         BaseEngine toRestart;
@@ -267,21 +283,27 @@ public class EngineKickStartTask : EngineTask
     protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
     {
         base.OnFailedEntered(reasonFromTrigger, cancelled);
-        var reason = $"its kick-start ended without starting it ({FailReason})";
         BaseEngine abandoned;
-        var startedMeanwhile = false;
+        string reason;
         lock (_gate)
         {
             abandoned = _engineToRestart;
             _engineToRestart = null;
-            if (abandoned != null && _starting == abandoned)
+            if (abandoned == null)
+                return;
+            reason = $"its kick-start ended without starting it ({FailReason})";
+            if (_starting == abandoned)
+            {
                 _givenUpWhileStarting = (abandoned, reason);
-            else
-                startedMeanwhile = abandoned is { State: not (EngineState.Created or EngineState.Faulted or EngineState.Stopped) };
+            }
+            else if (abandoned is { State: EngineState.Starting or EngineState.Ready })
+            {
+                // Started meanwhile; the next run waits until this has ended.
+                _pendingGiveUp = Task.Run(() => GiveUpAsync(abandoned, reason));
+                return;
+            }
         }
-        abandoned?.AbandonRestart(reason);
-        if (startedMeanwhile)
-            _ = Task.Run(() => GiveUpAsync(abandoned, reason));
+        abandoned.AbandonRestart(reason);
     }
 
     /// <summary>
@@ -289,7 +311,7 @@ public class EngineKickStartTask : EngineTask
     /// does, and gives that restart up, so the engine ends Faulted (Stopped if it is stopped meanwhile) and whoever waits
     /// until it is ready is released (#86 item 7).
     /// </summary>
-    /// <remarks>Does not throw: a failure is logged, since nobody waits for it.</remarks>
+    /// <remarks>Does not throw: a failure is logged, since nobody waits for its outcome.</remarks>
     private async Task GiveUpAsync(BaseEngine engine, string reason)
     {
         try
@@ -299,9 +321,12 @@ public class EngineKickStartTask : EngineTask
         }
         catch (Exception ex)
         {
-            Logger?.LogWarning(ex, "Could not give up engine '{Engine}': {Reason}", engine.EngineName, reason);
+            BestEffort.Log(() => LogGiveUpFailed(Logger, ex, engine.EngineName, reason));
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not give up engine '{EngineName}': {Reason}")]
+    private static partial void LogGiveUpFailed(ILogger logger, Exception exception, string engineName, string reason);
 
     /// <summary>
     /// Thrown when the engine stopped or faulted instead of becoming Ready.
