@@ -63,6 +63,7 @@ public class ContextFanOutTest
   private sealed class HeldStartEngine : BaseEngine
   {
     private readonly ConcurrentQueue<string> _loadedWith = new();
+    private readonly ConcurrentQueue<string> _setUpWith = new();
     private readonly bool _withMonitor;
     private TaskCompletionSource _hold;
     private bool _holdBeforeSetUp;
@@ -75,6 +76,12 @@ public class ContextFanOutTest
       _withMonitor = withMonitor;
 
     public IReadOnlyCollection<string> LoadedWith => _loadedWith;
+
+    /// <summary>
+    /// The context of every set-up of the engine's tasks, in order. Unlike <see cref="LoadedWith"/>, it does not depend on
+    /// the Load task having run: an engine given up right after its start may stop that task before it runs.
+    /// </summary>
+    public IReadOnlyCollection<string> SetUpWith => _setUpWith;
 
     /// <summary>Completed once a held start has begun waiting for the test.</summary>
     public TaskCompletionSource StartHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -114,6 +121,7 @@ public class ContextFanOutTest
     protected override void SetUpTasks()
     {
       var loadWith = (Context.Inner ?? Context) is ValueContext v ? v.Value : "<none>";
+      _setUpWith.Enqueue(loadWith);
       CreateTask("Load", _ =>
       {
         _loadedWith.Enqueue(loadWith);
@@ -487,7 +495,9 @@ public class ContextFanOutTest
 
     var ready = session.EnsureReadyAsync();
     await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the engine is given up, so the wait for it ends");
-    session.LoadedWith.Should().Equal("workspace-A", "workspace-B");
+    // The engine is given up as soon as its start returns, so its Load task for workspace-B may not have run yet: check
+    // the set-up instead.
+    session.SetUpWith.Should().Equal("workspace-A", "workspace-B");
     session.State.Should().Be(EngineState.Faulted, "the engine was started with the previous context");
   }
 
