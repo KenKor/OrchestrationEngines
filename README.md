@@ -54,3 +54,8 @@ you ship it compiled. Your own code that uses the library may be under any licen
 
 The MPL-2.0 grants no rights in the trademarks, service marks or logos of Spatial Eye B.V. or any other contributor,
 except as needed for the licence notices (section 2.3).
+
+## Contributing
+
+Contributions are welcome. A contribution is accepted under the MPL-2.0, the licence of the rest of the code, and stays
+under it. No contributor licence agreement or sign-off is needed.

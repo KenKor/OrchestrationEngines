@@ -29,6 +29,9 @@ warning.
 | Licence: Mozilla Public License 2.0 | `LICENSE`, and `PackageLicenseExpression` (`MPL-2.0`) in `Directory.Build.props` |
 | Copyright holder: Spatial Eye B.V. | `Copyright` in `Directory.Build.props` |
 | Main author: Spatial Eye B.V., then the contributors | `Authors` in `Directory.Build.props` |
+| Licence notice: once in the README, with the full text in `LICENSE`; no notice in each source file | `README.md`, `LICENSE` |
+| Contributions: accepted under the MPL-2.0, no contributor agreement or sign-off | Contributing in `README.md` |
+| Package name: `OrchestrationEngines` | `PackageId` in the `.csproj` |
 
 ## Open decisions
 
@@ -36,7 +39,6 @@ warning.
 | --- | --- | --- |
 | Repository home | `RepositoryUrl` in `Directory.Build.props` | Where the repository will live for good. Debuggers fetch source from it through SourceLink. |
 | Package feed and owner | `publish` job in the workflow | nuget.org, a private feed, or both. On nuget.org: which account or organisation owns the package. |
-| Package ID | `PackageId` in the `.csproj` | Check that `OrchestrationEngines` is still free on nuget.org; an ID prefix can be reserved there. |
 | Feed login | `publish` job in the workflow | nuget.org Trusted Publishing (no stored key) or an API key in a GitHub secret. |
 | Versioning | `.csproj` or a versioning package | Version from git tags (for example MinVer) or set by hand. Also the first version: 0.1.0 or 1.0.0. |
 | Strong naming | `.csproj` and a key file | Needed if any strong-named .NET Framework assembly will reference this package. |
@@ -48,7 +50,8 @@ warning.
 3. Set up versioning. With version tags, a release is then started by pushing a tag such as `v1.0.0`.
 4. Replace the step in the `publish` job with a download of the `packages` artifact and a
    `dotnet nuget push --skip-duplicate` of the `.nupkg` and `.snupkg` files. Add a protected GitHub environment for the
-   job, and the feed login.
+   job, and the feed login. Before the first push, check that the package ID `OrchestrationEngines` is still free on
+   the feed; on nuget.org an ID prefix can be reserved.
 5. Check that the README reads well on the feed: it is packed into the package, and relative links do not work there.
 6. Once a first version is out, set `PackageValidationBaselineVersion` in the `.csproj` so that breaking API changes
    against that version fail the build.
