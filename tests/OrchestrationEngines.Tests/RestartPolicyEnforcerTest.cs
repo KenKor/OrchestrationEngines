@@ -155,7 +155,8 @@ public class RestartPolicyEnforcerTest
   /// <summary>
   /// Verifies that the jitter shortens the wait by its share of a random fraction of the backoff (#59, item 3): with a
   /// random draw of 0.5, a 10-second backoff waits 10 seconds without jitter, 7.5 with half, and 5 with full jitter.
-  /// The next backoff still doubles from the backoff without jitter.
+  /// The next backoff still doubles from the backoff without jitter. It is read while the wait is running: once the
+  /// wait ends, the failing work runs again and the next restart doubles it again (#88, item 3).
   /// </summary>
   [Theory]
   [InlineData(0.0, 10_000)]
@@ -173,14 +174,13 @@ public class RestartPolicyEnforcerTest
     }, clock, nextRandom: () => 0.5);
     var (_, backoff) = await StartFailingRunAsync(enforcer);
     await WaitUntilAsync(() => clock.WaitingTimers == 1, "the restart must wait for its backoff");
+    enforcer.CurrentBackoff.Should().Be(TimeSpan.FromSeconds(20), "the backoff doubles without the jitter");
 
     clock.Advance(TimeSpan.FromMilliseconds(expectedWaitMs - 1));
     await Task.Delay(100, ct);
     backoff.IsCompleted.Should().BeFalse("the wait has not passed yet");
     clock.Advance(TimeSpan.FromMilliseconds(1));
     await backoff.WaitAsync(MustComplete, ct);
-
-    enforcer.CurrentBackoff.Should().Be(TimeSpan.FromSeconds(20), "the backoff doubles without the jitter");
   }
 
   /// <summary>
@@ -401,5 +401,17 @@ public class RestartPolicyEnforcerTest
       var create = () => new RestartPolicyEnforcer(policy);
       create.Should().Throw<ArgumentOutOfRangeException>();
     }
+  }
+
+  /// <summary>
+  /// Verifies that the constructor that takes the jitter's random source refuses a null source (#88, item 1), instead
+  /// of failing with a <see cref="NullReferenceException"/> at the first restart with jitter.
+  /// </summary>
+  [Fact]
+  public void RestartPolicyEnforcer_Constructor_NullRandomSource_Throws()
+  {
+    var act = () => new RestartPolicyEnforcer(new RestartPolicy(), new ManualTimeProvider(), nextRandom: null);
+
+    act.Should().ThrowExactly<ArgumentNullException>().WithParameterName("nextRandom");
   }
 }

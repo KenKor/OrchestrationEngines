@@ -241,8 +241,6 @@ namespace System
       public override double NextDouble() { lock (_lock) return base.NextDouble(); }
 
       public override void NextBytes(byte[] buffer) { lock (_lock) base.NextBytes(buffer); }
-
-      protected override double Sample() { lock (_lock) return base.Sample(); }
     }
   }
 }
