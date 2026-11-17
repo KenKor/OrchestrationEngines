@@ -42,7 +42,7 @@ library itself. Any tool that reads Cobertura can show the report, for example R
 
 ## Licence
 
-Copyright (c) 2026 Spatial Eye.
+Copyright (c) 2026 Spatial Eye B.V.
 
 This notice applies to every source file in this repository: This Source Code Form is subject to the terms of the
 Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at
@@ -52,5 +52,5 @@ You may use, fork and change the code. If you distribute the library, changed or
 MPL-2.0 and keep their copyright and licence notices, and you make that source available to your recipients, also when
 you ship it compiled. Your own code that uses the library may be under any licence.
 
-The MPL-2.0 grants no rights in the trademarks, service marks or logos of Spatial Eye or any other contributor, except as
-needed for the licence notices (section 2.3).
+The MPL-2.0 grants no rights in the trademarks, service marks or logos of Spatial Eye B.V. or any other contributor,
+except as needed for the licence notices (section 2.3).
