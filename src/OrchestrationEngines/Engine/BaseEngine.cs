@@ -923,7 +923,7 @@ public abstract partial class BaseEngine : IEngine
   /// (<see cref="DirectDependents"/>) when the caller has already built it, or null for both (see
   /// <see cref="DependentsFirst"/>).
   /// </summary>
-  private async Task TriggerResetCoreAsync(IEnumerable<EngineTask> tasks, ICollection<EngineTask> taskSet,
+  private async Task TriggerResetCoreAsync(IEnumerable<EngineTask> tasks, IEnumerable<EngineTask> taskSet,
     Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     // A set that a prepared restart replaces is not reset and started again (see PrepareRestartAsync).
@@ -1044,11 +1044,12 @@ public abstract partial class BaseEngine : IEngine
     }
 
     // Built once: the reset's ordering (DependentsFirst) uses the same map, over the same set.
-    ICollection<EngineTask> taskSet = null;
+    IEnumerable<EngineTask> taskSet = null;
     Dictionary<EngineTask, List<EngineTask>> dependents = null;
     if (resetDependentTasks)
     {
-      taskSet = tasks.Values.ToArray();
+      // A published set is never changed (see _tasks): no copy needed.
+      taskSet = tasks.Values;
       dependents = DirectDependents(taskSet);
       AddAllDependents(named, named, dependents);
     }
@@ -1123,7 +1124,7 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="dependents">The map of direct dependents over <paramref name="taskSet"/> (see
   /// <see cref="DirectDependents"/>), if the caller has already built it; null to build it here. A map over another set
   /// would miscount: a task added since has a dependency's count go down without having been counted.</param>
-  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks, ICollection<EngineTask> taskSet,
+  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks, IEnumerable<EngineTask> taskSet,
     Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     if (tasks.Length == 0)
