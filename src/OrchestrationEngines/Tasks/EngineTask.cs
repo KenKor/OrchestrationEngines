@@ -358,9 +358,9 @@ public partial class EngineTask
   /// thread that cancels the token: the one that stops the coordinator, engine or task, or the library's own on a
   /// time-out or a reset. It then runs inside the library's <c>Cancel()</c>, under a library lock. A handler that
   /// blocks there holds up that cancellation, and one that waits for the stopped coordinator, engine or task can
-  /// deadlock it: make <c>await Task.Yield()</c> its first statement, so the cancellation returns before the rest runs.
-  /// On a thread with a <see cref="SynchronizationContext"/> (a UI thread) the rest then runs later on that thread, so
-  /// do any blocking part in <c>await Task.Run(...)</c>. A callback registered with <c>token.Register(...)</c> runs
+  /// deadlock it: make <c>await Task.Yield()</c> its first statement, so the cancellation does not wait for the rest of
+  /// it. On a thread with a <see cref="SynchronizationContext"/> (a UI thread) the rest then runs later on that thread,
+  /// so do any blocking part in <c>await Task.Run(...)</c>. A callback registered with <c>token.Register(...)</c> runs
   /// synchronously on the cancelling thread on every target.
   /// </remarks>
   public EngineTask(
