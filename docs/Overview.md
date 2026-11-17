@@ -203,7 +203,9 @@ They are collected before startup and remain fixed for the lifetime of a run.
 
 Engine and task names are case-insensitive everywhere: in dependencies, lookups, context refreshes and definition
 diffs. `AsBuilt` and `asbuilt` are the same engine. An engine refuses a second task under a name it already uses
-(`Load` and `load` included): `CreateTask` throws an `ArgumentException`, and during a set-up the start fails.
+(`Load` and `load` included): `CreateTask` and `AddTask` throw an `ArgumentException`, and during a set-up the start
+fails. `AddTask` also refuses a task under a name other than its own `Name`, so a task is always found under the name it
+reports.
 
 ---
 
