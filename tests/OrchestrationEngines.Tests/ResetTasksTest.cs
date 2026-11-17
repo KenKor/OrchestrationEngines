@@ -361,7 +361,7 @@ public class ResetTasksTest
     await engine.StartAsync();
     await engine.TriggerStartAsync();
     await aRunning.Task.WaitAsync(MustComplete, ct);
-    // Ends once the old run has reported its outcome, and with it the callbacks to A's dependents.
+    // Ends once the old run's work has ended. Its outcome is dropped: the reset's first pass ended the run.
     var aOldRun = engine.Tasks["A"].LatestRunEnded;
     var oldRunReported = false;
     engine.OnReset = name =>
