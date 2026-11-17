@@ -29,6 +29,9 @@ warning.
 | Licence: Mozilla Public License 2.0 | `LICENSE`, and `PackageLicenseExpression` (`MPL-2.0`) in `Directory.Build.props` |
 | Copyright holder: Spatial Eye B.V. | `Copyright` in `Directory.Build.props` |
 | Main author: Spatial Eye B.V., then the contributors | `Authors` in `Directory.Build.props` |
+| Licence notice: once in the README, with the full text in `LICENSE`; no notice in each source file | `README.md`, `LICENSE` |
+| Contributions: accepted under the MPL-2.0, no contributor agreement or sign-off | `README.md`, Contributing |
+| Package name: `OrchestrationEngines` | `PackageId` in the `.csproj` |
 
 ## Open decisions
 
@@ -36,7 +39,7 @@ warning.
 | --- | --- | --- |
 | Repository home | `RepositoryUrl` in `Directory.Build.props` | Where the repository will live for good. Debuggers fetch source from it through SourceLink. |
 | Package feed and owner | `publish` job in the workflow | nuget.org, a private feed, or both. On nuget.org: which account or organisation owns the package. |
-| Package ID | `PackageId` in the `.csproj` | Check that `OrchestrationEngines` is still free on nuget.org; an ID prefix can be reserved there. |
+| Package ID on the feed | `PackageId` in the `.csproj` | The name is decided. Check that `OrchestrationEngines` is still free on nuget.org; an ID prefix can be reserved there. |
 | Feed login | `publish` job in the workflow | nuget.org Trusted Publishing (no stored key) or an API key in a GitHub secret. |
 | Versioning | `.csproj` or a versioning package | Version from git tags (for example MinVer) or set by hand. Also the first version: 0.1.0 or 1.0.0. |
 | Strong naming | `.csproj` and a key file | Needed if any strong-named .NET Framework assembly will reference this package. |
