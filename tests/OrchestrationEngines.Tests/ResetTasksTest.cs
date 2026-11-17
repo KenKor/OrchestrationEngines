@@ -52,6 +52,11 @@ public class ResetTasksTest
     public Action<string> OnReset { get; set; }
 
     /// <summary>
+    /// Runs once the base reset handler has run (the task has its new token and completion latch), with the task's name.
+    /// </summary>
+    public Action<string> AfterReset { get; set; }
+
+    /// <summary>
     /// Runs as a task with dependencies looks whether they have all completed, with the task's name.
     /// </summary>
     public Action<string> OnDependencyCheck { get; set; }
@@ -91,11 +96,12 @@ public class ResetTasksTest
     private sealed class HookedTask(string name, Func<CancellationToken, Task> work, GraphEngine engine)
       : EngineTask(name, work, requiredForRunning: true, NullLogger.Instance, engine.CancellationToken)
     {
-      protected override Task OnResetEnteredAsync()
+      protected override async Task OnResetEnteredAsync()
       {
         engine._resets.AddOrUpdate(Name, 1, (_, n) => n + 1);
         engine.OnReset?.Invoke(Name);
-        return base.OnResetEnteredAsync();
+        await base.OnResetEnteredAsync();
+        engine.AfterReset?.Invoke(Name);
       }
 
       protected override bool DependenciesReady()
@@ -515,6 +521,29 @@ public class ResetTasksTest
 
     (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("C's reset failed.");
     aReset.Should().BeTrue("A is reset after its dependents, also when one of their resets fails");
+    await engine.StopAsync();
+  }
+
+  /// <summary>
+  /// Verifies that a task that had already completed, whose reset override throws after the base handler, is not
+  /// cancelled: it keeps its state, and the caller gets the exception (#58 item 21).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_CompletedTasksResetThrowsAfterTheBase_KeepsItsState()
+  {
+    var engine = await ReadyAsync(Chain());
+    engine.AfterReset = name =>
+    {
+      if (name == "A")
+        throw new InvalidOperationException("A's reset failed.");
+    };
+
+    var act = () => engine.ResetTasksAsync(["A"], resetDependentTasks: false)
+      .WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+
+    (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("A's reset failed.");
+    engine.Tasks["A"].State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    engine.Tasks["A"].FailReason.Should().BeNull();
     await engine.StopAsync();
   }
 
