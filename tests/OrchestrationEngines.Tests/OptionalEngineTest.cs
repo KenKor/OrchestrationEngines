@@ -125,12 +125,13 @@ public class OptionalEngineTest
     Register(coordinator, "Core", core, required: true);
     Register(coordinator, "Optional", optional, required: false);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => optional.State == EngineState.Ready, "the optional engine loads");
+    await Wait.UntilAsync(() => optional.State == EngineState.Ready, MustComplete, "the optional engine loads");
 
     await coordinator.InvalidateContextForEngineAsync("Optional", ct).WaitAsync(MustComplete, ct);
 
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the required engines are still Ready");
-    await WaitUntilAsync(() => optional.State == EngineState.Ready, "the optional engine loads again");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running, MustComplete,
+      "the required engines are still Ready");
+    await Wait.UntilAsync(() => optional.State == EngineState.Ready, MustComplete, "the optional engine loads again");
   }
 
   /// <summary>

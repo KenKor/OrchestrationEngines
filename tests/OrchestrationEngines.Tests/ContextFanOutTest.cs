@@ -101,16 +101,6 @@ public class ContextFanOutTest
     });
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static EngineCoordinator CreateCoordinator() =>
     new(nameof(ContextFanOutTest), NullLogger.Instance, useDispatcher: false);
 
@@ -298,14 +288,14 @@ public class ContextFanOutTest
 
     current = "workspace-B";
     var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
-    await WaitUntilAsync(() => session.LoadedWith.Count == 2, "the engine loads for workspace-B");
+    await Wait.UntilAsync(() => session.LoadedWith.Count == 2, MustComplete, "the engine loads for workspace-B");
     current = "workspace-C";
     var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
     hold.SetResult();
     await Task.WhenAll(first, second).WaitAsync(MustComplete, ct);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    await WaitUntilAsync(() => session.LoadedWith.Count == 3, "the engine loads again for workspace-C");
+    await Wait.UntilAsync(() => session.LoadedWith.Count == 3, MustComplete, "the engine loads again for workspace-C");
     session.LoadedWith.Should().Equal("workspace-A", "workspace-B", "workspace-C");
     session.State.Should().Be(EngineState.Ready);
   }
@@ -354,7 +344,7 @@ public class ContextFanOutTest
     await Task.WhenAll(first, second).WaitAsync(MustComplete, ct);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    await WaitUntilAsync(() => session.LoadedWith.Count == 3, "the engine loads again for workspace-C");
+    await Wait.UntilAsync(() => session.LoadedWith.Count == 3, MustComplete, "the engine loads again for workspace-C");
     session.LoadedWith.Should().Equal("workspace-A", "workspace-B", "workspace-C");
     session.State.Should().Be(EngineState.Ready);
   }
@@ -404,7 +394,8 @@ public class ContextFanOutTest
     await Task.WhenAll(first, second).WaitAsync(MustComplete, ct).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
     var ready = session.EnsureReadyAsync();
-    await WaitUntilAsync(() => ready.IsCompleted, "the restart is given up, so the wait for the engine ends");
+    await Wait.UntilAsync(() => ready.IsCompleted, MustComplete,
+      "the restart is given up, so the wait for the engine ends");
     session.State.Should().Be(EngineState.Faulted);
   }
 }
