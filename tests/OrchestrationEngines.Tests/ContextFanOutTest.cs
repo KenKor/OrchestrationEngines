@@ -7,6 +7,8 @@ using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
+using OrchestrationEngines.Mechanic;
+using OrchestrationEngines.Tasks;
 using Xunit;
 
 namespace OrchestrationEngines.Tests;
@@ -54,25 +56,42 @@ public class ContextFanOutTest
 
   /// <summary>
   /// An engine that records the value of its context on each load, and whose start, once armed, ends only when the test
-  /// lets it: its load has run by then, but the kick-start that started it is still waiting for the start.
+  /// lets it. Held after the set-up, its load has run by then, but the kick-start that started it is still waiting for
+  /// the start. Held before the set-up, the engine is still Created while the kick-start starts it.
   /// </summary>
   private sealed class HeldStartEngine : BaseEngine
   {
     private readonly ConcurrentQueue<string> _loadedWith = new();
     private TaskCompletionSource _hold;
+    private bool _holdBeforeSetUp;
 
     public HeldStartEngine() : base(NullLogger.Instance) { }
 
     public IReadOnlyCollection<string> LoadedWith => _loadedWith;
 
-    public TaskCompletionSource HoldNextStart() =>
-      _hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>Completed once a held start has begun waiting for the test.</summary>
+    public TaskCompletionSource StartHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource HoldNextStart(bool beforeSetUp = false)
+    {
+      _holdBeforeSetUp = beforeSetUp;
+      return _hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     public override async Task StartAsync()
     {
+      var hold = Interlocked.Exchange(ref _hold, null);
+      if (hold != null && _holdBeforeSetUp)
+        await WaitAsync(hold).ConfigureAwait(false);
       await base.StartAsync().ConfigureAwait(false);
-      if (Interlocked.Exchange(ref _hold, null) is { } hold)
-        await hold.Task.ConfigureAwait(false);
+      if (hold != null && !_holdBeforeSetUp)
+        await WaitAsync(hold).ConfigureAwait(false);
+    }
+
+    private Task WaitAsync(TaskCompletionSource hold)
+    {
+      StartHeld.TrySetResult();
+      return hold.Task;
     }
 
     protected override void SetUpTasks() => CreateTask("Load", _ =>
@@ -94,6 +113,15 @@ public class ContextFanOutTest
 
   private static EngineCoordinator CreateCoordinator() =>
     new(nameof(ContextFanOutTest), NullLogger.Instance, useDispatcher: false);
+
+  /// <summary>
+  /// A coordinator that lets a test see the kick-start task of an engine, to wait until a run of it has ended.
+  /// </summary>
+  private sealed class InspectableCoordinator() : EngineCoordinator(nameof(ContextFanOutTest), NullLogger.Instance,
+    useDispatcher: false)
+  {
+    public EngineTask KickStartOf(string name) => Mechanic.Tasks[EngineKickStartTask.KickStartName(name)];
+  }
 
   private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine,
     Func<IEngineContext> context = null, string dependsOn = null)
@@ -280,5 +308,103 @@ public class ContextFanOutTest
     await WaitUntilAsync(() => session.LoadedWith.Count == 3, "the engine loads again for workspace-C");
     session.LoadedWith.Should().Equal("workspace-A", "workspace-B", "workspace-C");
     session.State.Should().Be(EngineState.Ready);
+  }
+
+  /// <summary>
+  /// Verifies that an invalidation that arrives while the engine is still Created, because the kick-start is starting it
+  /// for the previous invalidation, restarts it with the new context. The start that was under way loads with the
+  /// previous context; the engine must not stay loaded with it.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_WhileTheEngineIsCreatedForThePreviousOne_RestartsIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var session = new HeldStartEngine();
+    var coordinator = new InspectableCoordinator();
+    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+      .SetContextFactory(async _ =>
+      {
+        var value = current;
+        if (value == "workspace-C")
+        {
+          contextForCEntered.TrySetResult();
+          await contextGate.Task;
+        }
+        return new ValueContext(value);
+      });
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var hold = session.HoldNextStart(beforeSetUp: true);
+
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    session.State.Should().Be(EngineState.Created, "the start for workspace-B has not set the engine up yet");
+    var startingRun = coordinator.KickStartOf("Session").LatestRunEnded;
+
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    hold.SetResult();
+    await startingRun.WaitAsync(MustComplete, ct).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+    session.LoadedWith.Should().Equal(["workspace-A", "workspace-B"], "the start under way loaded with workspace-B");
+    contextGate.SetResult();
+    await Task.WhenAll(first, second).WaitAsync(MustComplete, ct);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    await WaitUntilAsync(() => session.LoadedWith.Count == 3, "the engine loads again for workspace-C");
+    session.LoadedWith.Should().Equal("workspace-A", "workspace-B", "workspace-C");
+    session.State.Should().Be(EngineState.Ready);
+  }
+
+  /// <summary>
+  /// Verifies that a restart prepared by an invalidation is given up when the next kick-start fails without starting the
+  /// engine (its context fails), also when the previous run, ended by that invalidation, comes back from its start after
+  /// it. That run must not take the restart as carried out, or whoever waits until the engine is ready waits until it
+  /// stops.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ContextFailsAfterTheEndedRunReturns_GivesUpTheRestart()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var session = new HeldStartEngine();
+    var coordinator = new InspectableCoordinator();
+    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+      .SetContextFactory(async _ =>
+      {
+        var value = current;
+        if (value == "workspace-C")
+        {
+          contextForCEntered.TrySetResult();
+          await contextGate.Task;
+          throw new InvalidOperationException("workspace-C cannot be opened");
+        }
+        return new ValueContext(value);
+      })
+      .WithoutRestarts();
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var hold = session.HoldNextStart();
+
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    var startingRun = coordinator.KickStartOf("Session").LatestRunEnded;
+
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    hold.SetResult();
+    await startingRun.WaitAsync(MustComplete, ct).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+    contextGate.SetResult();
+    await Task.WhenAll(first, second).WaitAsync(MustComplete, ct).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+    var ready = session.EnsureReadyAsync();
+    await WaitUntilAsync(() => ready.IsCompleted, "the restart is given up, so the wait for the engine ends");
+    session.State.Should().Be(EngineState.Faulted);
   }
 }

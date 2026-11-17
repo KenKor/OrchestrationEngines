@@ -62,6 +62,27 @@ public class EngineKickStartTask : EngineTask
     /// </remarks>
     private BaseEngine _engineToRestart;
 
+    /// <summary>
+    /// The engine a run is starting, from just before it calls the start until the start returns; null otherwise.
+    /// </summary>
+    /// <remarks>
+    /// A reset that comes in meanwhile restarts this engine, though the run has not recorded it in
+    /// <see cref="EngineInstance"/> yet (#85).
+    /// </remarks>
+    private IEngine _starting;
+
+    /// <summary>
+    /// Counts the resets of this task. A run whose start returns after a newer reset leaves the state that reset set up
+    /// as it is: the run was ended, and the next run carries out the restart (#85).
+    /// </summary>
+    private int _generation;
+
+    /// <summary>
+    /// Guards <see cref="_generation"/>, <see cref="_starting"/>, <see cref="EngineInstance"/> and
+    /// <see cref="_engineToRestart"/> between a run and a reset that ends it.
+    /// </summary>
+    private readonly object _gate = new();
+
     private readonly MechanicEngine _mechanic;
 
     /// <summary>
@@ -108,23 +129,55 @@ public class EngineKickStartTask : EngineTask
         if (NeedsResetBeforeRestart(EngineInstance))
             await EngineInstance.ResetFailedTasksAsync().ConfigureAwait(false);
 
-        // Start the engine instance.
-        EngineInstance = await m.StartEngineAsync(engineDescriptor.Name).ConfigureAwait(false);
-        // Started again: a restart prepared by a reset of this task has been carried out.
-        _engineToRestart = null;
+        if (!m.Engines.TryGetValue(engineDescriptor.Name, out var engine))
+            throw new ArgumentException($"Unknown engine '{engineDescriptor.Name}'");
+
+        // A reset found the engine still Created, because a run it ended was starting it, so it could not prepare a
+        // restart then. That run has since started the engine with the previous context: restart it now (#85).
+        var toRestart = Volatile.Read(ref _engineToRestart);
+        if (toRestart != null && toRestart.State != EngineState.Created)
+            await toRestart.ResetAllTasksAsync().ConfigureAwait(false);
+
+        int generation;
+        lock (_gate)
+        {
+            generation = _generation;
+            _starting = engine;
+        }
+
+        var started = false;
+        try
+        {
+            await MechanicEngine.StartEngineAsync(engine).ConfigureAwait(false);
+            started = true;
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _starting = null;
+                // Started again: a restart prepared by a reset of this task has been carried out. Unless a newer reset
+                // ended this run meanwhile: the restart that one prepared is the next run's (#85).
+                if (started && generation == _generation)
+                {
+                    EngineInstance = engine;
+                    _engineToRestart = null;
+                }
+            }
+        }
 
         // Drive the engine to Ready (initialization complete).
         // A reset of this task ends this run and prepares a restart of the engine, which only the next run carries out;
         // and the next run starts once this one's work has ended. So stop waiting once this run is ended, or the two wait
         // for each other (#85).
-        await MechanicEngine.EnsureEngineReadyAsync(EngineInstance).WaitAsync(token).ConfigureAwait(false);
+        await MechanicEngine.EnsureEngineReadyAsync(engine).WaitAsync(token).ConfigureAwait(false);
 
         // Validate final engine state.
-        if (EngineInstance?.State >= EngineState.Stopped)
+        if (engine.State >= EngineState.Stopped)
         {
             // Escalate to failure so recovery policy can decide next steps.
             throw new EngineNotStartedException(
-                $"Engine execution failed: '{engineDescriptor.Name}', {EngineInstance}.");
+                $"Engine execution failed: '{engineDescriptor.Name}', {engine}.");
         }
     }
 
@@ -155,22 +208,24 @@ public class EngineKickStartTask : EngineTask
     protected override async Task OnResetEnteredAsync()
     {
         // Reset all engine-level tasks before restarting. That prepares a restart which only this task carries out, when it
-        // runs again. A run that is still starting the engine (its reset was ended by this one, but its work goes on) has
-        // not recorded it yet: restart the engine it is starting all the same, or a second invalidation that comes in
-        // meanwhile leaves the engine loaded with the previous context (#85). An engine that was never started needs no
-        // restart: the next run starts it.
-        var engine = EngineInstance
-            ?? (_mechanic.Engines.TryGetValue(Descriptor.Name, out var created) && created.State != EngineState.Created
-                ? created
-                : null);
-        if (engine != null)
+        // runs again. A run that is still starting the engine (this reset ended it, but its work goes on) has not recorded
+        // it yet: restart the engine it is starting all the same, or a second invalidation that comes in meanwhile leaves
+        // the engine loaded with the previous context (#85). If that engine is still Created, the reset prepares nothing;
+        // the next run restarts it once the ended run has started it. An engine that no run started needs no restart: the
+        // next run starts it.
+        IEngine engine;
+        lock (_gate)
         {
-            _engineToRestart = engine as BaseEngine;
-            await engine.ResetAllTasksAsync().ConfigureAwait(false);
+            _generation++;
+            engine = EngineInstance ?? _starting;
+            // Clear instance reference; it will be re-established on next run.
+            EngineInstance = null;
+            if (engine != null)
+                _engineToRestart = engine as BaseEngine;
         }
 
-        // Clear instance reference; it will be re-established on next run.
-        EngineInstance = null;
+        if (engine != null)
+            await engine.ResetAllTasksAsync().ConfigureAwait(false);
 
         await base.OnResetEnteredAsync().ConfigureAwait(false);
     }
