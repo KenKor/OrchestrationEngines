@@ -236,6 +236,7 @@ public class TaskSetReplacementTest
     var thrown = await reset.Invoking(r => r.WaitAsync(MustComplete, TestContext.Current.CancellationToken))
       .Should().ThrowAsync<InvalidOperationException>();
     thrown.Which.Message.Should().Contain("is not started again");
+    thrown.Which.InnerException!.Message.Should().Contain("the test gives it up");
     engine.State.Should().Be(EngineState.Faulted);
     engine.Loads.Should().Be(1);
   }
