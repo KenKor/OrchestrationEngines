@@ -28,16 +28,6 @@ public class EngineTaskLogLevelTest
     TimeProvider clock = null) =>
     new(name, work, requiredForRunning: true, logger, CancellationToken.None, clock);
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static async Task RunToEndAsync(EngineTask task)
   {
     await task.FireAsync(EngineTaskTrigger.Start);
@@ -184,7 +174,7 @@ public class EngineTaskLogLevelTest
     {
       var task = NewTask("Root", _ => hang.Task, logger);
       await task.FireAsync(EngineTaskTrigger.Start);
-      await WaitUntilAsync(() => task.State == EngineTaskState.Running, "the task must start");
+      await Wait.UntilAsync(() => task.State == EngineTaskState.Running, MustComplete, "the task must start");
 
       await task.FireAsync(EngineTaskTrigger.Fail, reason);
       await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -231,10 +221,10 @@ public class EngineTaskLogLevelTest
       var task = NewTask("Root", _ => hang.Task, logger, clock)
         .SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(TestRestartPolicies.NoWait(3));
       await task.FireAsync(EngineTaskTrigger.Start);
-      await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
+      await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the run must wait for its time-out");
 
       clock.Advance(TimeSpan.FromMinutes(1));
-      await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its grace period");
+      await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the run must wait for its grace period");
       clock.Advance(task.TimedOutWorkGrace + TimeSpan.FromSeconds(1));
       await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
 
@@ -262,12 +252,12 @@ public class EngineTaskLogLevelTest
     var task = NewTask("Root", token => Task.Delay(Timeout.Infinite, token), logger, clock)
       .SetTimeOut(TimeSpan.FromMinutes(1)).SetRecovery(TestRestartPolicies.NoWait(3));
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the run must wait for its time-out");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the run must wait for its time-out");
 
     clock.Advance(TimeSpan.FromMinutes(1));
     // Without a wait the task can be Running again at once, so wait for the recovery's own line, not for the state.
-    await WaitUntilAsync(() => logger.Collector.GetSnapshot().Any(r => r.Message.StartsWith("Root: Recovery start")),
-      "the timed-out task must recover");
+    await Wait.UntilAsync(() => logger.Collector.GetSnapshot().Any(r => r.Message.StartsWith("Root: Recovery start")),
+      MustComplete, "the timed-out task must recover");
 
     logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Warning);
     await task.FireAsync(EngineTaskTrigger.Cancel);

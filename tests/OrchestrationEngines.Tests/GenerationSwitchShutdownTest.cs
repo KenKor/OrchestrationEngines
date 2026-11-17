@@ -66,16 +66,6 @@ public class GenerationSwitchShutdownTest
     }
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that a switch stops an engine that is Faulted and whose kick-start is waiting to retry, and ends that
   /// retry: the replaced generation must not load the network again next to the new one.
@@ -95,7 +85,7 @@ public class GenerationSwitchShutdownTest
     };
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => failing, slowRetry));
     _ = coordinator.StartAsync();
-    await WaitUntilAsync(() => failing.State == EngineState.Faulted, "the first load must fail");
+    await Wait.UntilAsync(() => failing.State == EngineState.Faulted, MustComplete, "the first load must fail");
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
       .WaitAsync(MustComplete, ct);
@@ -169,7 +159,7 @@ public class GenerationSwitchShutdownTest
     var coordinator = CreateCoordinator();
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => loading, RestartPolicy.Default));
     var lookup = coordinator.GetEngineAsync(Name, ct);
-    await WaitUntilAsync(() => loading.Loads == 1, "the first generation must be loading");
+    await Wait.UntilAsync(() => loading.Loads == 1, MustComplete, "the first generation must be loading");
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
       .WaitAsync(MustComplete, ct);
@@ -241,7 +231,7 @@ public class GenerationSwitchShutdownTest
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => loading, RestartPolicy.Default));
     coordinator.RegisterEngineDescriptor(Descriptor("Other", Quick));
     var lookup = coordinator.GetEngineAsync(Name, ct);
-    await WaitUntilAsync(() => loading.Loads == 1, "the first generation must be loading");
+    await Wait.UntilAsync(() => loading.Loads == 1, MustComplete, "the first generation must be loading");
 
     var remaining = coordinator.GetRegisteredDefinitions().Where(d => d.Name != Name);
     await coordinator.RestartWithDefinitionsAsync(remaining, waitUntilReady: false, ct).WaitAsync(MustComplete, ct);

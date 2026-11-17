@@ -82,16 +82,6 @@ public class EngineReloadTest
     await engine.TriggerResetAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, "the task must reach the expected state");
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static async Task ShouldStillWaitAsync(Task waiting)
   {
     await Task.Delay(200, TestContext.Current.CancellationToken);
@@ -114,7 +104,8 @@ public class EngineReloadTest
     engine.Tasks["Index"].State.Should().Be(EngineTaskState.WaitingForDependencies, "it depends on the load, which runs again");
     coordinator.GetEngineIfReady(Name).Should().BeNull();
     engine.Load.Open();
-    await WaitUntilAsync(() => engine.Tasks["Index"].State == EngineTaskState.Running);
+    await Wait.UntilAsync(() => engine.Tasks["Index"].State == EngineTaskState.Running,
+      MustComplete, "the task must reach the expected state");
   }
 
   /// <summary>

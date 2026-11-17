@@ -68,16 +68,6 @@ public class EngineStatusErrorTest
       };
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static async Task<EngineStatusEventArgs> FaultedAsync(TasksEngine engine)
   {
     var log = new EventLog(engine);
@@ -164,13 +154,14 @@ public class EngineStatusErrorTest
     var log = new EventLog(engine);
 
     await engine.StartAsync();
-    await WaitUntilAsync(() => engine.Tasks["Dependent"].State == EngineTaskState.DependencyFailed, "A fails");
+    await Wait.UntilAsync(() => engine.Tasks["Dependent"].State == EngineTaskState.DependencyFailed,
+      MustComplete, "A fails");
     // Later's run must end on a later tick of the clock (on .NET Framework, about every 15 ms): a tie goes to the set's
     // order, which puts Later first.
-    await WaitUntilAsync(() => TimeProvider.System.GetUtcNow().UtcDateTime > engine.Tasks["A"].RunEndedAtUtc,
-      "the clock moves past A's end");
+    await Wait.UntilAsync(() => TimeProvider.System.GetUtcNow().UtcDateTime > engine.Tasks["A"].RunEndedAtUtc,
+      MustComplete, "the clock moves past A's end");
     releaseLater.SetResult();
-    await WaitUntilAsync(() => engine.Tasks["Later"].State == EngineTaskState.Failed, "Later throws");
+    await Wait.UntilAsync(() => engine.Tasks["Later"].State == EngineTaskState.Failed, MustComplete, "Later throws");
     engine.Hold = false;
     engine.Recompute();
     var faulted = await log.Faulted.Task.WaitAsync(MustComplete, ct);

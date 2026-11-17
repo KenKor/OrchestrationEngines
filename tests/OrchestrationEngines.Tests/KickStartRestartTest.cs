@@ -112,12 +112,7 @@ public class KickStartRestartTest
         MaxBackoff = TimeSpan.FromSeconds(2),
       });
     _ = coordinator.StartAsync();
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (engine.State != EngineState.Faulted)
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, "the first load must fail");
-      await Task.Delay(10, ct);
-    }
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the first load must fail");
 
     var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
 
@@ -200,12 +195,8 @@ public class KickStartRestartTest
       .SetRestartPolicy(NoWait(maxRestarts: 5));
 
     var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (engine.WatcherStarts < 2 || engine.ActiveWatchers != 1)
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, "the retry must start a new watcher and end the old one");
-      await Task.Delay(10, ct);
-    }
+    await Wait.UntilAsync(() => engine.WatcherStarts >= 2 && engine.ActiveWatchers == 1, MustComplete,
+      "the retry must start a new watcher and end the old one");
 
     loaded.Should().BeSameAs(engine);
     engine.State.Should().Be(EngineState.Ready);

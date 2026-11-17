@@ -81,16 +81,6 @@ public class SwitchFailureCleanUpTest
     return next == null ? descriptor : descriptor.SetRestartFactory((_, _) => Task.FromResult(next()));
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that a switch whose engine rebuilt from scratch fails to stop throws that failure and disposes the next
   /// coordinator, which it did not start.
@@ -169,7 +159,7 @@ public class SwitchFailureCleanUpTest
 
     var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
       cancel.Token);
-    await WaitUntilAsync(() => next.Loads == 1, "the next generation starts its engine");
+    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
     cancel.Cancel();
     var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
 
@@ -207,7 +197,7 @@ public class SwitchFailureCleanUpTest
 
     var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
       cancel.Token);
-    await WaitUntilAsync(() => next.Loads == 1, "the next generation starts the rebuilt engine");
+    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts the rebuilt engine");
     cancel.Cancel();
     (await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct))).Should().BeAssignableTo<OperationCanceledException>();
 
@@ -236,7 +226,7 @@ public class SwitchFailureCleanUpTest
 
     var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
       cancel.Token);
-    await WaitUntilAsync(() => next.Loads == 1, "the next generation starts its engine");
+    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
     cancel.Cancel();
     var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
 

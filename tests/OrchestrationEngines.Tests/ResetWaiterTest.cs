@@ -58,16 +58,6 @@ public class ResetWaiterTest
     }
   }
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies that whoever waits on a running task that is then reset is released when the task's next run completes,
   /// instead of waiting forever on the completion of the run that the reset ended; and that the next run's work only
@@ -79,7 +69,7 @@ public class ResetWaiterTest
     var runs = new Runs();
     var task = new EngineTask("Load", _ => runs.Next(), requiredForRunning: true, NullLogger.Instance, CancellationToken.None);
     await task.FireAsync(EngineTaskTrigger.Start);
-    await WaitUntilAsync(() => runs.Count == 1, "the first run must have started");
+    await Wait.UntilAsync(() => runs.Count == 1, MustComplete, "the first run must have started");
     var earlierWaiter = task.InnerTask;
 
     await task.FireAsync(EngineTaskTrigger.Reset);
@@ -88,7 +78,8 @@ public class ResetWaiterTest
     runs.Count.Should().Be(1, "the next run waits until the ended run's work has ended");
     (task.StateMessage ?? "").Should().NotContain("previous run", "the message only changes once the wait takes long");
     runs.Complete(1);
-    await WaitUntilAsync(() => runs.Count == 2, "the next run must start once the ended run's work has ended");
+    await Wait.UntilAsync(() => runs.Count == 2,
+      MustComplete, "the next run must start once the ended run's work has ended");
     await Task.Delay(MustStayPending, TestContext.Current.CancellationToken);
     earlierWaiter.IsCompleted.Should().BeFalse("the run that the reset ended does not complete the wait");
 
@@ -108,13 +99,13 @@ public class ResetWaiterTest
     var runs = new Runs();
     var engine = new GatedEngine(runs) { Context = new NoContext() };
     await engine.StartAsync();
-    await WaitUntilAsync(() => runs.Count == 1, "the first run must have started");
+    await Wait.UntilAsync(() => runs.Count == 1, MustComplete, "the first run must have started");
     var waiting = engine.EnsureReadyAsync();
 
     await engine.TriggerResetAsync([engine.Load]);
     // The first run's work ignores its token: the load runs again once it has ended.
     runs.Complete(1);
-    await WaitUntilAsync(() => runs.Count == 2, "the reset must start the load again");
+    await Wait.UntilAsync(() => runs.Count == 2, MustComplete, "the reset must start the load again");
     runs.Complete(2);
 
     await waiting.WaitAsync(MustComplete, TestContext.Current.CancellationToken);

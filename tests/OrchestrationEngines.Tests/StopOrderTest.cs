@@ -94,16 +94,6 @@ public class StopOrderTest
   private static IEnumerable<string> ChainStops(int length) =>
     Enumerable.Range(0, length).Reverse().Select(i => $"E{i}");
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
     new(nameof(StopOrderTest), logger ?? NullLogger.Instance, useDispatcher: false);
 
@@ -532,7 +522,7 @@ public class StopOrderTest
     var stop = mechanic.StopAsync();
     await cache.StopEntered.Task.WaitAsync(MustComplete, ct);
     // The warning's timer is made once Cache's stop has returned to the mechanic, which may be after StopEntered.
-    await WaitUntilAsync(() => clock.WaitingTimers == 1, "the warning must wait for its time");
+    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the warning must wait for its time");
     clock.Advance(TimeSpan.FromSeconds(29));
     warned.Task.IsCompleted.Should().BeFalse("the warning comes after 30 s");
     clock.Advance(TimeSpan.FromSeconds(1));

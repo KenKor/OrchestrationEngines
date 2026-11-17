@@ -187,17 +187,15 @@ public class EngineReadinessApiTest
     try
     {
       await task.FireAsync(EngineTaskTrigger.Start);
-      var deadline = DateTime.UtcNow + MustComplete;
-      while (clock.WaitingTimers == 0 && DateTime.UtcNow < deadline)
-        await Task.Delay(10, ct);
+      await Wait.UntilAsync(() => clock.WaitingTimers > 0, MustComplete, "the run must wait for its time-out");
       clock.Advance(TimeSpan.FromMinutes(1));
       await task.InnerTask.WaitAsync(MustComplete, ct);
       task.State.Should().Be(EngineTaskState.TimedOut);
 
       release.SetResult();
-      deadline = DateTime.UtcNow + MustComplete;
-      while (!logger.Collector.GetSnapshot().Any(r => r.Exception != null && r.Level == LogLevel.Debug) && DateTime.UtcNow < deadline)
-        await Task.Delay(10, ct);
+      await Wait.UntilAsync(
+        () => logger.Collector.GetSnapshot().Any(r => r.Exception != null && r.Level == LogLevel.Debug), MustComplete,
+        "the late exception must be logged");
 
       logger.Collector.GetSnapshot().Should().Contain(r =>
         r.Level == LogLevel.Debug && r.Message.Contains("ended with an exception after its run had ended"));

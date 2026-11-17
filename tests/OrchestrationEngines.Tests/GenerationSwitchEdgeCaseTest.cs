@@ -35,17 +35,6 @@ public class GenerationSwitchEdgeCaseTest
 
   private static LoadEngine Quick() => new(Task.CompletedTask);
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      if (DateTime.UtcNow > deadline)
-        throw new TimeoutException($"Condition not met in time: {because}.");
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   /// <summary>
   /// Verifies a switch for an engine without a restart factory, as hosts register their engines: the next generation
   /// creates a fresh engine from the registered factory, the previous engine is stopped, and the replaced coordinator
@@ -110,7 +99,8 @@ public class GenerationSwitchEdgeCaseTest
     try
     {
       await coordinator.StartAsync().WaitAsync(MustComplete, ct);
-      await WaitUntilAsync(() => coordinator.GetEngineIfCreated("A") != null, "the first engine must exist");
+      await Wait.UntilAsync(() => coordinator.GetEngineIfCreated("A") != null,
+        MustComplete, "the first engine must exist");
 
       // No caller token on purpose: the wait then uses the mechanic's token, which the switch cancels.
 #pragma warning disable xUnit1051

@@ -49,16 +49,6 @@ public class TaskSetSetUpFailureTest
 
   private const string SetUpFailedMessage = "Setting up tasks and dependencies failed";
 
-  private static async Task WaitUntilAsync(Func<bool> condition, string because)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (!condition())
-    {
-      DateTime.UtcNow.Should().BeBefore(deadline, because);
-      await Task.Delay(10, TestContext.Current.CancellationToken);
-    }
-  }
-
   private static void Cyclic(SetUpEngine e)
   {
     var a = e.Make("A");
@@ -243,8 +233,10 @@ public class TaskSetSetUpFailureTest
       });
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    await WaitUntilAsync(() => engine.State == EngineState.Ready, "recovery must start the engine again");
-    await WaitUntilAsync(() => coordinator.State == EngineCoordinatorState.Running, "the coordinator must run again");
+    await Wait.UntilAsync(() => engine.State == EngineState.Ready,
+      MustComplete, "recovery must start the engine again");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator must run again");
     Volatile.Read(ref engine.SetUps).Should().Be(2);
   }
 
