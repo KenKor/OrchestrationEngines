@@ -52,20 +52,6 @@ public class GenerationSwitchShutdownTest
   }
 
   /// <summary>
-  /// An engine that loads at once and throws once it has stopped.
-  /// </summary>
-  private sealed class StopFailingEngine(Exception failure) : BaseEngine(NullLogger.Instance)
-  {
-    protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
-
-    public override async Task StopAsync()
-    {
-      await base.StopAsync().ConfigureAwait(false);
-      throw failure;
-    }
-  }
-
-  /// <summary>
   /// Verifies that a switch stops an engine that is Faulted and whose kick-start is waiting to retry, and ends that
   /// retry: the replaced generation must not load the network again next to the new one.
   /// </summary>

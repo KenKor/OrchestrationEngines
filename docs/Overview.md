@@ -221,9 +221,10 @@ Key properties:
   engine's context task and every task that depends on it as `ResetTasksAsync` does (dependents first, then started
   again). On a coordinator that a generation switch has replaced (once it has handed over), it goes to the newer
   generation, as `RefreshEngineContextAsync` and `ResetTasksForEngineAsync` do; a name that generation does not have
-  throws an `ArgumentException`. A call that arrives while a switch runs, before it hands over, can still act on the
-  old generation. On a coordinator that is shut down otherwise it throws: an `OperationCanceledException` with the
-  dispatcher (the default), whose queue no longer takes work, and an `InvalidOperationException` without it
+  throws an `ArgumentException`. A call that arrives while a switch that rebuilds the engine from scratch runs, before
+  it hands over, waits until the switch has started the next generation and goes there too. On a coordinator that is
+  shut down otherwise it throws: an `OperationCanceledException` with the dispatcher (the default), whose queue no
+  longer takes work, and an `InvalidOperationException` without it
 
 Important implementations:
 

@@ -44,19 +44,6 @@ public class SwitchFailureCleanUpTest
   private static NetworkEngine Hanging() => new(token => Task.Delay(Timeout.Infinite, token));
 
   /// <summary>
-  /// An engine with one load task, whose work the test decides, that throws once it has stopped.
-  /// </summary>
-  private sealed class StopFailingEngine(Exception failure, Func<CancellationToken, Task> loadAsync)
-    : NetworkEngine(loadAsync)
-  {
-    public override async Task StopAsync()
-    {
-      await base.StopAsync().ConfigureAwait(false);
-      throw failure;
-    }
-  }
-
-  /// <summary>
   /// A coordinator whose next generation the test can see: the switch hands it over only when it succeeds.
   /// </summary>
   private static EngineCoordinator CreateCoordinator(List<EngineCoordinator> nextGenerations, ILogger logger = null,
