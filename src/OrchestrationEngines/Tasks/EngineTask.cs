@@ -692,13 +692,13 @@ public partial class EngineTask
   /// Lazy creation of the Stateless state machine.
   /// </summary>
   /// <remarks>
-  /// Thread-safe double-checked creation. The previous unsynchronized <c>_machine ??= CreateStateMachine()</c>
-  /// could run twice on a pristine task (an unlocked <c>State</c> read racing a fired trigger) and the
-  /// loser's assignment then REPLACED a machine that had already transitioned to Running — reverting the
-  /// observable state to Created, allowing a second Start to double-run the work delegate concurrently,
-  /// and completing the task latch while the zombie duplicate still ran. Exactly-once creation also keeps
-  /// CreateStateMachine's side effects (the parameterized-trigger fields) tied to the one live machine. A reset replaces
-  /// the machine under the same lock (see <see cref="ReplaceStateMachine"/>).
+  /// Thread-safe double-checked creation. The previous unsynchronized <c>_machine ??= CreateStateMachine()</c> could
+  /// run twice on a pristine task (an unlocked <c>State</c> read racing a fired trigger) and the loser's assignment
+  /// then REPLACED a machine that had already transitioned to Running — reverting the observable state to Created,
+  /// allowing a second Start to double-run the work delegate concurrently, and completing the task latch while the
+  /// zombie duplicate still ran. Exactly-once creation also keeps CreateStateMachine's side effects (the
+  /// parameterized-trigger fields) tied to the one live machine. A reset replaces the machine under the same lock (see
+  /// <see cref="ReplaceStateMachine"/>).
   /// </remarks>
   protected StateMachine<EngineTaskState, EngineTaskTrigger> StateMachine
   {
