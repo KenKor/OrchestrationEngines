@@ -915,7 +915,14 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="tasks">The tasks.</param>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks of the engine that depend on one of
   /// <paramref name="tasks"/> form a cycle (possible only for tasks added after the set-up); nothing is reset.</exception>
-  public async Task TriggerResetAsync(IEnumerable<EngineTask> tasks = null)
+  public Task TriggerResetAsync(IEnumerable<EngineTask> tasks = null) => TriggerResetCoreAsync(tasks, dependents: null);
+
+  /// <summary>
+  /// <see cref="TriggerResetAsync"/>, with the map of direct dependents over the engine's tasks
+  /// (<see cref="DirectDependents"/>) when the caller has already built it, or null.
+  /// </summary>
+  private async Task TriggerResetCoreAsync(IEnumerable<EngineTask> tasks,
+    Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     // A set that a prepared restart replaces is not reset and started again (see PrepareRestartAsync).
     if (RestartPending)
@@ -937,7 +944,7 @@ public abstract partial class BaseEngine : IEngine
     var notStarted = resetTasks.Where(t => t.State == EngineTaskState.Created).ToArray();
     var toReset = resetTasks.Except(notStarted).ToArray();
     // Ordered before any reset, so a cycle throws with nothing reset.
-    var levels = DependentsFirst(toReset);
+    var levels = DependentsFirst(toReset, dependents);
     LogFiringResetTriggers();
     // A reset that throws (an OnResetEnteredAsync override) leaves the other tasks reset, in Created: they are started
     // and the state recomputed anyway, and only then is the reset's failure rethrown (#58, items 3 and 23).
@@ -1034,9 +1041,14 @@ public abstract partial class BaseEngine : IEngine
       return;
     }
 
+    // Built once: the reset's ordering (DependentsFirst) uses the same map.
+    Dictionary<EngineTask, List<EngineTask>> dependents = null;
     if (resetDependentTasks)
-      AddAllDependents(named.ToArray(), named, DirectDependents(tasks.Values));
-    await TriggerResetAsync(named.ToArray()).ConfigureAwait(false);
+    {
+      dependents = DirectDependents(tasks.Values);
+      AddAllDependents(named, named, dependents);
+    }
+    await TriggerResetCoreAsync(named.ToArray(), dependents).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1101,12 +1113,16 @@ public abstract partial class BaseEngine : IEngine
   /// or not, form a cycle (possible only for tasks added after the set-up, which
   /// <see cref="CheckForCyclicDependecies()"/> did not see). The task in the exception is the one of
   /// <paramref name="tasks"/> that the cycle depends on, which need not be in the cycle itself.</exception>
-  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks)
+  /// <param name="tasks">The tasks to put in levels.</param>
+  /// <param name="dependents">The map of direct dependents over the engine's tasks (see
+  /// <see cref="DirectDependents"/>), if the caller has already built it; null to build it here.</param>
+  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks,
+    Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     if (tasks.Length == 0)
       return new List<List<EngineTask>>();
     var all = _tasks.Values.Union(tasks).ToArray();
-    var dependents = DirectDependents(all);
+    dependents ??= DirectDependents(all);
     // Kahn's algorithm over the reversed graph: a task is placed once all its direct dependents are.
     var remaining = all.ToDictionary(t => t, t => dependents.TryGetValue(t, out var d) ? d.Count : 0);
     var level = all.ToDictionary(t => t, _ => 0);
