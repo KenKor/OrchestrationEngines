@@ -384,8 +384,11 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   /// <remarks>
   /// It first waits for the engine's kick-start to settle, since an engine's tasks are set up when it starts: until the
-  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start can be reset only
-  /// once the kick-start has given up (or through the engine itself). An engine whose tasks failed is reset like any
+  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start is reset here only
+  /// once the kick-start has given up. To reset it without waiting, reset it through the engine itself
+  /// (<see cref="EngineCoordinator.GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>, then
+  /// <see cref="BaseEngine.ResetTasksAsync"/>), or bound its
+  /// run with the task's <see cref="EngineTask.Timeout"/>. An engine whose tasks failed is reset like any
   /// other, and its tasks run again; the mechanic's own record of the failed start (its kick-start task) is not reset.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
@@ -583,10 +586,10 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   /// <param name="engine">The engine.</param>
   /// <remarks>
-  /// Created must be waited on as well: StartAsync does not publish Starting, the engine state only
-  /// leaves Created once a required task reaches a terminal state. Waiting on Starting alone let the
-  /// kick-start task complete (and the mechanic report Ready) while the engine's tasks were still
-  /// running, whenever StartAsync returned before its first required task had finished.
+  /// Created must be waited on as well: an engine is Created until its start publishes Starting, which
+  /// <see cref="BaseEngine"/> does just before its tasks run, and another <see cref="IEngine"/> may not do at all.
+  /// Waiting on Starting alone let the kick-start task complete (and the mechanic report Ready) while the engine's
+  /// tasks were still running, whenever StartAsync returned before its first required task had finished.
   /// </remarks>
   internal static async Task<IEngine> EnsureEngineReadyAsync(IEngine engine)
   {

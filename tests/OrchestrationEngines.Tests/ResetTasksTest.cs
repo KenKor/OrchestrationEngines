@@ -598,6 +598,42 @@ public class ResetTasksTest
   }
 
   /// <summary>
+  /// Verifies the way around the coordinator's wait for the first start, as the docs give it (#58 item 6): a task that
+  /// hangs during the engine's first start is reset through the engine (<see cref="EngineCoordinator.GetEngineIfCreated"/>
+  /// as a <see cref="BaseEngine"/>, then <see cref="BaseEngine.ResetTasksAsync"/>), runs again, and the kick-start that
+  /// was waiting for the engine settles, so the coordinator becomes Ready.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_GetEngineIfCreated_TaskHangsDuringTheFirstStart_ResetThroughTheEngineRunsItAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var hanging = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = new GraphEngine(T("A"), T("B", "A"))
+    {
+      Work = async (name, run, token) =>
+      {
+        if (name == "A" && run == 1)
+        {
+          hanging.TrySetResult();
+          await Task.Delay(Timeout.Infinite, token);
+        }
+      },
+    };
+    var coordinator = CoordinatorWith(engine);
+    await coordinator.StartAsync().WaitAsync(MustComplete, ct);
+    await hanging.Task.WaitAsync(MustComplete, ct);
+
+    var created = coordinator.GetEngineIfCreated("Graph").Should().BeAssignableTo<BaseEngine>().Which;
+    await created.ResetTasksAsync(["A"], resetDependentTasks: false).WaitAsync(MustComplete, ct);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    (await coordinator.GetEngineAsync("Graph", throwErrorIfNotFound: false, ct).WaitAsync(MustComplete, ct))
+      .Should().BeSameAs(engine);
+    new[] { engine.Runs("A"), engine.Runs("B") }.Should().Equal(2, 1);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
   /// Verifies that an unknown engine throws an <see cref="ArgumentException"/>.
   /// </summary>
   [Fact]
