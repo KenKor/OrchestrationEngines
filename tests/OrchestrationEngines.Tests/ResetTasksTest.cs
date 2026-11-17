@@ -547,12 +547,10 @@ public class ResetTasksTest
 
     (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("D's reset failed.");
     const string StartFailed = "Starting the tasks after a failed reset failed too; the reset's failure is rethrown.";
-    var logged = logger.Collector.GetSnapshot()
-      .Where(r => r.Message.EndsWith(StartFailed, StringComparison.Ordinal))
-      .ToList();
-    logged.Should().ContainSingle();
-    logged[0].Level.Should().Be(LogLevel.Error);
-    logged[0].Exception.Should().BeSameAs(startFailure);
+    var record = logger.Collector.GetSnapshot().Should()
+      .ContainSingle(r => r.Message.EndsWith(StartFailed, StringComparison.Ordinal)).Which;
+    record.Level.Should().Be(LogLevel.Error);
+    record.Exception.Should().BeSameAs(startFailure);
     releaseA.SetResult();
     await engine.Tasks["A"].InnerTask.WaitAsync(MustComplete, ct);
     await engine.StopAsync();
