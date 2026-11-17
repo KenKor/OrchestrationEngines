@@ -627,8 +627,35 @@ public abstract partial class BaseEngine : IEngine
   /// <exception cref="CyclicEngineTaskDependencyException"></exception>
   public void CheckForCyclicDependecies() => EngineTask.CheckForCycles(_tasks.Values);
 
+  /// <summary>
+  /// The last start that was called: the next start waits until it has ended (see <see cref="StartAsync"/>). Completes
+  /// when that start ends, whether it succeeded or failed, so waiting for it never throws.
+  /// </summary>
+  private Task _lastStart = Task.CompletedTask;
+
   /// <inheritdoc/>
-  public virtual Task StartAsync()
+  public virtual async Task StartAsync()
+  {
+    // Overlapping starts run one after the other (OverlappingStartTest). Two set-ups at once both took the work the
+    // next set waits for (see StartAfter), so the second set ran next to it, and a failing one replaced the set the
+    // other had just published. A start whose wait ends after a stop does nothing: stopping is final.
+    var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var before = Interlocked.Exchange(ref _lastStart, ended.Task);
+    try
+    {
+      await before.ConfigureAwait(false);
+      await StartAloneAsync().ConfigureAwait(false);
+    }
+    finally
+    {
+      ended.SetResult();
+    }
+  }
+
+  /// <summary>
+  /// The start itself, run by one start at a time (see <see cref="StartAsync"/>).
+  /// </summary>
+  private Task StartAloneAsync()
   {
     // Stopping is final: a stopped engine is not started again. An engine cancelled other than by StopAsync (its parent
     // token, CancelAll) may not have published Stopped yet: ComputeState says Stopped once the token is cancelled. A

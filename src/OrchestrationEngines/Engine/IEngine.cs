@@ -108,6 +108,11 @@ public interface IEngine
   /// <para>
   /// Stopping is final: on an engine that has been stopped (or cancelled), it does nothing.
   /// </para>
+  /// <para>
+  /// Overlapping starts run one after the other: a start that comes while another is running waits until that one has
+  /// ended (succeeded or failed), and then runs as it would have run alone. A start that is still waiting when the
+  /// engine is stopped does nothing.
+  /// </para>
   /// </remarks>
   Task StartAsync();
 
