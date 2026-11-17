@@ -896,7 +896,7 @@ public partial class MechanicEngine : BaseEngine
 
       public void Started(Task stop)
       {
-        if (_all == null)
+        if (Stop == null)
           return;
         _stops.Add(stop);
         if (_stops.Count == Members.Length)
