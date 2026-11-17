@@ -667,6 +667,51 @@ public class ResetTasksTest
   }
 
   /// <summary>
+  /// Verifies that a generation switch that stops the engine during the reset hands the reset on to the next
+  /// generation's engine (#58 items 5 and 11).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_SwitchStopsTheEngineDuringTheReset_ResetsTheNextGenerationsEngine()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engines = new ConcurrentQueue<GraphEngine>();
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Graph", _ =>
+      {
+        var engine = Chain();
+        engines.Enqueue(engine);
+        return Task.FromResult<IEngine>(engine);
+      })
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var first = engines.Single();
+    Task<EngineCoordinator> switching = null;
+    var stoppedInTime = false;
+    first.OnReset = name =>
+    {
+      if (name != "C" || switching != null)
+        return;
+      switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+      // The switch stops this engine while its task is being reset.
+      stoppedInTime = SpinWait.SpinUntil(() => first.IsCancellationRequested, MustComplete);
+    };
+
+    await coordinator.ResetTasksForEngineAsync("Graph", ["C"], resetDependentTasks: false, ct).WaitAsync(MustComplete, ct);
+    var next = await switching.WaitAsync(MustComplete, ct);
+    try
+    {
+      stoppedInTime.Should().BeTrue();
+      await next.EnsureEngineTaskReadyAsync("Graph", "C", ct).WaitAsync(MustComplete, ct);
+      engines.Should().HaveCount(2);
+      engines.Last().Runs("C").Should().Be(2);
+    }
+    finally
+    {
+      await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
+  }
+
+  /// <summary>
   /// Verifies that a coordinator replaced by a generation switch resets the next generation's engine.
   /// </summary>
   [Fact]

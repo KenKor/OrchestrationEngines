@@ -428,14 +428,12 @@ public partial class MechanicEngine : BaseEngine
     }
     catch (InvalidOperationException) when (baseEngine.IsCancellationRequested)
     {
-      throw StoppedDuringTheReset(engineName);
+      // Answered below.
     }
     if (baseEngine.IsCancellationRequested)
-      throw StoppedDuringTheReset(engineName);
+      throw new EngineTaskNotReadyException(EngineKickStartTask.KickStartName(engineName), EngineTaskState.Cancelled,
+        "The engine was stopped during the reset.");
   }
-
-  private static EngineTaskNotReadyException StoppedDuringTheReset(string engineName) =>
-    new(EngineKickStartTask.KickStartName(engineName), EngineTaskState.Cancelled, "The engine was stopped during the reset.");
 
   /// <summary>
   /// Asynchronously waits for an engine (and its dependencies) to reach Ready.
