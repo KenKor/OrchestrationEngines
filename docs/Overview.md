@@ -507,6 +507,10 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
   usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
   state.
+- A switch that fails before it hands over (a rebuilt engine fails to stop, the next coordinator fails to start, or the
+  ready-wait fails or is cancelled) shuts the next coordinator down, or disposes it if it did not start, and throws its
+  own failure. The current coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and
+  a lookup of one of them gives null.
 
 ---
 
