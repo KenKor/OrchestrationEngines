@@ -222,8 +222,9 @@ Key properties:
   again). On a coordinator that a generation switch has replaced (once it has handed over), it goes to the newer
   generation, as `RefreshEngineContextAsync` and `ResetTasksForEngineAsync` do; a name that generation does not have
   throws an `ArgumentException`. A call that arrives while a switch that rebuilds the engine from scratch runs, before
-  it hands over, waits until the switch has started the next generation and goes there too. On a coordinator that is shut down otherwise it throws: an `OperationCanceledException` with the
-  dispatcher (the default), whose queue no longer takes work, and an `InvalidOperationException` without it
+  it hands over, waits until the switch has started the next generation and goes there too. On a coordinator that is
+  shut down otherwise it throws: an `OperationCanceledException` with the dispatcher (the default), whose queue no
+  longer takes work, and an `InvalidOperationException` without it
 
 Important implementations:
 

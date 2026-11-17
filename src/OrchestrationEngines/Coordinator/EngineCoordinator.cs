@@ -341,7 +341,7 @@ public partial class EngineCoordinator : IDisposable
         // Fix (OptionalEngineTest): required engines only. The mechanic reports Ready as soon as its required
         // tasks are done; checking every task here left the coordinator Initializing for good whenever an engine
         // registered with requiredForRunning: false was still loading (or had failed) at that moment.
-        // Fix (ContextOperationTest): not while a context operation is in flight. One that has not reset its engine yet
+        // Fix (OptionalEngineTest): not while a context operation is in flight. One that has not reset its engine yet
         // would otherwise find the coordinator Running, which ignores the reload's Starting event. The last operation
         // to end signals readiness instead (see EndContextOperation).
         if (_contextOperationsInFlight == 0 && _mechanic.IsRequiredCompletedWithSuccess())
@@ -1083,18 +1083,12 @@ public partial class EngineCoordinator : IDisposable
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
     CancellationToken token, bool start = true)
   {
-    // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
-    if (Successor is { } replaced)
-    {
-      await onGeneration(replaced).ConfigureAwait(false);
-      return;
-    }
-
-    // Fix (ContextOperationTest): a switch that rebuilds this engine from scratch stops it before it hands over. A call on
-    // this generation would then throw, be lost on the stopped engine, or start it again: wait for the next generation
-    // and ask it, as the catch below does for a call the stop interrupts. If it did not start, this generation answers.
-    if (Volatile.Read(ref _rebuildingSwitch) != null
-        && await NextGenerationAsync(engineName, token).ConfigureAwait(false) is { } nextGeneration)
+    // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation. Fix
+    // (ContextOperationGenerationTest): so does a switch that rebuilds this engine from scratch, which stops it before it
+    // hands over. A call on this generation would then throw, be lost on the stopped engine, or start it again: wait for
+    // the next generation and ask it, as the catch below does for a call the stop interrupts. If it did not start, this
+    // generation answers.
+    if (await NextGenerationAsync(engineName, token).ConfigureAwait(false) is { } nextGeneration)
     {
       await onGeneration(nextGeneration).ConfigureAwait(false);
       return;
@@ -1282,8 +1276,10 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="name">Name of the engine whose context should be invalidated.</param>
   /// <remarks>
   /// Fires an application-level invalidate trigger and delegates to the mechanic to invalidate the
-  /// engine context and dependent engines. A coordinator that was Running returns to Running at once when the
-  /// required engines are still Ready afterwards (an optional engine's invalidation, or one the mechanic rejected).
+  /// engine context and dependent engines. When the last context operation in flight ends, an Initializing coordinator
+  /// goes to Running if the required engines are Ready (an optional engine's invalidation, or one the mechanic
+  /// rejected); otherwise the required engine's reload brings it there, once no operation is in flight (see
+  /// EndContextOperation).
   /// </remarks>
   public async Task InvalidateContextForEngineAsyncInt(string name)
   {
@@ -1295,7 +1291,8 @@ public partial class EngineCoordinator : IDisposable
     finally
     {
       // An optional engine's invalidation, or one the mechanic rejected, leaves the required tasks completed. A required
-      // engine that loads again keeps them open, and its own Ready event brings the coordinator back.
+      // engine that loads again keeps them open: its Ready event brings the coordinator back, or, while another
+      // operation is in flight, the end of the last one does.
       EndContextOperation();
     }
   }
