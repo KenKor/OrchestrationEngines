@@ -904,7 +904,7 @@ public abstract partial class BaseEngine : IEngine
   /// dependents before the tasks they depend on; then the tasks go back to Created, dependencies first. So no dependent
   /// goes on running on a dependency that is being reset, and no started task of the set can start again (by a caller,
   /// or by a dependency's run completing) on a dependency of the set that is still to be reset. A task of the set that
-  /// is still Created is only started after the passes.
+  /// is still Created is not ended or reset; a dependency can still start it.
   /// </para>
   ///
   /// <para>
@@ -1146,8 +1146,10 @@ public abstract partial class BaseEngine : IEngine
   /// <para>
   /// In the second pass a task goes back to Created only once the tasks of the set it depends on have. So whatever starts
   /// it (a caller, or a dependency's new run completing) waits for those dependencies' next run. A task whose reset
-  /// throws is cancelled, so whoever waits on it is released; the failure is reported once every level has been reset:
-  /// the other tasks are reset anyway.
+  /// throws is cancelled, so whoever waits on it is released, unless it had already completed: it then keeps its state
+  /// (its fail reason cleared), but its completion latch was already replaced, so a wait on it ends only after a later
+  /// reset of the task succeeds. The failure is reported once every level has been reset: the other tasks are reset
+  /// anyway.
   /// </para>
   /// </remarks>
   private static async Task ResetInTwoPassesAsync(List<List<EngineTask>> levels)
