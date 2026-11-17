@@ -48,7 +48,12 @@ public partial class EngineCoordinator : IDisposable
   // once it has started (null if it did not start); null when no such switch runs. See NextGenerationAsync.
   private RebuildingSwitch _rebuildingSwitch;
 
-  private int _disposed;
+  private volatile bool _disposed;
+
+  // Set on the next coordinator of a switch that failed before it handed over, before the switch shuts it down: a
+  // lookup forwarded to it while the switch ran gives null, as one on this coordinator does (see
+  // CleanUpNextGenerationAsync).
+  private volatile bool _abandoned;
 
   /// <summary>
   /// Called with the next coordinator that a generation switch of this coordinator has just created, before it registers
@@ -59,7 +64,7 @@ public partial class EngineCoordinator : IDisposable
   /// <summary>
   /// Whether <see cref="Dispose"/> has been called.
   /// </summary>
-  internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+  internal bool IsDisposed => _disposed;
 
   // Declarative configuration describing all engines and their dependencies.
   private readonly MechanicContext _context = new();
@@ -557,17 +562,16 @@ public partial class EngineCoordinator : IDisposable
     // Until it hands over, the switch owns the next coordinator: a failure before then cleans it up, so that a switch
     // that fails (and one retried after it) leaves no coordinator behind, nor a next generation running next to this
     // one (#100). This generation stays current.
-    var nextStarted = false;
     try
     {
       foreach (var runtimeDescriptor in runtimeDescriptors)
         nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
-      await StartNextGenerationAsync(nextCoordinator, mechanic, rebuiltFromScratch, handovers, waitUntilReady,
-        () => nextStarted = true, token).ConfigureAwait(false);
+      await StartNextGenerationAsync(nextCoordinator, mechanic, rebuiltFromScratch, handovers, waitUntilReady, token)
+        .ConfigureAwait(false);
     }
     catch (Exception ex)
     {
-      await CleanUpNextGenerationAsync(nextCoordinator, nextStarted, ex).ConfigureAwait(false);
+      await CleanUpNextGenerationAsync(nextCoordinator, ex).ConfigureAwait(false);
       throw;
     }
 
@@ -594,11 +598,11 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// The part of a generation switch that starts the next generation, until it hands over: stops the engines rebuilt
-  /// from scratch, starts the next coordinator (calling onStarting just before), and waits until it is ready if asked to.
+  /// from scratch, starts the next coordinator, and waits until it is ready if asked to.
   /// </summary>
   private async Task StartNextGenerationAsync(EngineCoordinator nextCoordinator, MechanicEngine mechanic,
     List<string> rebuiltFromScratch, List<(string Name, Handover Handover)> handovers, bool waitUntilReady,
-    Action onStarting, CancellationToken token)
+    CancellationToken token)
   {
     // Fix (RebuiltEngineSwitchTest): stop the engines that are rebuilt from scratch first, so that their data is
     // released before their replacements load it again. Whatever their state, as the shutdown below does: a Faulted
@@ -619,7 +623,6 @@ public partial class EngineCoordinator : IDisposable
       }
       rebuiltFromScratch = null;
 
-      onStarting();
       await nextCoordinator.StartAsync().ConfigureAwait(false);
       rebuilding?.Next.TrySetResult(nextCoordinator);
     }
@@ -640,11 +643,19 @@ public partial class EngineCoordinator : IDisposable
   /// switch started it (its engines and its dispatcher stop), and disposes it otherwise. A failure of the clean-up is
   /// logged, so that the switch's own failure is the one its caller gets.
   /// </summary>
-  private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, bool started, Exception switchFailure)
+  /// <remarks>
+  /// Lookups of an engine the switch rebuilds from scratch are no longer sent to the next generation (see
+  /// NextGenerationAsync), and those sent to it already give null: the engine stopped, and nothing replaced it.
+  /// </remarks>
+  private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, Exception switchFailure)
   {
+    // The record this switch set, if it rebuilds engines: no generation answers for them now.
+    Volatile.Write(ref _rebuildingSwitch, null);
+    nextCoordinator._abandoned = true;
     try
     {
-      if (started)
+      // Started: StartAsync left Created, also when it failed after that.
+      if (nextCoordinator.State != EngineCoordinatorState.Created)
         await nextCoordinator.ShutdownAsyncInt().ConfigureAwait(false);
       else
         nextCoordinator.Dispose();
@@ -1392,10 +1403,10 @@ public partial class EngineCoordinator : IDisposable
         ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound).WaitAsync(token).ConfigureAwait(false)
         : await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, milliSecondsTimeOut, token).ConfigureAwait(false);
     }
-    catch (OperationCanceledException) when (Successor != null && !token.IsCancellationRequested)
+    catch (OperationCanceledException) when ((Successor != null || _abandoned) && !token.IsCancellationRequested)
     {
       // The switch shut this generation down (its dispatcher or mechanic was cancelled) while the call was queued or
-      // waiting; the caller did not cancel.
+      // waiting, after handing over or, for a next generation it abandoned, after failing; the caller did not cancel.
       engine = null;
     }
 
@@ -1418,7 +1429,7 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   public void Dispose()
   {
-    Volatile.Write(ref _disposed, 1);
+    _disposed = true;
     _monitorPulse.Dispose();
     _linkedCts.Dispose();
     _mechanicDispatcher?.Dispose();
