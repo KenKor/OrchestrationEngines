@@ -1074,8 +1074,9 @@ public partial class EngineCoordinator : IDisposable
   /// <summary>
   /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
   /// <paramref name="onGeneration"/> on the next generation once this one was replaced, else on this one, started if
-  /// needed and <paramref name="start"/> is set. A generation switch during the call (its engine stopped: a
-  /// cancellation, or a Cancelled task) is answered by the next generation, if it has the engine.
+  /// needed and <paramref name="start"/> is set. A generation switch during the call that ends it with a cancellation
+  /// or a Cancelled task (its engine stopped) is answered by the next generation, if it has the engine; a call that
+  /// completes on this generation before the switch hands over is not repeated there.
   /// </summary>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
     CancellationToken token, bool start = true)
@@ -1246,8 +1247,10 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="token">Cancellation token controlling the dispatched invalidation request.</param>
   /// <remarks>
   /// This forces re-initialization of the affected engine and its dependents. It does not start a coordinator that has
-  /// not started. On a coordinator that a generation switch replaced, the newer generation invalidates its engine (see
-  /// <see cref="Successor"/>), as with <see cref="ResetTasksForEngineAsync"/>.
+  /// not started. On a coordinator that a generation switch has replaced (once it has handed over, see
+  /// <see cref="Successor"/>), the newer generation invalidates its engine, as with
+  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch runs, before it hands over, can still
+  /// act on this generation.
   /// </remarks>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
   /// generation, once this coordinator was replaced).</exception>
@@ -1305,8 +1308,10 @@ public partial class EngineCoordinator : IDisposable
   /// engine's own <c>ContextChanged</c> hook. It is the engine's responsibility to decide, from the
   /// old vs. new context, what (if anything) needs to be invalidated/reset. Use this when the caller
   /// has already determined that a full engine restart is not required. It does not start a coordinator that has not
-  /// started. On a coordinator that a generation switch replaced, the context goes to the newer generation's engine
-  /// (see <see cref="Successor"/>), as with <see cref="ResetTasksForEngineAsync"/>.
+  /// started. On a coordinator that a generation switch has replaced (once it has handed over, see
+  /// <see cref="Successor"/>), the context goes to the newer generation's engine, as with
+  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch runs, before it hands over, can still
+  /// act on this generation.
   /// </remarks>
   /// <exception cref="ArgumentNullException"><paramref name="context"/> is null.</exception>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
@@ -1368,7 +1373,7 @@ public partial class EngineCoordinator : IDisposable
   {
     lock (_sync)
     {
-      // Fix (ContextOperationGenerationTest): overlapping operations without the dispatcher; the last one decides.
+      // Fix (OptionalEngineTest): overlapping operations without the dispatcher; the last one decides.
       if (--_contextOperationsInFlight > 0)
         return;
       var fromRunning = _contextOperationFromRunning;
