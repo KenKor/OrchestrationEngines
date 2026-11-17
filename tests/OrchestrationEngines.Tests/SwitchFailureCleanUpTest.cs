@@ -197,8 +197,7 @@ public class SwitchFailureCleanUpTest
     var next = Hanging();
     var created = 0;
     var nextGenerations = new List<EngineCoordinator>();
-    using var coordinator = new EngineCoordinator(nameof(SwitchFailureCleanUpTest), NullLogger.Instance, useDispatcher);
-    coordinator.NextGenerationCreated = nextGenerations.Add;
+    using var coordinator = CreateCoordinator(nextGenerations, useDispatcher: useDispatcher);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name,
         _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? Quick() : next), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
