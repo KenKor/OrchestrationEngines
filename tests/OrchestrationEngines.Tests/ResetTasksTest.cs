@@ -5,7 +5,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Tasks;
@@ -28,7 +30,11 @@ public class ResetTasksTest
     private readonly (string Name, string[] DependsOn)[] _graph;
     private readonly ConcurrentDictionary<string, int> _runs = new(StringComparer.OrdinalIgnoreCase);
 
-    public GraphEngine(params (string Name, string[] DependsOn)[] graph) : base(NullLogger.Instance)
+    public GraphEngine(params (string Name, string[] DependsOn)[] graph) : this(NullLogger.Instance, graph)
+    {
+    }
+
+    public GraphEngine(ILogger logger, params (string Name, string[] DependsOn)[] graph) : base(logger)
     {
       _graph = graph;
       Context = new NoContext();
@@ -43,6 +49,11 @@ public class ResetTasksTest
     /// Runs as a task's reset begins (before it is back in Created), with the task's name.
     /// </summary>
     public Action<string> OnReset { get; set; }
+
+    /// <summary>
+    /// Runs as a task with dependencies looks whether they have all completed, with the task's name.
+    /// </summary>
+    public Action<string> OnDependencyCheck { get; set; }
 
     public int Runs(string name) => _runs.TryGetValue(name, out var runs) ? runs : 0;
 
@@ -78,6 +89,12 @@ public class ResetTasksTest
       {
         engine.OnReset?.Invoke(Name);
         return base.OnResetEnteredAsync();
+      }
+
+      protected override bool DependenciesReady()
+      {
+        engine.OnDependencyCheck?.Invoke(Name);
+        return base.DependenciesReady();
       }
     }
   }
@@ -495,6 +512,47 @@ public class ResetTasksTest
     SpinWait.SpinUntil(() => states.Count == 2, MustComplete).Should().BeTrue("the engine publishes Starting, then Ready");
     states.Should().Equal(EngineState.Starting, EngineState.Ready);
     engine.State.Should().Be(EngineState.Ready);
+    await engine.StopAsync();
+  }
+
+  /// <summary>
+  /// Verifies that when a task's reset throws and starting the tasks again throws as well, the caller gets the reset's
+  /// exception and the start's failure is logged (#86, item 2).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_ResetThrowsThenStartThrows_ThrowsTheResetsFailureAndLogsTheStarts()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    // A's next run waits, so the first look at B's dependencies is the start after the reset, not A's completion.
+    var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = await ReadyAsync(new GraphEngine(logger, T("A"), T("B", "A"), T("D"))
+    {
+      Work = (name, run, _) => name == "A" && run == 2 ? releaseA.Task : Task.CompletedTask,
+    });
+    engine.OnReset = name =>
+    {
+      if (name == "D")
+        throw new InvalidOperationException("D's reset failed.");
+    };
+    var startFailure = new InvalidOperationException("B's start failed.");
+    var failed = 0;
+    engine.OnDependencyCheck = name =>
+    {
+      if (name == "B" && Interlocked.Exchange(ref failed, 1) == 0)
+        throw startFailure;
+    };
+
+    var act = () => engine.ResetTasksAsync(["A", "D"], resetDependentTasks: true);
+
+    (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Be("D's reset failed.");
+    const string StartFailed = "Starting the tasks after a failed reset failed too; the reset's failure is rethrown.";
+    var record = logger.Collector.GetSnapshot().Should()
+      .ContainSingle(r => r.Message.EndsWith(StartFailed, StringComparison.Ordinal)).Which;
+    record.Level.Should().Be(LogLevel.Error);
+    record.Exception.Should().BeSameAs(startFailure);
+    releaseA.SetResult();
+    await engine.Tasks["A"].InnerTask.WaitAsync(MustComplete, ct);
     await engine.StopAsync();
   }
 

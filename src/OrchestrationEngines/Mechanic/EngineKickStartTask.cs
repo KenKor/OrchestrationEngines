@@ -109,14 +109,16 @@ public class EngineKickStartTask : EngineTask
     /// </summary>
     /// <param name="m">The m.</param>
     /// <param name="engineDescriptor">The engine descriptor.</param>
-    /// <param name="token">The run's token: once the run is ended (a reset of this task), it stops waiting for the engine.</param>
+    /// <param name="token">The run's token: once the run is ended (a reset of this task), it stops waiting for the
+    /// engine. Required: without it, a reset during the wait for the engine leaves this run and the next one waiting
+    /// for each other (#85).</param>
     /// <exception cref="EvaluateException">
     /// Thrown if the engine stops or faults during startup.
     /// </exception>
     protected async Task KickStartAsync(
         MechanicEngine m,
         EngineDescriptor engineDescriptor,
-        CancellationToken token = default)
+        CancellationToken token)
     {
         if (!m.Engines.TryGetValue(engineDescriptor.Name, out var engine))
             throw new ArgumentException($"Unknown engine '{engineDescriptor.Name}'");
