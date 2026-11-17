@@ -313,7 +313,10 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   private bool KickStartRetryPending(string kickStartTaskName, IEngine engine) =>
     _tasks.TryGetValue(kickStartTaskName, out var kickStart) && !kickStart.IsCompleted
-    && engine is not BaseEngine { IsCancellationRequested: true };
+    && !IsStopped(engine);
+
+  /// <summary>Returns whether the engine was stopped on purpose; an engine that is null was not.</summary>
+  private static bool IsStopped(IEngine engine) => engine is BaseEngine { IsCancellationRequested: true };
 
   /// <summary>
   /// Whether an engine of this name is known: created, or to be created by this mechanic's tasks (its kick-start task
@@ -414,7 +417,7 @@ public partial class MechanicEngine : BaseEngine
     // follows generation switches recognises. Only when something was stopped: an engine that was not created is null
     // whether or not anything was (#58 item 15).
     if (notStarted is { State: EngineTaskState.Cancelled }
-        && (engine is BaseEngine { IsCancellationRequested: true } || (engine == null && IsCancellationRequested)))
+        && (IsStopped(engine) || (engine == null && IsCancellationRequested)))
       throw notStarted;
     if (engine == null)
       throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.",
