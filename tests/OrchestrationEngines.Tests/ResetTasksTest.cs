@@ -112,6 +112,35 @@ public class ResetTasksTest
   private static GraphEngine Chain() => new(T("A"), T("B", "A"), T("C", "B"));
 
   /// <summary>
+  /// Verifies that a task that hangs during the engine's first start can be reset through
+  /// the engine without waiting for the start to settle, and that it runs again (#58 item 6).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_TaskHangsDuringTheFirstStart_RunsItAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var hanging = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = new GraphEngine(T("A"), T("B", "A"))
+    {
+      Work = async (name, run, token) =>
+      {
+        if (name == "A" && run == 1)
+        {
+          hanging.TrySetResult();
+          await Task.Delay(Timeout.Infinite, token);
+        }
+      },
+    };
+    await engine.StartAsync();
+    await hanging.Task.WaitAsync(MustComplete, ct);
+
+    await engine.ResetTasksAsync(["A"], resetDependentTasks: false).WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    new[] { engine.Runs("A"), engine.Runs("B") }.Should().Equal(2, 1);
+  }
+
+  /// <summary>
   /// Verifies that a task without dependents is reset and runs again, and the other tasks do not.
   /// </summary>
   [Fact]

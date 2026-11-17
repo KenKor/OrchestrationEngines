@@ -384,8 +384,10 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   /// <remarks>
   /// It first waits for the engine's kick-start to settle, since an engine's tasks are set up when it starts: until the
-  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start can be reset only
-  /// once the kick-start has given up (or through the engine itself). An engine whose tasks failed is reset like any
+  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start is reset here only
+  /// once the kick-start has given up. To reset it without waiting, reset it through the engine itself
+  /// (<see cref="EngineCoordinator.GetEngineIfCreated"/>, then <see cref="BaseEngine.ResetTasksAsync"/>), or bound its
+  /// run with the task's <see cref="EngineTask.Timeout"/>. An engine whose tasks failed is reset like any
   /// other, and its tasks run again; the mechanic's own record of the failed start (its kick-start task) is not reset.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
