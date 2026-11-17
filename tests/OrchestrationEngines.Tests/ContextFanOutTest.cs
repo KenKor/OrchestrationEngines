@@ -570,7 +570,9 @@ public class ContextFanOutTest
     await Wait.UntilAsync(() => kickStart.State.IsCompleted(), MustComplete, "the run for workspace-D ends");
     var ready = session.EnsureReadyAsync();
     await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the wait for the given-up engine ends");
-    session.State.Should().Be(EngineState.Faulted, "the engine was given up");
+    // Until #131: the run for workspace-D does not reload a given-up engine. The kick-start agreeing with the engine is
+    // what this test is about, and holds either way.
+    session.State.Should().Be(EngineState.Faulted, "the engine was given up, and nothing reloads it yet (#131)");
     kickStart.State.Should().NotBe(EngineTaskState.CompletedWithSuccess, "the kick-start agrees with the engine");
   }
 
