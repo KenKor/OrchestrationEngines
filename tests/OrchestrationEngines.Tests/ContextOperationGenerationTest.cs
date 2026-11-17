@@ -252,26 +252,6 @@ public class ContextOperationGenerationTest
   }
 
   /// <summary>
-  /// An engine with one load task that ends at once, whose stop waits for <see cref="ReleaseStop"/> and then fails.
-  /// </summary>
-  private sealed class StopFailingEngine(Exception failure) : BaseEngine(NullLogger.Instance)
-  {
-    public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public TaskCompletionSource ReleaseStop { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
-
-    public override async Task StopAsync()
-    {
-      await base.StopAsync().ConfigureAwait(false);
-      Stopping.TrySetResult();
-      await ReleaseStop.Task.ConfigureAwait(false);
-      throw failure;
-    }
-  }
-
-  /// <summary>
   /// Verifies that a refresh that arrives while a switch rebuilds its engine, and waits for the next generation, is not
   /// left waiting when the switch fails before it starts that generation: this generation answers, as without the
   /// switch.
@@ -281,7 +261,7 @@ public class ContextOperationGenerationTest
   {
     var ct = TestContext.Current.CancellationToken;
     var failure = new InvalidOperationException("The stop failed.");
-    var engine = new StopFailingEngine(failure);
+    var engine = new StopFailingEngine(failure, holdStop: true);
     var coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance,
       useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine))
@@ -302,5 +282,7 @@ public class ContextOperationGenerationTest
     (await Record.ExceptionAsync(() => @switch.WaitAsync(MustComplete, ct))).Should().BeSameAs(failure);
     await refresh.WaitAsync(MustComplete, ct);
     engine.Context.Should().BeSameAs(context, "the switch did not start the next generation: this one answers");
+    (await Record.ExceptionAsync(() => coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct)))
+      .Should().BeSameAs(failure, "the shutdown stops the engine again, and its stop fails again");
   }
 }

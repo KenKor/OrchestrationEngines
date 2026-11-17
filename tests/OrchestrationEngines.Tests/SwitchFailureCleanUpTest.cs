@@ -46,16 +46,6 @@ public class SwitchFailureCleanUpTest
   /// <summary>
   /// An engine with one load task, whose work the test decides, that throws once it has stopped.
   /// </summary>
-  private sealed class StopFailingEngine(Exception failure, Func<CancellationToken, Task> loadAsync)
-    : NetworkEngine(loadAsync)
-  {
-    public override async Task StopAsync()
-    {
-      await base.StopAsync().ConfigureAwait(false);
-      throw failure;
-    }
-  }
-
   /// <summary>
   /// A coordinator whose next generation the test can see: the switch hands it over only when it succeeds.
   /// </summary>

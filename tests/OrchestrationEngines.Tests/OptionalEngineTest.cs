@@ -216,7 +216,6 @@ public class OptionalEngineTest
     var requiredFired = new ManualResetEventSlim();
     var optionalDone = new ManualResetEventSlim();
     var reloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var loads = 0;
     // The optional engine's call waits, after its trigger, until the required engine's call has fired its own; the
     // required engine's call then waits, before its reset, until the optional engine's call has ended.
     var logger = new OnMessageLogger("depending on and incl. Optional.", () =>
@@ -231,8 +230,7 @@ public class OptionalEngineTest
       }));
     var coordinator = CreateCoordinator(logger);
     var optionalEngine = new GatedEngine(Task.CompletedTask);
-    var requiredEngine = new GatedEngine(() =>
-      Interlocked.Increment(ref loads) == 1 ? Task.CompletedTask : reloadGate.Task);
+    var requiredEngine = new GatedEngine(FirstLoadAtOnce(reloadGate.Task));
     Register(coordinator, "Required", requiredEngine, required: true);
     Register(coordinator, "Optional", optionalEngine, required: false);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
@@ -244,7 +242,7 @@ public class OptionalEngineTest
     await optional.WaitAsync(MustComplete, ct);
     optionalDone.Set();
     await required.WaitAsync(MustComplete, ct);
-    await Wait.UntilAsync(() => Volatile.Read(ref loads) == 2, MustComplete, "the required engine reloads");
+    await Wait.UntilAsync(() => requiredEngine.Loads == 2, MustComplete, "the required engine reloads");
     var stateWhileReloading = coordinator.State;
     reloadGate.SetResult();
 
