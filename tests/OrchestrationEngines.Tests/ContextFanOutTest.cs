@@ -443,6 +443,112 @@ public class ContextFanOutTest
   }
 
   /// <summary>
+  /// Verifies that an engine ends Faulted when an invalidation finds it still Created, the next kick-start's context then
+  /// fails, and only after that the ended run starts the engine with the previous context (#86 item 7). Without this,
+  /// the engine stayed Ready on the previous context, which looks the same as a right answer.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ContextFailsBeforeTheEndedRunStartsTheEngine_FaultsIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var session = new HeldStartEngine();
+    var coordinator = new InspectableCoordinator();
+    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+      .SetContextFactory(async _ =>
+      {
+        var value = current;
+        if (value == "workspace-C")
+        {
+          contextForCEntered.TrySetResult();
+          await contextGate.Task;
+          throw new InvalidOperationException("workspace-C cannot be opened");
+        }
+        return new ValueContext(value);
+      })
+      .WithoutRestarts();
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var kickStart = coordinator.KickStartOf("Session");
+    var hold = session.HoldNextStart(beforeSetUp: true);
+
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    session.State.Should().Be(EngineState.Created, "the start for workspace-B has not set the engine up yet");
+    var startingRun = kickStart.LatestRunEnded;
+
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    contextGate.SetResult();
+    await Wait.UntilAsync(() => kickStart.State.IsCompleted(), MustComplete, "the run for workspace-C fails");
+    session.LoadedWith.Should().Equal(["workspace-A"], "the ended run has not started the engine yet");
+    hold.SetResult();
+    await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
+    await Task.WhenAny(Task.WhenAll(first, second)).WaitAsync(MustComplete, ct);
+
+    var ready = session.EnsureReadyAsync();
+    await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the engine is given up, so the wait for it ends");
+    session.LoadedWith.Should().Equal("workspace-A", "workspace-B");
+    session.State.Should().Be(EngineState.Faulted, "the engine was started with the previous context");
+  }
+
+  /// <summary>
+  /// Verifies that an engine ends Faulted when an invalidation finds it still Created, the ended run then starts it with
+  /// the previous context, and only after that the next kick-start's context fails (#86 item 7). Nothing restarts the
+  /// engine then, so it must not stay Ready on the previous context.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ContextFailsAfterTheEndedRunStartsTheEngine_FaultsIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var session = new HeldStartEngine();
+    var coordinator = new InspectableCoordinator();
+    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+      .SetContextFactory(async _ =>
+      {
+        var value = current;
+        if (value == "workspace-C")
+        {
+          contextForCEntered.TrySetResult();
+          await contextGate.Task;
+          throw new InvalidOperationException("workspace-C cannot be opened");
+        }
+        return new ValueContext(value);
+      })
+      .WithoutRestarts();
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var hold = session.HoldNextStart(beforeSetUp: true);
+
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    session.State.Should().Be(EngineState.Created, "the start for workspace-B has not set the engine up yet");
+    var startingRun = coordinator.KickStartOf("Session").LatestRunEnded;
+
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    hold.SetResult();
+    await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => session.State == EngineState.Ready, MustComplete,
+      "the ended run starts the engine with workspace-B");
+    contextGate.SetResult();
+    await Task.WhenAny(Task.WhenAll(first, second)).WaitAsync(MustComplete, ct);
+
+    await Wait.UntilAsync(() => session.State == EngineState.Faulted, MustComplete,
+      "the engine started with the previous context is given up");
+    var ready = session.EnsureReadyAsync();
+    await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the wait for the given-up engine ends");
+    session.LoadedWith.Should().Equal("workspace-A", "workspace-B");
+  }
+
+  /// <summary>
   /// Verifies that an invalidation that arrives while a kick-start run restarts the engine before starting it (the
   /// restart an earlier reset prepared) restarts the engine again with the new context. That run then starts the engine
   /// with the previous context; it must not count as carrying out the restart the new invalidation prepared.
