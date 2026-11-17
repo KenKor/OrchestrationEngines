@@ -380,6 +380,7 @@ public class ContextFanOutTest
     var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
     await contextForCEntered.Task.WaitAsync(MustComplete, ct);
     hold.SetResult();
+    // WhenAny of one task: wait until it ends, without its exception.
     await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
     session.LoadedWith.Should().Equal(["workspace-A", "workspace-B"], "the start under way loaded with workspace-B");
     contextGate.SetResult();
