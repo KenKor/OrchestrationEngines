@@ -22,7 +22,7 @@
   <PropertyGroup>
     <!-- SPDX licence expression; the text is in LICENSE. -->
     <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
-    <Copyright>Copyright (c) 2026 Spatial Eye</Copyright>
+    <Copyright>Copyright (c) 2026 Spatial Eye B.V.</Copyright>
     <!-- The repository's final home; the package links to it and SourceLink points debuggers at it. -->
     <RepositoryUrl></RepositoryUrl>
   </PropertyGroup>
