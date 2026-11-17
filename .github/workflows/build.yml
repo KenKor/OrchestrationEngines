@@ -32,8 +32,9 @@ jobs:
         with:
           dotnet-version: 10.0.1xx
 
-      # NuGet packages, keyed on every file that sets a package or a feed, so a version change misses and restores as
-      # without a cache.
+      # NuGet packages, keyed on every file that sets a package or a feed. A version change misses the key and
+      # restores the newest cache for the OS; Restore fetches only what is missing, and the whole folder, old versions
+      # included, is saved under the new key.
       - uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
