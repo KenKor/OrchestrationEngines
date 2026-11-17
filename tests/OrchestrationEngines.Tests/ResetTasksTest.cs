@@ -556,6 +556,23 @@ public class ResetTasksTest
     await engine.StopAsync();
   }
 
+  /// <summary>
+  /// A coordinator whose engine factory builds a fresh <see cref="Chain"/> for every generation and records it in
+  /// <paramref name="engines"/>.
+  /// </summary>
+  private static EngineCoordinator CoordinatorRecording(ConcurrentQueue<GraphEngine> engines)
+  {
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Graph", _ =>
+      {
+        var engine = Chain();
+        engines.Enqueue(engine);
+        return Task.FromResult<IEngine>(engine);
+      })
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    return coordinator;
+  }
+
   private static EngineCoordinator CoordinatorWith(IEngine engine)
   {
     var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
@@ -675,14 +692,7 @@ public class ResetTasksTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engines = new ConcurrentQueue<GraphEngine>();
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Graph", _ =>
-      {
-        var engine = Chain();
-        engines.Enqueue(engine);
-        return Task.FromResult<IEngine>(engine);
-      })
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    var coordinator = CoordinatorRecording(engines);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var first = engines.Single();
     Task<EngineCoordinator> switching = null;
@@ -719,14 +729,7 @@ public class ResetTasksTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engines = new ConcurrentQueue<GraphEngine>();
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
-    coordinator.RegisterEngine("Graph", _ =>
-      {
-        var engine = Chain();
-        engines.Enqueue(engine);
-        return Task.FromResult<IEngine>(engine);
-      })
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    var coordinator = CoordinatorRecording(engines);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
       .WaitAsync(MustComplete, ct);
