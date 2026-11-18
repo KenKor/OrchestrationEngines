@@ -477,6 +477,12 @@ public partial class EngineTask
   private bool _timedOutWorkAbandoned;
 
   /// <summary>
+  /// Set when the work of the run failed with an exception that <see cref="RetriesFailureOf"/> does not retry: the
+  /// failure then ends the task in Failed instead of recovering. Set and read under the trigger lock, cleared by a reset.
+  /// </summary>
+  private bool _failureNotRetried;
+
+  /// <summary>
   /// The latest run of the work or the recovery; it completes once that run's work has ended.
   /// </summary>
   /// <remarks>
@@ -915,8 +921,8 @@ public partial class EngineTask
         .Permit(EngineTaskTrigger.Succeed, EngineTaskState.CompletedWithSuccess)
 
         // If RecoveryHelper is configured, failures can transition into Recovering.
-        .PermitIf(EngineTaskTrigger.Fail, EngineTaskState.Failed, () => RecoveryHelper == null)
-        .PermitIf(EngineTaskTrigger.Fail, EngineTaskState.Recovering, () => RecoveryHelper != null)
+        .PermitIf(EngineTaskTrigger.Fail, EngineTaskState.Failed, () => RecoveryHelper == null || _failureNotRetried)
+        .PermitIf(EngineTaskTrigger.Fail, EngineTaskState.Recovering, () => RecoveryHelper != null && !_failureNotRetried)
 
         // A recovery would wait for the timed-out work, so work that did not stop ends the task instead.
         .PermitIf(EngineTaskTrigger.TimeOut, EngineTaskState.TimedOut, () => RecoveryHelper == null || _timedOutWorkAbandoned)
@@ -1197,9 +1203,8 @@ public partial class EngineTask
     if (!failed.WasCancelled)
       return $"Dependency '{failed.Name}' failed: {failed.FailReason}";
     // A cancellation by the work says why; any other cancellation's reason is only how it was cancelled.
-    return failed.CancelledByTheWork
-      ? $"Cancelled because '{failed.Name}', which it depends on, was cancelled. {failed.FailReason}"
-      : $"Cancelled because '{failed.Name}', which it depends on, was cancelled.";
+    var cancelled = $"Cancelled because '{failed.Name}', which it depends on, was cancelled.";
+    return failed.CancelledByTheWork ? $"{cancelled} {failed.FailReason}" : cancelled;
   }
 
   /// <summary>
@@ -1245,6 +1250,7 @@ public partial class EngineTask
 
       RecoveryHelper?.Reset();
       _timedOutWorkAbandoned = false;
+      _failureNotRetried = false;
       CreateToken();
       // Fix: the run that was reset must not report its outcome into the next run (see ExecuteWorkAsync).
       Interlocked.Increment(ref _runGeneration);
@@ -1420,9 +1426,12 @@ public partial class EngineTask
   /// <param name="byTheWork">
   /// Whether the work threw an <see cref="EngineTaskException"/> (see <see cref="CancelledByTheWork"/>).
   /// </param>
+  /// <param name="notRetried">
+  /// Whether a Fail ends the task in Failed even with a <see cref="RecoveryHelper"/> (see <see cref="RetriesFailureOf"/>).
+  /// </param>
   /// <returns>False if the run is stale and nothing was fired.</returns>
   private async Task<bool> FireIfCurrentAsync(int run, EngineTaskTrigger trigger, string reason = "", string failReason = null,
-    bool cancelRun = false, Exception exception = null, bool byTheWork = false)
+    bool cancelRun = false, Exception exception = null, bool byTheWork = false, bool notRetried = false)
   {
     await _triggerLock.WaitAsync().ConfigureAwait(false);
     try
@@ -1436,6 +1445,7 @@ public partial class EngineTask
 
       // Before the trigger: the tasks that depend on this one read it when it enters Failed (see DependencyFailReason).
       CancelledByTheWork = byTheWork;
+      _failureNotRetried = notRetried;
       if (trigger == EngineTaskTrigger.Cancel)
         FailReason = failReason ?? CancellationReason();
       else if (failReason != null)
@@ -1658,10 +1668,19 @@ public partial class EngineTask
     {
       LogWorkFailed(Logger, ex, ex.Message);
 
-      // Fail with reason; may transition to Recovering depending on RecoveryHelper.
-      await FireIfCurrentAsync(run, EngineTaskTrigger.Fail, ex.Message, exception: ex).ConfigureAwait(false);
+      // Fail with reason; may transition to Recovering depending on RecoveryHelper and RetriesFailureOf.
+      await FireIfCurrentAsync(run, EngineTaskTrigger.Fail, ex.Message, exception: ex, notRetried: !RetriesFailureOf(ex))
+        .ConfigureAwait(false);
     }
   }
+
+  /// <summary>
+  /// Returns whether a failure of the work with <paramref name="exception"/> is retried by the
+  /// <see cref="RecoveryHelper"/>. If not, the task ends Failed. True by default.
+  /// </summary>
+  /// <param name="exception">The exception the work threw (not an <see cref="EngineTaskException"/>, which ends the
+  /// task Cancelled, nor an <see cref="OperationCanceledException"/>).</param>
+  internal virtual bool RetriesFailureOf(Exception exception) => true;
 
   /// <summary>
   /// Executes recovery procedure when configured.
