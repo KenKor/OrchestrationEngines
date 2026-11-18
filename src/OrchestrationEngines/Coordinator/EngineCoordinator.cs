@@ -76,11 +76,9 @@ public partial class EngineCoordinator : IDisposable
   // The mechanic is the meta-engine that owns the engine task DAG.
   private MechanicEngine _mechanic;
 
-  // Cancellation token source governing coordinator and mechanic lifetime. Not a linked source: the application token
-  // cancels it through _applicationRegistration, which the shutdown disposes, so that the application token, which
-  // outlives every generation, does not keep a shut-down coordinator's source registered (#107). The source itself is
-  // disposed only by Dispose: CancellationToken and the shut-down coordinator's work still read it.
-  private readonly CancellationTokenSource _linkedCts = new CancellationTokenSource();
+  // Governs coordinator and mechanic lifetime. Not linked to the application token, which outlives every generation:
+  // the shutdown disposes _applicationRegistration instead, so a shut-down coordinator's source is let go (#107).
+  private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
   private readonly CancellationTokenRegistration _applicationRegistration;
   private readonly string _coordinatorName;
 
@@ -104,12 +102,12 @@ public partial class EngineCoordinator : IDisposable
   /// <summary>
   /// Indicates whether cancellation has been requested for the coordinator.
   /// </summary>
-  public bool IsCancellationRequested => _linkedCts.IsCancellationRequested;
+  public bool IsCancellationRequested => _lifetimeCts.IsCancellationRequested;
 
   /// <summary>
   /// Cancellation token governing coordinator and mechanic lifetime.
   /// </summary>
-  public CancellationToken CancellationToken => _linkedCts.Token;
+  public CancellationToken CancellationToken => _lifetimeCts.Token;
 
   /// <summary>
   /// Current application-level lifecycle state.
@@ -191,8 +189,8 @@ public partial class EngineCoordinator : IDisposable
   {
     // Link coordinator cancellation to application cancellation. An application token that is cancelled already
     // cancels the source here, as a linked source would start cancelled.
-    _applicationRegistration = applicationToken.Register(
-      static source => ((CancellationTokenSource)source).Cancel(), _linkedCts);
+    _applicationRegistration = applicationToken.UnsafeRegister(
+      static source => ((CancellationTokenSource)source).Cancel(), _lifetimeCts);
     _applicationToken = applicationToken;
     _lineage = new Lineage(this);
     _coordinatorName = coordinatorName;
@@ -201,7 +199,7 @@ public partial class EngineCoordinator : IDisposable
 
     // Create a dispatcher, e.g. if we are on .NET48/.NET481 where threads can be Aborted.
     if (useDispatcher)
-      _mechanicDispatcher = new MechanicDispatcher("EngineMechanicThread", _applicationLogger, _linkedCts.Token);
+      _mechanicDispatcher = new MechanicDispatcher(MechanicDispatcher.DefaultThreadName, _applicationLogger, _lifetimeCts.Token);
   }
 
   /// <summary>
@@ -225,7 +223,7 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   protected virtual MechanicEngine CreateMechanic()
   {
-    var mechanic = new MechanicEngine(_applicationLogger, _linkedCts.Token);
+    var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token);
 
     // Listen to engine lifecycle events to drive coordinator state.
     mechanic.EngineStatusChanged += Mechanic_EngineStatusChanged;
@@ -900,7 +898,7 @@ public partial class EngineCoordinator : IDisposable
     _monitorTask = new EngineTask(
             name: "MechanicMonitoring",
             workAsync: MonitorLoopAsync,
-            engineToken: _linkedCts.Token,
+            engineToken: _lifetimeCts.Token,
             logger: _applicationLogger,
             requiredForRunning: false)
         .SetRecovery(RestartPolicy.Unlimited);
@@ -1195,7 +1193,7 @@ public partial class EngineCoordinator : IDisposable
     {
       await DispatchAsync(ShutdownAsyncInt, token).ConfigureAwait(false);
     }
-    catch (OperationCanceledException) when (!token.IsCancellationRequested && _linkedCts.IsCancellationRequested)
+    catch (OperationCanceledException) when (!token.IsCancellationRequested && _lifetimeCts.IsCancellationRequested)
     {
       // Fix (GenerationSwitchEdgeCaseTest): a second shutdown with the dispatcher on waited forever for the stopped
       // dispatcher. The dispatcher no longer runs, so shut down here, as without a dispatcher. ShutdownAsyncInt is
@@ -1225,22 +1223,18 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   private async Task ShutdownAsyncInt()
   {
-    bool stoppingAlready;
+    // Shutting down, so the application token has nothing left to do here: take this coordinator's source off it
+    // (#107). Not under _sync: if the application token is being cancelled on another thread, this waits for its
+    // callback, which cancels the source, and a callback on the source may take _sync (an engine's state change).
+    _applicationRegistration.Dispose();
     lock (_sync)
     {
       // Cancel any pending operations.
-      _linkedCts.CancelBestEffort(_applicationLogger);
+      _lifetimeCts.CancelBestEffort(_applicationLogger);
       // Fire shutdown if not already stopping.
-      stoppingAlready = State >= EngineCoordinatorState.Stopping;
-      if (!stoppingAlready)
-        AppMachine.Fire(EngineCoordinatorTrigger.StartShutdown);
+      if (State >= EngineCoordinatorState.Stopping) return;
+      AppMachine.Fire(EngineCoordinatorTrigger.StartShutdown);
     }
-
-    // Cancelled, so the application token has nothing left to do here: take this coordinator's source off it (#107).
-    // Not under _sync: if the application token is being cancelled on another thread, this waits for its callback,
-    // which cancels the source, and a callback on the source may take _sync (an engine's state change).
-    _applicationRegistration.Dispose();
-    if (stoppingAlready) return;
 
     ExceptionDispatchInfo stopFailure = null;
     try
@@ -1531,7 +1525,7 @@ public partial class EngineCoordinator : IDisposable
     _monitorPulse.Dispose();
     // The registration first: an application token cancelled after this must not cancel a disposed source.
     _applicationRegistration.Dispose();
-    _linkedCts.Dispose();
+    _lifetimeCts.Dispose();
     _mechanicDispatcher?.Dispose();
   }
 

@@ -140,13 +140,7 @@ public class PreviousEngineReleaseTest
 
     // Work of the shutdown may still be finishing on the thread pool for a moment: collect a few times, briefly apart. A
     // real reference keeps the engine alive however long this waits.
-    for (var i = 0; i < 10 && previous.IsAlive; i++)
-    {
-      await Task.Delay(100, TestContext.Current.CancellationToken);
-      GC.Collect();
-      GC.WaitForPendingFinalizers();
-      GC.Collect();
-    }
+    await Wait.UntilCollectedAsync(MustComplete, previous);
 
     previous.IsAlive.Should().BeFalse("nothing may keep the previous engine alive once its replacement failed");
     GC.KeepAlive(nextCoordinator);

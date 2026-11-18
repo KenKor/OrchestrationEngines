@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
@@ -7,7 +9,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
+using OrchestrationEngines.Mechanic;
 using Xunit;
+using static OrchestrationEngines.Tests.SwitchTestEngines;
 
 namespace OrchestrationEngines.Tests;
 
@@ -18,31 +22,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class SwitchFailureCleanUpTest
 {
-  private const string Name = "N";
-
-  /// <summary>
-  /// An engine with one load task, whose work the test decides; counts its loads.
-  /// </summary>
-  private class NetworkEngine(Func<CancellationToken, Task> loadAsync) : BaseEngine(NullLogger.Instance)
-  {
-    private int _loads;
-
-    public int Loads => Volatile.Read(ref _loads);
-
-    protected override void SetUpTasks() => CreateTask("Load", token =>
-    {
-      Interlocked.Increment(ref _loads);
-      return loadAsync(token);
-    });
-  }
-
-  private static NetworkEngine Quick() => new(_ => Task.CompletedTask);
-
-  /// <summary>
-  /// An engine whose load runs until it is stopped.
-  /// </summary>
-  private static NetworkEngine Hanging() => new(token => Task.Delay(Timeout.Infinite, token));
-
   /// <summary>
   /// A coordinator whose next generation the test can see: the switch hands it over only when it succeeds.
   /// </summary>
@@ -53,18 +32,6 @@ public class SwitchFailureCleanUpTest
       useDispatcher);
     coordinator.NextGenerationCreated = nextGenerations.Add;
     return coordinator;
-  }
-
-  /// <summary>
-  /// A descriptor whose first engine is <paramref name="first"/> and whose next one, in a switch, comes from
-  /// <paramref name="next"/>; without <paramref name="next"/> a switch builds the engine from scratch.
-  /// </summary>
-  private static EngineDescriptor Descriptor(IEngine first, Func<IEngine> next = null)
-  {
-    var descriptor = new EngineDescriptor(Name, _ => Task.FromResult(first), requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
-    return next == null ? descriptor : descriptor.SetRestartFactory((_, _) => Task.FromResult(next()));
   }
 
   /// <summary>
@@ -219,5 +186,51 @@ public class SwitchFailureCleanUpTest
     thrown.Should().BeAssignableTo<OperationCanceledException>("the switch's own failure, not the clean-up's");
     Volatile.Read(ref logged).Should().Be(1);
     nextGenerations[0].State.Should().Be(EngineCoordinatorState.Stopped);
+  }
+
+  /// <summary>
+  /// The managed thread id of <paramref name="coordinator"/>'s dispatcher thread.
+  /// </summary>
+  private static int DispatcherThreadId(EngineCoordinator coordinator)
+  {
+    var dispatcher = typeof(EngineCoordinator).GetFields(BindingFlags.NonPublic | BindingFlags.Instance)
+      .Single(f => f.FieldType == typeof(MechanicDispatcher)).GetValue(coordinator);
+    var thread = (Thread)typeof(MechanicDispatcher).GetField("_thread", BindingFlags.NonPublic | BindingFlags.Instance)
+      .GetValue(dispatcher);
+    return thread.ManagedThreadId;
+  }
+
+  /// <summary>
+  /// Verifies that, with the dispatcher on, the clean-up of a switch that failed after it started the next generation
+  /// shuts that generation down on the next generation's own dispatcher thread, where its mechanic's monitor ticks run,
+  /// and not on the thread of the switch (#107).
+  /// </summary>
+  [Fact]
+  public async Task Switch_ReadyWaitCancelled_ShutsTheNextGenerationDownOnItsDispatcher()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var shutdownThreadId = 0;
+    var logger = new OnMessageLogger(
+      (_, message, _) => message.Contains($"'{nameof(SwitchFailureCleanUpTest)}>': Coordinator transition")
+        && message.Contains("StartShutdown"),
+      () => Volatile.Write(ref shutdownThreadId, Environment.CurrentManagedThreadId));
+    var next = Hanging();
+    var nextGenerations = new List<EngineCoordinator>();
+    using var coordinator = CreateCoordinator(nextGenerations, logger, useDispatcher: true);
+    coordinator.RegisterEngineDescriptor(Descriptor(Quick(), () => next));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+    var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
+      cancel.Token);
+    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
+    cancel.Cancel();
+    var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
+
+    thrown.Should().BeAssignableTo<OperationCanceledException>();
+    nextGenerations.Should().ContainSingle();
+    Volatile.Read(ref shutdownThreadId).Should().Be(DispatcherThreadId(nextGenerations[0]),
+      "the next generation's mechanic is stopped on its own dispatcher");
+    next.IsCancellationRequested.Should().BeTrue("the next generation's engines are stopped");
   }
 }

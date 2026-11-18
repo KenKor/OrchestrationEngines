@@ -5,50 +5,22 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using Xunit;
+using static OrchestrationEngines.Tests.SwitchTestEngines;
 
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
 /// Contains tests for what a coordinator that a generation switch shut down lets go of (#107): the token source of the
 /// generation a switch replaces, and of the next generation of a switch that failed after starting it, is no longer
-/// registered on the application token, while their public members still answer; and the clean-up of a failed switch
-/// shuts the next generation down on its dispatcher.
+/// registered on the application token, while their public members still answer.
 /// </summary>
 public class ShutDownCoordinatorReleaseTest
 {
-  private const string Name = "N";
   private const string CoordinatorName = nameof(ShutDownCoordinatorReleaseTest);
-
-  /// <summary>
-  /// An engine with one load task, whose work the test decides; counts its loads.
-  /// </summary>
-  private class NetworkEngine(Func<CancellationToken, Task> loadAsync) : BaseEngine(NullLogger.Instance)
-  {
-    private int _loads;
-
-    public int Loads => Volatile.Read(ref _loads);
-
-    protected override void SetUpTasks() => CreateTask("Load", token =>
-    {
-      Interlocked.Increment(ref _loads);
-      return loadAsync(token);
-    });
-  }
-
-  private static NetworkEngine Quick() => new(_ => Task.CompletedTask);
-
-  private static NetworkEngine Hanging() => new(token => Task.Delay(Timeout.Infinite, token));
-
-  private static EngineDescriptor Descriptor(IEngine first, Func<IEngine> next) =>
-    new EngineDescriptor(Name, _ => Task.FromResult(first), requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts()
-      .SetRestartFactory((_, _) => Task.FromResult(next()));
 
   /// <summary>
   /// A weak reference to the token source that governs <paramref name="coordinator"/>'s lifetime (its only one), the
@@ -59,24 +31,6 @@ public class ShutDownCoordinatorReleaseTest
     new(typeof(EngineCoordinator).GetFields(BindingFlags.NonPublic | BindingFlags.Instance)
       .Single(f => f.FieldType == typeof(CancellationTokenSource))
       .GetValue(coordinator));
-
-  /// <summary>
-  /// Collects garbage until <paramref name="reference"/> is gone, or the time is up.
-  /// </summary>
-  private static async Task<bool> IsCollectedAsync(WeakReference reference)
-  {
-    var deadline = DateTime.UtcNow + MustComplete;
-    while (DateTime.UtcNow < deadline)
-    {
-      GC.Collect();
-      GC.WaitForPendingFinalizers();
-      GC.Collect();
-      if (!reference.IsAlive)
-        return true;
-      await Task.Delay(50);
-    }
-    return false;
-  }
 
   /// <summary>
   /// Starts a coordinator on <paramref name="applicationToken"/>, switches it, and returns the new generation and a
@@ -110,7 +64,7 @@ public class ShutDownCoordinatorReleaseTest
     var (current, replaced) = await SwitchOnceAsync(application.Token, useDispatcher, ct);
     try
     {
-      (await IsCollectedAsync(replaced)).Should().BeTrue("the replaced generation is shut down, and only the "
+      (await Wait.UntilCollectedAsync(MustComplete, replaced)).Should().BeTrue("the replaced generation is shut down, and only the "
         + "application token, which is still alive, could keep its token source");
     }
     finally
@@ -163,7 +117,7 @@ public class ShutDownCoordinatorReleaseTest
     try
     {
       next.Should().NotBeNull();
-      (await IsCollectedAsync(next)).Should().BeTrue("the abandoned generation is shut down, and only the "
+      (await Wait.UntilCollectedAsync(MustComplete, next)).Should().BeTrue("the abandoned generation is shut down, and only the "
         + "application token, which is still alive, could keep its token source");
     }
     finally
@@ -224,36 +178,5 @@ public class ShutDownCoordinatorReleaseTest
 
     current.IsCancellationRequested.Should().BeTrue();
     current.CancellationToken.IsCancellationRequested.Should().BeTrue();
-  }
-
-  /// <summary>
-  /// Verifies that, with the dispatcher on, the clean-up of a switch that failed after it started the next generation
-  /// shuts that generation down on the next generation's dispatcher thread, where its mechanic's monitor ticks run, and
-  /// not on the thread of the switch.
-  /// </summary>
-  [Fact]
-  public async Task Switch_FailedAfterStart_ShutsTheNextGenerationDownOnItsDispatcher()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    string shutdownThread = null;
-    var logger = new OnMessageLogger(
-      (_, message, _) => message.Contains($"'{CoordinatorName}>': Coordinator transition")
-        && message.Contains("StartShutdown"),
-      () => shutdownThread = Thread.CurrentThread.Name ?? "(unnamed)");
-    using var coordinator = new EngineCoordinator(CoordinatorName, logger, useDispatcher: true);
-    var next = Hanging();
-    coordinator.RegisterEngineDescriptor(Descriptor(Quick(), () => next));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-    var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
-      cancel.Token);
-    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
-    cancel.Cancel();
-    var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
-
-    thrown.Should().BeAssignableTo<OperationCanceledException>();
-    shutdownThread.Should().Be("EngineMechanicThread", "the next generation's mechanic is stopped on its dispatcher");
-    next.IsCancellationRequested.Should().BeTrue("the next generation's engines are stopped");
   }
 }
