@@ -195,8 +195,8 @@ public class SwitchFailureCleanUpTest
   {
     var dispatcher = typeof(EngineCoordinator).GetFields(BindingFlags.NonPublic | BindingFlags.Instance)
       .Single(f => f.FieldType == typeof(MechanicDispatcher)).GetValue(coordinator);
-    var thread = (Thread)typeof(MechanicDispatcher).GetField("_thread", BindingFlags.NonPublic | BindingFlags.Instance)
-      .GetValue(dispatcher);
+    var thread = (Thread)typeof(MechanicDispatcher).GetFields(BindingFlags.NonPublic | BindingFlags.Instance)
+      .Single(f => f.FieldType == typeof(Thread)).GetValue(dispatcher);
     return thread.ManagedThreadId;
   }
 
