@@ -11,6 +11,11 @@ namespace OrchestrationEngines.Mechanic;
 /// </summary>
 internal sealed partial class MechanicDispatcher : IDisposable
 {
+  /// <summary>
+  /// The name of a dispatcher's thread when none is given.
+  /// </summary>
+  internal const string DefaultThreadName = "EngineMechanicThread";
+
   private readonly ConcurrentQueue<IWorkItem> _queue = new();
   private readonly AutoResetEvent _signal = new AutoResetEvent(false);
   private readonly CancellationToken _engineToken;
@@ -39,7 +44,7 @@ internal sealed partial class MechanicDispatcher : IDisposable
   /// </remarks>
   public MechanicDispatcher(string threadName, ILogger logger, CancellationToken engineToken)
   {
-    _threadName = string.IsNullOrWhiteSpace(threadName) ? "EngineMechanicThread" : threadName;
+    _threadName = string.IsNullOrWhiteSpace(threadName) ? DefaultThreadName : threadName;
     _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     _engineToken = engineToken;
   }

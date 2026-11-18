@@ -265,6 +265,11 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <summary>
   /// Sets a warm-restart factory that can reuse a previous engine instance.
   /// </summary>
+  /// <remarks>
+  /// A restart factory may share or copy the previous engine's state, but must not take it away from that engine, and a
+  /// next engine's <see cref="IEngine.StopAsync"/> must not release what it shares with its predecessor: a generation
+  /// switch that fails before it hands over stops the next engines and keeps the previous ones running.
+  /// </remarks>
   public EngineDescriptor SetRestartFactory(Func<EngineRestartInput, CancellationToken, Task<IEngine>> restartFactory)
   {
     RestartFromPrevious = restartFactory;

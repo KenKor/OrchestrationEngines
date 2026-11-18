@@ -235,13 +235,7 @@ public class GenerationSwitchShutdownTest
 
     // Work of the last shutdown may still be finishing on the thread pool and hold its generation for a moment: collect
     // a few times, briefly apart. A real reference keeps an engine alive however long this waits.
-    for (var i = 0; i < 10 && replacedEngines.Any(e => e.IsAlive); i++)
-    {
-      await Task.Delay(100, TestContext.Current.CancellationToken);
-      GC.Collect();
-      GC.WaitForPendingFinalizers();
-      GC.Collect();
-    }
+    await Wait.UntilCollectedAsync(MustComplete, [.. replacedEngines]);
 
     replacedEngines.Where(e => e.IsAlive).Should().BeEmpty("nothing may keep a replaced generation's engine alive");
     current.GetEngineIfReady(Name).Should().NotBeNull();
