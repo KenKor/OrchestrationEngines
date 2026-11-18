@@ -24,7 +24,10 @@ public class KickStartRestartTest
   /// <summary>
   /// An engine with one load task, whose work the test decides per load, counting its starts and loads.
   /// </summary>
-  private sealed class NetworkEngine(Func<int, CancellationToken, Task> loadAsync) : BaseEngine(NullLogger.Instance)
+  /// <param name="loadAsync">The work of a load, given the load's number (from 1).</param>
+  /// <param name="extraAsync">If set, the work of a task "Extra" that is not required for running.</param>
+  private sealed class NetworkEngine(Func<int, CancellationToken, Task> loadAsync,
+    Func<CancellationToken, Task> extraAsync = null) : BaseEngine(NullLogger.Instance)
   {
     private int _starts;
     private int _loads;
@@ -39,10 +42,35 @@ public class KickStartRestartTest
       return base.StartAsync();
     }
 
-    protected override void SetUpTasks() => CreateTask("Load", token => loadAsync(Interlocked.Increment(ref _loads), token));
+    protected override void SetUpTasks()
+    {
+      CreateTask("Load", token => loadAsync(Interlocked.Increment(ref _loads), token));
+      if (extraAsync != null)
+        CreateTask("Extra", extraAsync, requiredForRunning: false);
+    }
   }
 
-  private static EngineCoordinator CreateCoordinator(NetworkEngine engine)
+  /// <summary>
+  /// An engine whose optional load throws an EngineTaskException, and a required index that depends on the load.
+  /// </summary>
+  private sealed class OptionalLoadEngine() : BaseEngine(NullLogger.Instance)
+  {
+    private int _loads;
+
+    public int Loads => Volatile.Read(ref _loads);
+
+    protected override void SetUpTasks()
+    {
+      var load = CreateTask("Load", _ =>
+      {
+        Interlocked.Increment(ref _loads);
+        throw new TestTaskException();
+      }, requiredForRunning: false);
+      CreateTask("Index", _ => Task.CompletedTask).AddDependsOn(load);
+    }
+  }
+
+  private static EngineCoordinator CreateCoordinator(IEngine engine)
   {
     var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
@@ -71,25 +99,99 @@ public class KickStartRestartTest
   }
 
   /// <summary>
-  /// Verifies that an engine whose load throws an EngineTaskException is still started again under the descriptor's
-  /// restart policy (#59, item 1): the load task itself is not retried and ends Cancelled, which stops the engine
-  /// rather than faulting it, and the kick-start starts a Stopped engine whose token is live again.
+  /// Verifies that an engine whose load throws an EngineTaskException is not started again (#90): the load task ends
+  /// Cancelled without a retry, which stops the engine, and the kick-start does not start it again under the
+  /// descriptor's restart policy either, since another attempt cannot change the condition. The kick-start ends Failed,
+  /// so the coordinator hears of it and goes back to WaitingForEngines instead of staying in Initializing. A lookup
+  /// gets null.
   /// </summary>
   [Fact]
-  public async Task EngineKickStartTask_LoadThrowsEngineTaskException_StartsTheEngineAgain()
+  public async Task EngineKickStartTask_LoadThrowsEngineTaskException_DoesNotStartTheEngineAgain()
   {
     var ct = TestContext.Current.CancellationToken;
-    var engine = new NetworkEngine((load, _) => load == 1 ? throw new LoadException() : Task.CompletedTask);
+    var engine = new NetworkEngine((load, _) => load == 1 ? throw new TestTaskException() : Task.CompletedTask);
+    var coordinator = CreateCoordinator(engine);
+
+    var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
+
+    loaded.Should().BeNull();
+    engine.Starts.Should().Be(1);
+    engine.Loads.Should().Be(1);
+    engine.State.Should().Be(EngineState.Stopped);
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines,
+      MustComplete, "the failed kick-start must reach the coordinator");
+    engine.Starts.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that a task not required for running whose work throws an EngineTaskException does not keep the
+  /// kick-start from starting the engine again when a required task stopped it for another reason (a timed-out call):
+  /// only the engine's required tasks decide whether it is started again.
+  /// </summary>
+  [Fact]
+  public async Task EngineKickStartTask_OptionalTaskCancelledByItsWork_StillStartsTheEngineAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    NetworkEngine engine = null;
+    engine = new NetworkEngine(
+      async (load, _) =>
+      {
+        if (load > 1)
+          return;
+        // The engine stops only once the optional task has ended, so the kick-start sees both.
+        await Wait.UntilAsync(() => engine.Tasks["Extra"].State == EngineTaskState.Cancelled, MustComplete,
+          "the optional task must end first");
+        throw new TaskCanceledException("The request timed out.");
+      },
+      _ => throw new TestTaskException());
     var coordinator = CreateCoordinator(engine);
 
     var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
 
     loaded.Should().BeSameAs(engine);
-    engine.Starts.Should().Be(2);
+    engine.State.Should().Be(EngineState.Ready);
     engine.Loads.Should().Be(2);
   }
 
-  private sealed class LoadException() : EngineTaskException(null, "The load cannot go on.");
+  /// <summary>
+  /// Verifies that an engine is not started again when a task not required for running is cancelled by its own work
+  /// and a required task depends on it: the required task then ends DependencyFailed, which stops the engine, and
+  /// another start would run the optional task into the same condition.
+  /// </summary>
+  [Fact]
+  public async Task EngineKickStartTask_RequiredTaskDependsOnTaskCancelledByItsWork_DoesNotStartTheEngineAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new OptionalLoadEngine();
+    var coordinator = CreateCoordinator(engine);
+
+    var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
+
+    loaded.Should().BeNull();
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines,
+      MustComplete, "the failed kick-start must reach the coordinator");
+    engine.Loads.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that a reset of the task of an engine that its own work stopped (an EngineTaskException), which the
+  /// kick-start did not start again, runs the task again: once the condition has been dealt with, the host can start
+  /// the engine by resetting the task.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_AfterTaskCancelledByItsWork_RunsTheEngineAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new NetworkEngine((load, _) => load == 1 ? throw new TestTaskException() : Task.CompletedTask);
+    var coordinator = CreateCoordinator(engine);
+    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeNull();
+
+    await coordinator.ResetTasksForEngineAsync(Name, ["Load"], resetDependentTasks: true, ct).WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    engine.State.Should().Be(EngineState.Ready);
+    engine.Loads.Should().Be(2);
+  }
 
   /// <summary>
   /// Verifies that a lookup that arrives while the kick-start waits to retry a failed engine waits for the retry and

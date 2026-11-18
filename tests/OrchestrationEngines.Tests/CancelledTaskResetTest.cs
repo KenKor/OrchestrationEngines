@@ -38,6 +38,37 @@ public class CancelledTaskResetTest
     }
   }
 
+  /// <summary>
+  /// An engine whose load throws an EngineTaskException, and an index that depends on the load.
+  /// </summary>
+  private sealed class LoadCancelledByTheWorkEngine() : BaseEngine(NullLogger.Instance)
+  {
+    public EngineTask Index => Tasks["Index"];
+
+    protected override void SetUpTasks()
+    {
+      var load = CreateTask("Load", _ => throw new TestTaskException());
+      CreateTask("Index", _ => Task.CompletedTask).AddDependsOn(load);
+    }
+  }
+
+  /// <summary>
+  /// Verifies that a task whose dependency was cancelled by its own work (an EngineTaskException) gives the work's
+  /// reason too, so the log of the dependent says why (#90).
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_DependencyCancelledByTheWork_DependentGivesTheWorksReason()
+  {
+    var engine = new LoadCancelledByTheWorkEngine { Context = new NoContext() };
+
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+
+    engine.Index.State.Should().Be(EngineTaskState.DependencyFailed);
+    engine.Index.FailReason.Should().Be(
+      "Cancelled because 'Load', which it depends on, was cancelled. Cancelled by the work: The task cannot go on.");
+  }
+
   private static async Task<LoadAndIndexEngine> CancelledEngineAsync()
   {
     var engine = new LoadAndIndexEngine { Context = new NoContext() };

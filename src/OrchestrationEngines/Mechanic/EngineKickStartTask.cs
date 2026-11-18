@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -213,6 +214,13 @@ public partial class EngineKickStartTask : EngineTask
         // Validate final engine state.
         if (engine.State >= EngineState.Stopped)
         {
+            // One of its required tasks was cancelled by its own work (an EngineTaskException): another start cannot
+            // change that, so this task ends Failed without a retry (#90; see RetriesFailureOf). Failed, not
+            // Cancelled, so that the mechanic faults and the coordinator hears of it.
+            if (CancelledByItsWork(engine) is { } cancelled)
+                throw new EngineCancelledByItsWorkException(
+                    $"Engine '{engineDescriptor.Name}' is not started again: its task '{cancelled.Name}' ended with \"{cancelled.FailReason}\".");
+
             // Escalate to failure so recovery policy can decide next steps.
             throw new EngineNotStartedException(
                 $"Engine execution failed: '{engineDescriptor.Name}', {engine}.");
@@ -228,9 +236,11 @@ public partial class EngineKickStartTask : EngineTask
     /// <remarks>
     /// A Faulted engine, and a Stopped engine that was not stopped on purpose: one of its tasks ended Cancelled while
     /// the engine's own token is still live, typically through an <see cref="OperationCanceledException"/> that is not
-    /// ours (a timed-out HTTP or database call). Such a failure is usually transient, so it is retried like a fault.
-    /// An engine whose token was cancelled was stopped on purpose and is never started again; neither is a Stopped
-    /// engine that is not a <see cref="BaseEngine"/>, since there is no telling why it stopped.
+    /// ours (a timed-out HTTP or database call), and not one cancelled by its own work (an
+    /// <see cref="EngineTaskException"/>), which ends the kick-start without a retry. Such a failure is usually
+    /// transient, so it is retried like a fault. An engine whose token was cancelled was stopped on purpose and is never
+    /// started again; neither is a Stopped engine that is not a <see cref="BaseEngine"/>, since there is no telling why
+    /// it stopped.
     /// </remarks>
     private static bool NeedsResetBeforeRestart(IEngine engine) => engine switch
     {
@@ -239,6 +249,31 @@ public partial class EngineKickStartTask : EngineTask
         BaseEngine { State: EngineState.Stopped, IsCancellationRequested: false } => true,
         _ => false,
     };
+
+    /// <summary>
+    /// Returns the task of <paramref name="engine"/> that its own work cancelled with an
+    /// <see cref="EngineTaskException"/> and that ended a task required for running: that required task itself, or a
+    /// task it depends on, directly or not. Null if there is none.
+    /// </summary>
+    /// <remarks>
+    /// Only a task that ended a required one counts: the engine's state, and so whether it is started again, depends
+    /// only on the required tasks. So an optional task cancelled by its work that no required task depends on does not
+    /// keep the engine from being started again; one that a required task depends on does, since another start would
+    /// end the same way. The engine may also be Faulted, by another required task that failed; it is not started again
+    /// either, for the same reason.
+    /// </remarks>
+    private static EngineTask CancelledByItsWork(IEngine engine) =>
+        (engine as BaseEngine)?.Tasks.Values
+            .Where(t => t.RequiredForRunning && t.IsFailed)
+            .SelectMany(t => t.GetThisAndAllDependsOn())
+            .FirstOrDefault(t => t.State == EngineTaskState.Cancelled && t.CancelledByTheWork);
+
+    /// <summary>
+    /// Returns false for the failure of an engine whose task was cancelled by its own work, which another start cannot
+    /// change: this task then ends Failed without a retry under the descriptor's restart policy.
+    /// </summary>
+    /// <inheritdoc/>
+    internal override bool RetriesFailureOf(Exception exception) => exception is not EngineCancelledByItsWorkException;
 
     /// <summary>
     /// Resets this task and the associated engine tasks in preparation for re-execution.
@@ -337,8 +372,19 @@ public partial class EngineKickStartTask : EngineTask
     private sealed class EngineNotStartedException(string message) : EvaluateException(message);
 
     /// <summary>
+    /// Thrown when the engine stopped because one of its required tasks was cancelled by its own work: not retried (see
+    /// <see cref="RetriesFailureOf"/>).
+    /// </summary>
+    /// <remarks>
+    /// An <see cref="EvaluateException"/>, like <see cref="EngineNotStartedException"/>, and not an
+    /// <see cref="EngineTaskException"/>, which would end this task Cancelled.
+    /// </remarks>
+    private sealed class EngineCancelledByItsWorkException(string message) : EvaluateException(message);
+
+    /// <summary>
     /// The logger of the kick-start task: it logs an engine that did not start as a warning, not as an error, while the
-    /// restart policy can still start the engine again.
+    /// restart policy can still start the engine again. An engine not started again because one of its tasks was
+    /// cancelled by its own work is not retried, so that is logged as an error.
     /// </summary>
     /// <remarks>
     /// An engine that did not start only sums up the failure (or cancellation) of one of the engine's own tasks, which
