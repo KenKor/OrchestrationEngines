@@ -77,7 +77,8 @@ public partial class EngineCoordinator : IDisposable
   private MechanicEngine _mechanic;
 
   // Governs coordinator and mechanic lifetime. Not linked to the application token, which outlives every generation:
-  // the shutdown disposes _applicationRegistration instead, so a shut-down coordinator's source is let go (#107).
+  // the shutdown disposes _applicationRegistration instead, so a shut-down coordinator's source is let go (#107). The
+  // source itself is disposed only by Dispose: CancellationToken and the shut-down coordinator's work still read it.
   private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
   private readonly CancellationTokenRegistration _applicationRegistration;
   private readonly string _coordinatorName;
