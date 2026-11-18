@@ -238,8 +238,9 @@ public partial class EngineKickStartTask : EngineTask
     /// the engine's own token is still live, typically through an <see cref="OperationCanceledException"/> that is not
     /// ours (a timed-out HTTP or database call), and not one cancelled by its own work (an
     /// <see cref="EngineTaskException"/>), which ends the kick-start without a retry. Such a failure is usually
-    /// transient, so it is retried like a fault. An engine whose token was cancelled was stopped on purpose and is never started again; neither is a Stopped
-    /// engine that is not a <see cref="BaseEngine"/>, since there is no telling why it stopped.
+    /// transient, so it is retried like a fault. An engine whose token was cancelled was stopped on purpose and is never
+    /// started again; neither is a Stopped engine that is not a <see cref="BaseEngine"/>, since there is no telling why
+    /// it stopped.
     /// </remarks>
     private static bool NeedsResetBeforeRestart(IEngine engine) => engine switch
     {
@@ -250,17 +251,22 @@ public partial class EngineKickStartTask : EngineTask
     };
 
     /// <summary>
-    /// Returns the task required for running of <paramref name="engine"/> that its own work cancelled with an
-    /// <see cref="EngineTaskException"/>, or null if there is none.
+    /// Returns the task of <paramref name="engine"/> that its own work cancelled with an
+    /// <see cref="EngineTaskException"/> and that ended a task required for running: that required task itself, or a
+    /// task it depends on, directly or not. Null if there is none.
     /// </summary>
     /// <remarks>
-    /// Only a required task counts: the engine's state, and so whether it is started again, depends only on those. The
-    /// engine may also be Faulted, by another required task that failed; it is not started again either, since the
-    /// task cancelled by its work would end the same way.
+    /// Only a task that ended a required one counts: the engine's state, and so whether it is started again, depends
+    /// only on the required tasks. So an optional task cancelled by its work that no required task depends on does not
+    /// keep the engine from being started again; one that a required task depends on does, since another start would
+    /// end the same way. The engine may also be Faulted, by another required task that failed; it is not started again
+    /// either, for the same reason.
     /// </remarks>
     private static EngineTask CancelledByItsWork(IEngine engine) =>
-        (engine as BaseEngine)?.Tasks.Values.FirstOrDefault(t =>
-            t.RequiredForRunning && t.State == EngineTaskState.Cancelled && t.CancelledByTheWork);
+        (engine as BaseEngine)?.Tasks.Values
+            .Where(t => t.RequiredForRunning && t.IsFailed)
+            .SelectMany(t => t.GetThisAndAllDependsOn())
+            .FirstOrDefault(t => t.State == EngineTaskState.Cancelled && t.CancelledByTheWork);
 
     /// <summary>
     /// Returns false for the failure of an engine whose task was cancelled by its own work, which another start cannot

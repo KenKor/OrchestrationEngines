@@ -22,9 +22,10 @@ namespace OrchestrationEngines.Tasks;
 /// An <see cref="EngineTaskException"/> thrown by a task's work is not retried by that task: it ends
 /// <see cref="EngineTaskState.Cancelled"/>, with "Cancelled by the work: " and the message as its reason, also when it
 /// has a recovery policy. Derive from it for a condition that another attempt cannot change. A required task of an
-/// engine that ends this way stops the engine, it does not fault it, and the engine is not started again: its
-/// kick-start ends <see cref="EngineTaskState.Failed"/> without a retry, whatever its descriptor's restart policy. The
-/// tasks that depend on the task give its reason in theirs. A reset of the task (or of the kick-start) runs it again.
+/// engine that ends this way, or one that a required task depends on, stops the engine, it does not fault it, and the
+/// engine is not started again: its kick-start ends <see cref="EngineTaskState.Failed"/> without a retry, whatever its
+/// descriptor's restart policy. The tasks that depend on the task give its reason in theirs. A reset of the task (or of
+/// the kick-start) runs it again.
 /// </para>
 /// </remarks>
 public abstract class EngineTaskException : Exception

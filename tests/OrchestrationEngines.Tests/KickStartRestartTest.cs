@@ -50,7 +50,27 @@ public class KickStartRestartTest
     }
   }
 
-  private static EngineCoordinator CreateCoordinator(NetworkEngine engine)
+  /// <summary>
+  /// An engine whose optional load throws an EngineTaskException, and a required index that depends on the load.
+  /// </summary>
+  private sealed class OptionalLoadEngine() : BaseEngine(NullLogger.Instance)
+  {
+    private int _loads;
+
+    public int Loads => Volatile.Read(ref _loads);
+
+    protected override void SetUpTasks()
+    {
+      var load = CreateTask("Load", _ =>
+      {
+        Interlocked.Increment(ref _loads);
+        throw new TestTaskException();
+      }, requiredForRunning: false);
+      CreateTask("Index", _ => Task.CompletedTask).AddDependsOn(load);
+    }
+  }
+
+  private static EngineCoordinator CreateCoordinator(IEngine engine)
   {
     var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
@@ -131,6 +151,26 @@ public class KickStartRestartTest
     loaded.Should().BeSameAs(engine);
     engine.State.Should().Be(EngineState.Ready);
     engine.Loads.Should().Be(2);
+  }
+
+  /// <summary>
+  /// Verifies that an engine is not started again when a task not required for running is cancelled by its own work
+  /// and a required task depends on it: the required task then ends DependencyFailed, which stops the engine, and
+  /// another start would run the optional task into the same condition.
+  /// </summary>
+  [Fact]
+  public async Task EngineKickStartTask_RequiredTaskDependsOnTaskCancelledByItsWork_DoesNotStartTheEngineAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new OptionalLoadEngine();
+    var coordinator = CreateCoordinator(engine);
+
+    var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
+
+    loaded.Should().BeNull();
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines,
+      MustComplete, "the failed kick-start must reach the coordinator");
+    engine.Loads.Should().Be(1);
   }
 
   /// <summary>

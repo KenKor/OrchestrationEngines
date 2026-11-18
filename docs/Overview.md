@@ -439,12 +439,12 @@ for a condition another attempt cannot change) thrown by a task's work ends that
 the work: " and its message as the reason. So an engine whose creation or context task throws one is not created again.
 A generation switch's restart factory that returns the previous engine instead of a new one is such a case
 (`EngineReturnedPreviousInstanceException`). Such a task is `Cancelled`, not `Failed`, so it is logged as a Warning, not
-an Error, and the tasks and engines that depend on it are cancelled with it. A required task of the engine itself
-that ends this way stops the engine (it does not fault it), and the engine is not started again: the kick-start ends
-`Failed` without a retry, whatever the restart policy, so a lookup gets null and the coordinator hears of the failure as
-of any other engine that did not start. The tasks that depend on it add its reason to theirs ("Cancelled
-because 'Load', which it depends on, was cancelled. Cancelled by the work: ..."). A reset of the task runs it again.
-Every other exception is retried.
+an Error, and the tasks and engines that depend on it are cancelled with it. A required task of the engine itself that
+ends this way, or one that a required task depends on, stops the engine (it does not fault it), and the engine is not
+started again: the kick-start ends `Failed` without a retry, whatever the restart policy, so a lookup gets null and the
+coordinator hears of the failure as of any other engine that did not start. The tasks that depend on it add its reason
+to theirs ("Cancelled because 'Load', which it depends on, was cancelled. Cancelled by the work: ..."). A reset of the
+task runs it again. Every other exception is retried.
 
 When the descriptor's recovery retries an engine's kick-start, the engine is started again with a new task set if it
 is `Faulted`, or `Stopped` by one of its own tasks being cancelled from outside while the engine itself is live (not
