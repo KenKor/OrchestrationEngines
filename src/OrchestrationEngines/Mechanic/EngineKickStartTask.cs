@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Threading;
@@ -262,11 +263,26 @@ public partial class EngineKickStartTask : EngineTask
     /// end the same way. The engine may also be Faulted, by another required task that failed; it is not started again
     /// either, for the same reason.
     /// </remarks>
-    private static EngineTask CancelledByItsWork(IEngine engine) =>
-        (engine as BaseEngine)?.Tasks.Values
-            .Where(t => t.RequiredForRunning && t.IsFailed)
-            .SelectMany(t => t.GetThisAndAllDependsOn())
-            .FirstOrDefault(t => t.State == EngineTaskState.Cancelled && t.CancelledByTheWork);
+    private static EngineTask CancelledByItsWork(IEngine engine)
+    {
+        if (engine is not BaseEngine baseEngine)
+            return null;
+
+        // One walk over the failed required tasks and their dependencies, each task visited once.
+        var toVisit = new Stack<EngineTask>(baseEngine.Tasks.Values.Where(t => t.RequiredForRunning && t.IsFailed));
+        var visited = new HashSet<EngineTask>();
+        while (toVisit.Count > 0)
+        {
+            var task = toVisit.Pop();
+            if (!visited.Add(task))
+                continue;
+            if (task.State == EngineTaskState.Cancelled && task.CancelledByTheWork)
+                return task;
+            foreach (var dependency in task.DependsOn)
+                toVisit.Push(dependency);
+        }
+        return null;
+    }
 
     /// <summary>
     /// Returns false for the failure of an engine whose task was cancelled by its own work, which another start cannot
