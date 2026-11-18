@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
-using OrchestrationEngines.Engine;
 using Xunit;
 using static OrchestrationEngines.Tests.SwitchTestEngines;
 
