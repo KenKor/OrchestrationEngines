@@ -221,9 +221,12 @@ Key properties:
   engine's context task and every task that depends on it as `ResetTasksAsync` does (dependents first, then started
   again). On a coordinator that a generation switch has replaced (once it has handed over), it goes to the newer
   generation, as `RefreshEngineContextAsync` and `ResetTasksForEngineAsync` do; a name that generation does not have
-  throws an `ArgumentException`. A call that arrives while a switch runs, before it hands over, can still act on the
-  old generation. On a coordinator that is shut down otherwise it throws: an `OperationCanceledException` with the
-  dispatcher (the default), whose queue no longer takes work, and an `InvalidOperationException` without it
+  throws an `ArgumentException`. A call that arrives while a switch that rebuilds the engine from scratch runs, before
+  it hands over, waits until the switch has started the next generation and goes there too. On a coordinator that is
+  shut down otherwise it throws: an `OperationCanceledException` with the dispatcher (the default), whose queue no
+  longer takes work, and an `InvalidOperationException` without it. When the new context fails, the engine is given
+  up and ends Faulted ("not started again"), not Ready on the previous context, also when a start for an earlier
+  invalidation was still under way
 
 Important implementations:
 
@@ -284,17 +287,31 @@ Resets:
 - `BaseEngine.ResetTasksAsync(taskNames, resetDependentTasks)` resets tasks by name (ignoring case), and with
   `resetDependentTasks` every task that depends on them, directly or not; the coordinator's
   `ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks)` does it for one engine, once its start has
-  settled (it is `Ready`, or its start failed); after a generation switch, on the next generation. An unknown name
-  throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. The
-  tasks then run again: a Ready engine goes to `Starting` and back to `Ready`.
+  settled (it is `Ready`, or its start failed); after a generation switch, on the next generation. A task that hangs
+  during the engine's first start can be reset without that wait through the engine itself
+  (`GetEngineIfCreated(engineName)`, cast to `BaseEngine`, then `ResetTasksAsync`), or its run bounded with the task's `Timeout`. An unknown name
+  throws an `ArgumentException`, and a stopped engine an `InvalidOperationException`, before anything is reset. Through
+  the coordinator, an engine that had started and is stopped before or during the reset throws an
+  `EngineTaskNotReadyException` for its kick-start, `Cancelled`, which a generation switch hands on to the next
+  generation; an engine that was not created throws an `InvalidOperationException` with its kick-start's exception
+  inside. The tasks then run again: a Ready engine
+  goes to `Starting` and back to `Ready`. While a restart is prepared (the kick-start ends the engine's set to start it again
+  with a new one, after a context change or for a retry), `ResetTasksAsync` waits until the engine has started again,
+  which after a context change lasts until the kick-start has run again on the new context, and then returns without
+  resetting: the new set's tasks run fresh. If the restart is given up or its set-up fails, it throws an
+  `InvalidOperationException`; if the engine is stopped meanwhile, the stopped one above. `TriggerResetAsync` does not
+  wait and resets nothing then.
 - Every reset of several tasks (also `TriggerResetAsync`) goes in two passes. First it ends the current run of every
   task (its outcome is dropped, its token cancelled), dependents before the tasks they depend on, so no dependent goes
   on running on a dependency that is being reset; until its reset, a task whose run was ended ignores its dependencies'
   outcomes. Then it puts the tasks back in Created, dependencies first, so no started task of the set starts again (by a
   caller, or by a dependency's run) on a dependency of the set that is still to be reset. A task whose reset throws is
-  cancelled, so nothing waits on it for good. The other tasks are reset anyway, started again and the engine state
-  recomputed, as after a reset that succeeds; then the caller gets the reset's exception (and a start that fails too
-  is logged). A reset does not wait for the work it cancels: work that ignores its token goes on until it checks.
+  cancelled, so nothing waits on it for good, unless it had already completed: it then keeps its state (its fail
+  reason cleared), but its completion was already replaced, so it no longer counts as completed and a wait on it (the
+  `EnsureReady` calls) ends only after a later reset of the task succeeds. The other tasks are reset anyway, started
+  again and the engine state recomputed, as after a reset that succeeds; then the caller gets the reset's exception
+  (and a start that fails too is logged). A reset does not wait for the work it cancels: work that ignores its token
+  goes on until it checks.
 
 Time: every task has a `TimeProvider` (its time-out, its run times, the backoff of a policy set with `SetRecovery`);
 `BaseEngine.TimeProvider` passes one to the tasks an engine creates. Tests pass a clock they advance themselves.

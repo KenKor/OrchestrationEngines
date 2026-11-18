@@ -55,14 +55,15 @@ public class ContextFanOutTest
   }
 
   /// <summary>
-  /// An engine that records, on each load, the value of the context it was set up with, and whose start, once
-  /// armed, ends only when the test lets it. Held after the set-up, its load has run by then, but the kick-start that
+  /// An engine that records the value of its context on each set-up (<see cref="SetUpWith"/>) and on each load
+  /// (<see cref="LoadedWith"/>), and whose start, once armed, ends only when the test lets it. Held after the set-up, its load has run by then, but the kick-start that
   /// started it is still waiting for the start. Held before the set-up, the engine is still Created while the
   /// kick-start starts it.
   /// </summary>
   private sealed class HeldStartEngine : BaseEngine
   {
     private readonly ConcurrentQueue<string> _loadedWith = new();
+    private readonly ConcurrentQueue<string> _setUpWith = new();
     private readonly bool _withMonitor;
     private TaskCompletionSource _hold;
     private bool _holdBeforeSetUp;
@@ -75,6 +76,12 @@ public class ContextFanOutTest
       _withMonitor = withMonitor;
 
     public IReadOnlyCollection<string> LoadedWith => _loadedWith;
+
+    /// <summary>
+    /// The context of every set-up of the engine's tasks, in order. Unlike <see cref="LoadedWith"/>, it does not depend on
+    /// the Load task having run: an engine given up right after its start may stop that task before it runs.
+    /// </summary>
+    public IReadOnlyCollection<string> SetUpWith => _setUpWith;
 
     /// <summary>Completed once a held start has begun waiting for the test.</summary>
     public TaskCompletionSource StartHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -114,6 +121,7 @@ public class ContextFanOutTest
     protected override void SetUpTasks()
     {
       var loadWith = (Context.Inner ?? Context) is ValueContext v ? v.Value : "<none>";
+      _setUpWith.Enqueue(loadWith);
       CreateTask("Load", _ =>
       {
         _loadedWith.Enqueue(loadWith);
@@ -161,6 +169,34 @@ public class ContextFanOutTest
     if (dependsOn != null)
       descriptor.AddDependsOn(dependsOn);
     return descriptor;
+  }
+
+  /// <summary>
+  /// Registers <paramref name="session"/> on a new coordinator, without restarts, with a context taken from
+  /// <paramref name="current"/> that fails for workspace-C once the test completes the returned gate, and starts it.
+  /// </summary>
+  private static async Task<(InspectableCoordinator coordinator, TaskCompletionSource contextForCEntered,
+    TaskCompletionSource contextGate)> StartWithContextFailingForCAsync(HeldStartEngine session, Func<string> current)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var coordinator = new InspectableCoordinator();
+    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+      .SetContextFactory(async _ =>
+      {
+        var value = current();
+        if (value == "workspace-C")
+        {
+          contextForCEntered.TrySetResult();
+          await contextGate.Task;
+          throw new InvalidOperationException("workspace-C cannot be opened");
+        }
+        return new ValueContext(value);
+      })
+      .WithoutRestarts();
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    return (coordinator, contextForCEntered, contextGate);
   }
 
   /// <summary>
@@ -403,24 +439,8 @@ public class ContextFanOutTest
   {
     var ct = TestContext.Current.CancellationToken;
     var current = "workspace-A";
-    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var session = new HeldStartEngine();
-    var coordinator = new InspectableCoordinator();
-    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
-      .SetContextFactory(async _ =>
-      {
-        var value = current;
-        if (value == "workspace-C")
-        {
-          contextForCEntered.TrySetResult();
-          await contextGate.Task;
-          throw new InvalidOperationException("workspace-C cannot be opened");
-        }
-        return new ValueContext(value);
-      })
-      .WithoutRestarts();
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
     var hold = session.HoldNextStart();
 
     current = "workspace-B";
@@ -440,6 +460,130 @@ public class ContextFanOutTest
     await Wait.UntilAsync(() => ready.IsCompleted, MustComplete,
       "the restart is given up, so the wait for the engine ends");
     session.State.Should().Be(EngineState.Faulted);
+  }
+
+  /// <summary>
+  /// Verifies that an engine ends Faulted when an invalidation finds it still Created, the next kick-start's context then
+  /// fails, and only after that the ended run starts the engine with the previous context (#86 item 7). Without this,
+  /// the engine stayed Ready on the previous context, which looks the same as a right answer.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ContextFailsBeforeTheEndedRunStartsTheEngine_FaultsIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var session = new HeldStartEngine();
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var kickStart = coordinator.KickStartOf("Session");
+    var hold = session.HoldNextStart(beforeSetUp: true);
+
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    session.State.Should().Be(EngineState.Created, "the start for workspace-B has not set the engine up yet");
+    var startingRun = kickStart.LatestRunEnded;
+
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    contextGate.SetResult();
+    await Wait.UntilAsync(() => kickStart.State.IsCompleted(), MustComplete, "the run for workspace-C fails");
+    session.LoadedWith.Should().Equal(["workspace-A"], "the ended run has not started the engine yet");
+    hold.SetResult();
+    await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
+    await Task.WhenAny(Task.WhenAll(first, second)).WaitAsync(MustComplete, ct);
+
+    var ready = session.EnsureReadyAsync();
+    await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the engine is given up, so the wait for it ends");
+    // The engine is given up as soon as its start returns, so its Load task for workspace-B may not have run yet: check
+    // the set-up instead.
+    session.SetUpWith.Should().Equal("workspace-A", "workspace-B");
+    session.State.Should().Be(EngineState.Faulted, "the engine was started with the previous context");
+  }
+
+  /// <summary>
+  /// Verifies that an engine ends Faulted when an invalidation finds it still Created, the ended run then starts it with
+  /// the previous context, and only after that the next kick-start's context fails (#86 item 7). Nothing restarts the
+  /// engine then, so it must not stay Ready on the previous context.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ContextFailsAfterTheEndedRunStartsTheEngine_FaultsIt()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var session = new HeldStartEngine();
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var hold = session.HoldNextStart(beforeSetUp: true);
+
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    session.State.Should().Be(EngineState.Created, "the start for workspace-B has not set the engine up yet");
+    var startingRun = coordinator.KickStartOf("Session").LatestRunEnded;
+
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    hold.SetResult();
+    await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => session.State == EngineState.Ready, MustComplete,
+      "the ended run starts the engine with workspace-B");
+    contextGate.SetResult();
+    await Task.WhenAny(Task.WhenAll(first, second)).WaitAsync(MustComplete, ct);
+
+    await Wait.UntilAsync(() => session.State == EngineState.Faulted, MustComplete,
+      "the engine started with the previous context is given up");
+    var ready = session.EnsureReadyAsync();
+    await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the wait for the given-up engine ends");
+    session.LoadedWith.Should().Equal("workspace-A", "workspace-B");
+  }
+
+  /// <summary>
+  /// Verifies that the next kick-start run waits until the engine started with the previous context has been given up
+  /// (#86 item 7). Otherwise a run for a new invalidation finds the engine still Ready on the previous context and
+  /// completes, and the give-up then faults the engine under it: the kick-start and the engine disagree.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_AgainWhileTheEngineIsGivenUp_TheKickStartWaitsForTheGiveUp()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var current = "workspace-A";
+    var session = new HeldStartEngine(withMonitor: true);
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var kickStart = coordinator.KickStartOf("Session");
+    var hold = session.HoldNextStart(beforeSetUp: true);
+
+    // As in ...ContextFailsAfterTheEndedRunStartsTheEngine_FaultsIt, with the give-up held while it ends the tasks.
+    current = "workspace-B";
+    var first = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await session.StartHeld.Task.WaitAsync(MustComplete, ct);
+    var startingRun = kickStart.LatestRunEnded;
+    current = "workspace-C";
+    var second = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await contextForCEntered.Task.WaitAsync(MustComplete, ct);
+    hold.SetResult();
+    await Task.WhenAny(startingRun).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => session.State == EngineState.Ready, MustComplete,
+      "the ended run starts the engine with workspace-B");
+    var endHold = session.HoldNextEnd();
+    contextGate.SetResult();
+    await session.EndHeld.Task.WaitAsync(MustComplete, ct);
+
+    current = "workspace-D";
+    var third = coordinator.InvalidateContextForEngineAsync("Session", ct);
+    await Task.WhenAny(Task.WhenAll(first, second, third)).WaitAsync(MustComplete, ct);
+    // The run for workspace-D must not end while the give-up is held: it would find the engine as it was.
+    await Task.Delay(TimeSpan.FromMilliseconds(300), ct);
+    kickStart.State.IsCompleted().Should().BeFalse("the run for workspace-D waits until the give-up has ended");
+    endHold.SetResult();
+
+    await Wait.UntilAsync(() => kickStart.State.IsCompleted(), MustComplete, "the run for workspace-D ends");
+    var ready = session.EnsureReadyAsync();
+    await Wait.UntilAsync(() => ready.IsCompleted, MustComplete, "the wait for the given-up engine ends");
+    // Until #131: the run for workspace-D does not reload a given-up engine. The kick-start agreeing with the engine is
+    // what this test is about, and holds either way.
+    session.State.Should().Be(EngineState.Faulted, "the engine was given up, and nothing reloads it yet (#131)");
+    kickStart.State.Should().NotBe(EngineTaskState.CompletedWithSuccess, "the kick-start agrees with the engine");
   }
 
   /// <summary>

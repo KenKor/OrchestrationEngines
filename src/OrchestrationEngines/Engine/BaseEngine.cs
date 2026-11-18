@@ -904,7 +904,7 @@ public abstract partial class BaseEngine : IEngine
   /// dependents before the tasks they depend on; then the tasks go back to Created, dependencies first. So no dependent
   /// goes on running on a dependency that is being reset, and no started task of the set can start again (by a caller,
   /// or by a dependency's run completing) on a dependency of the set that is still to be reset. A task of the set that
-  /// is still Created is only started after the passes.
+  /// is still Created is not ended or reset; a dependency can still start it.
   /// </para>
   ///
   /// <para>
@@ -915,7 +915,16 @@ public abstract partial class BaseEngine : IEngine
   /// <param name="tasks">The tasks.</param>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks of the engine that depend on one of
   /// <paramref name="tasks"/> form a cycle (possible only for tasks added after the set-up); nothing is reset.</exception>
-  public async Task TriggerResetAsync(IEnumerable<EngineTask> tasks = null)
+  public Task TriggerResetAsync(IEnumerable<EngineTask> tasks = null) =>
+    TriggerResetCoreAsync(tasks, taskSet: null, dependents: null);
+
+  /// <summary>
+  /// <see cref="TriggerResetAsync"/>, with the engine's tasks and their map of direct dependents
+  /// (<see cref="DirectDependents"/>) when the caller has already built it, or null for both (see
+  /// <see cref="DependentsFirst"/>).
+  /// </summary>
+  private async Task TriggerResetCoreAsync(IEnumerable<EngineTask> tasks, IEnumerable<EngineTask> taskSet,
+    Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     // A set that a prepared restart replaces is not reset and started again (see PrepareRestartAsync).
     if (RestartPending)
@@ -937,7 +946,7 @@ public abstract partial class BaseEngine : IEngine
     var notStarted = resetTasks.Where(t => t.State == EngineTaskState.Created).ToArray();
     var toReset = resetTasks.Except(notStarted).ToArray();
     // Ordered before any reset, so a cycle throws with nothing reset.
-    var levels = DependentsFirst(toReset);
+    var levels = DependentsFirst(toReset, taskSet, dependents);
     LogFiringResetTriggers();
     // A reset that throws (an OnResetEnteredAsync override) leaves the other tasks reset, in Created: they are started
     // and the state recomputed anyway, and only then is the reset's failure rethrown (#58, items 3 and 23).
@@ -988,13 +997,18 @@ public abstract partial class BaseEngine : IEngine
   /// The runs of dependents are ended before those of the tasks they depend on, and no started task of the set starts
   /// again on a dependency of the set that is still to be reset (see <see cref="TriggerResetAsync"/>). A task named twice or
   /// reached twice is reset once. A reset ends the current run: its outcome is dropped and its token cancelled; it does
-  /// not wait for the work to end, so work that ignores its token goes on until it checks. While a restart is prepared nothing is reset, as with
-  /// <see cref="TriggerResetAsync"/>: the set is about to be replaced.
+  /// not wait for the work to end, so work that ignores its token goes on until it checks. While a restart is prepared
+  /// (<see cref="ResetAllTasksAsync"/> or <see cref="ResetFailedTasksAsync"/>, as the kick-start does when the context
+  /// changes or when it starts the engine again), the set is about to be replaced: the reset waits until the engine has
+  /// started again, which after a context change lasts until the kick-start has run again on the new context, and then
+  /// returns without resetting the new set, whose tasks run fresh. If the restart is given up (<see cref="AbandonRestart"/>), its set-up fails, or the
+  /// engine is stopped meanwhile, it throws. <see cref="TriggerResetAsync"/> does not wait: it returns at once.
   /// </remarks>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
   /// <param name="resetDependentTasks">Whether to reset the tasks that depend on them too.</param>
   /// <exception cref="ArgumentException">The engine has no task of one of the names.</exception>
-  /// <exception cref="InvalidOperationException">The engine is stopped, so its tasks would not run again.</exception>
+  /// <exception cref="InvalidOperationException">The engine is stopped, so its tasks would not run again; or a restart
+  /// was prepared and then given up, or its set-up failed (the set-up's exception inside), so no new set runs.</exception>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks that depend on the tasks to reset form a cycle
   /// (possible only for tasks added after the set-up); nothing is reset.</exception>
   public async Task ResetTasksAsync(IEnumerable<string> taskNames, bool resetDependentTasks)
@@ -1010,12 +1024,45 @@ public abstract partial class BaseEngine : IEngine
       named.Add(task);
     }
     // A stopped engine's reset tasks would sit in Created for good (TriggerResetAsync does not start them again).
+    ThrowIfStopped();
+    // The set is about to be replaced (see PrepareRestartAsync): wait for the restart, then answer by its outcome
+    // (#58 item 4). The outcome is the restart's own: the new set is published before the restart is done, so the set
+    // read above can already be the new one.
+    if (Volatile.Read(ref _restart) is { } restart)
+    {
+      var givenUp = await restart.Task.ConfigureAwait(false);
+      ThrowIfStopped();
+      if (givenUp != null)
+        throw new InvalidOperationException($"Engine '{EngineName}' is not started again, so its tasks are not reset.",
+          givenUp);
+      // Its set-up failed: no set was built, and nothing the reset asked for runs.
+      if (_setUpException is { } setUpException)
+        throw new InvalidOperationException(
+          $"Engine '{EngineName}' could not set up its tasks again, so its tasks are not reset.", setUpException);
+      // Built: the new set's tasks run fresh, which is what the reset asked for.
+      return;
+    }
+
+    // Built once: the reset's ordering (DependentsFirst) uses the same map, over the same set.
+    IEnumerable<EngineTask> taskSet = null;
+    Dictionary<EngineTask, List<EngineTask>> dependents = null;
+    if (resetDependentTasks)
+    {
+      // A published set is never changed (see _tasks): no copy needed.
+      taskSet = tasks.Values;
+      dependents = DirectDependents(taskSet);
+      AddAllDependents(named, named, dependents);
+    }
+    await TriggerResetCoreAsync(named.ToArray(), taskSet, dependents).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// Throws the "stopped" <see cref="InvalidOperationException"/> of <see cref="ResetTasksAsync"/> if the engine is stopped.
+  /// </summary>
+  private void ThrowIfStopped()
+  {
     if (IsCancellationRequested)
       throw new InvalidOperationException($"Engine '{EngineName}' is stopped, so its tasks cannot be run again.");
-
-    if (resetDependentTasks)
-      AddAllDependents(named.ToArray(), named, DirectDependents(tasks.Values));
-    await TriggerResetAsync(named.ToArray()).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1071,12 +1118,19 @@ public abstract partial class BaseEngine : IEngine
   /// or not, form a cycle (possible only for tasks added after the set-up, which
   /// <see cref="CheckForCyclicDependecies()"/> did not see). The task in the exception is the one of
   /// <paramref name="tasks"/> that the cycle depends on, which need not be in the cycle itself.</exception>
-  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks)
+  /// <param name="tasks">The tasks to put in levels.</param>
+  /// <param name="taskSet">The engine's tasks as the caller read them, holding <paramref name="tasks"/>; null to read
+  /// them here.</param>
+  /// <param name="dependents">The map of direct dependents over <paramref name="taskSet"/> (see
+  /// <see cref="DirectDependents"/>), if the caller has already built it; null to build it here. A map over another set
+  /// would miscount: a task added since has a dependency's count go down without having been counted.</param>
+  private List<List<EngineTask>> DependentsFirst(EngineTask[] tasks, IEnumerable<EngineTask> taskSet,
+    Dictionary<EngineTask, List<EngineTask>> dependents)
   {
     if (tasks.Length == 0)
       return new List<List<EngineTask>>();
-    var all = _tasks.Values.Union(tasks).ToArray();
-    var dependents = DirectDependents(all);
+    var all = (taskSet ?? _tasks.Values).Union(tasks).ToArray();
+    dependents ??= DirectDependents(all);
     // Kahn's algorithm over the reversed graph: a task is placed once all its direct dependents are.
     var remaining = all.ToDictionary(t => t, t => dependents.TryGetValue(t, out var d) ? d.Count : 0);
     var level = all.ToDictionary(t => t, _ => 0);
@@ -1116,8 +1170,10 @@ public abstract partial class BaseEngine : IEngine
   /// <para>
   /// In the second pass a task goes back to Created only once the tasks of the set it depends on have. So whatever starts
   /// it (a caller, or a dependency's new run completing) waits for those dependencies' next run. A task whose reset
-  /// throws is cancelled, so whoever waits on it is released; the failure is reported once every level has been reset:
-  /// the other tasks are reset anyway.
+  /// throws is cancelled, so whoever waits on it is released, unless it had already completed: it then keeps its state
+  /// (its fail reason cleared), but its completion latch was already replaced, so a wait on it ends only after a later
+  /// reset of the task succeeds. The failure is reported once every level has been reset: the other tasks are reset
+  /// anyway.
   /// </para>
   /// </remarks>
   private static async Task ResetInTwoPassesAsync(List<List<EngineTask>> levels)
@@ -1388,9 +1444,10 @@ public abstract partial class BaseEngine : IEngine
 
   /// <summary>
   /// Set while a restart is prepared and the next task set has not been built yet (see <see cref="StartAsync"/>);
-  /// completed when it has been built, or when the engine stops.
+  /// completed when it has been built, or when the engine stops, with null; with the engine's fault cause when it is
+  /// given up (<see cref="AbandonRestart"/>).
   /// </summary>
-  private TaskCompletionSource _restart;
+  private TaskCompletionSource<Exception> _restart;
 
   private bool RestartPending => Volatile.Read(ref _restart) != null;
 
@@ -1440,7 +1497,7 @@ public abstract partial class BaseEngine : IEngine
   {
     // Allocated only when none is armed; the compare-exchange still decides between two that arm at once.
     if (Volatile.Read(ref _restart) == null)
-      Interlocked.CompareExchange(ref _restart, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), null);
+      Interlocked.CompareExchange(ref _restart, new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously), null);
     ReleaseRestartIfCancelled();
   }
 
@@ -1501,9 +1558,10 @@ public abstract partial class BaseEngine : IEngine
   private Task WaitForRestartAsync() => Volatile.Read(ref _restart)?.Task ?? Task.CompletedTask;
 
   /// <summary>
-  /// Ends a prepared restart: the next task set has been built, or the engine stopped. Releases whoever waits for it.
+  /// Ends a prepared restart: the next task set has been built, or the engine stopped, or the restart is given up
+  /// (<paramref name="givenUp"/>, the fault cause that says why). Releases whoever waits for it.
   /// </summary>
-  private void CompleteRestart() => Interlocked.Exchange(ref _restart, null)?.TrySetResult();
+  private void CompleteRestart(Exception givenUp = null) => Interlocked.Exchange(ref _restart, null)?.TrySetResult(givenUp);
 
   /// <summary>
   /// Gives up a prepared restart that will not be carried out (see <see cref="PrepareRestartAsync"/>): the engine is
@@ -1523,9 +1581,9 @@ public abstract partial class BaseEngine : IEngine
     LogRestartAbandoned(reason);
     // Stopping is final: a cancelled engine is Stopped, not Faulted, and has no fault cause. The state gate covers a
     // cancel that comes before it decides; the trailing call covers one that comes after it decided Faulted.
-    SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Faulted,
-      new InvalidOperationException($"Engine '{EngineName}' is not started again: {reason}"));
-    CompleteRestart();
+    var givenUp = new InvalidOperationException($"Engine '{EngineName}' is not started again: {reason}");
+    SetStateSynchronized(() => IsCancellationRequested ? EngineState.Stopped : EngineState.Faulted, givenUp);
+    CompleteRestart(givenUp);
     ReleaseRestartIfCancelled();
   }
 

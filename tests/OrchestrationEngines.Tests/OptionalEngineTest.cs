@@ -20,16 +20,36 @@ public class OptionalEngineTest
   private static readonly TimeSpan MustStayPending = TimeSpan.FromMilliseconds(500);
 
   /// <summary>
-  /// An engine with one load task that waits for a gate the test controls.
+  /// An engine with one load task that waits for a gate the test controls; counts its loads.
   /// </summary>
   private sealed class GatedEngine(Func<Task> loadGate) : BaseEngine(NullLogger.Instance)
   {
+    private int _loads;
+
     public GatedEngine(Task loadGate)
       : this(() => loadGate)
     {
     }
 
-    protected override void SetUpTasks() => CreateTask("Load", async _ => await loadGate().ConfigureAwait(false));
+    /// <summary>
+    /// The loads that have begun.
+    /// </summary>
+    public int Loads => Volatile.Read(ref _loads);
+
+    protected override void SetUpTasks() => CreateTask("Load", async _ =>
+    {
+      Interlocked.Increment(ref _loads);
+      await loadGate().ConfigureAwait(false);
+    });
+  }
+
+  /// <summary>
+  /// A load gate that lets the first load complete at once, and every later one wait for <paramref name="reload"/>.
+  /// </summary>
+  private static Func<Task> FirstLoadAtOnce(Task reload)
+  {
+    var loads = 0;
+    return () => Interlocked.Increment(ref loads) == 1 ? Task.CompletedTask : reload;
   }
 
   private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
@@ -196,7 +216,6 @@ public class OptionalEngineTest
     var requiredFired = new ManualResetEventSlim();
     var optionalDone = new ManualResetEventSlim();
     var reloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var loads = 0;
     // The optional engine's call waits, after its trigger, until the required engine's call has fired its own; the
     // required engine's call then waits, before its reset, until the optional engine's call has ended.
     var logger = new OnMessageLogger("depending on and incl. Optional.", () =>
@@ -211,8 +230,7 @@ public class OptionalEngineTest
       }));
     var coordinator = CreateCoordinator(logger);
     var optionalEngine = new GatedEngine(Task.CompletedTask);
-    var requiredEngine = new GatedEngine(() =>
-      Interlocked.Increment(ref loads) == 1 ? Task.CompletedTask : reloadGate.Task);
+    var requiredEngine = new GatedEngine(FirstLoadAtOnce(reloadGate.Task));
     Register(coordinator, "Required", requiredEngine, required: true);
     Register(coordinator, "Optional", optionalEngine, required: false);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
@@ -224,12 +242,96 @@ public class OptionalEngineTest
     await optional.WaitAsync(MustComplete, ct);
     optionalDone.Set();
     await required.WaitAsync(MustComplete, ct);
-    await Wait.UntilAsync(() => Volatile.Read(ref loads) == 2, MustComplete, "the required engine reloads");
+    await Wait.UntilAsync(() => requiredEngine.Loads == 2, MustComplete, "the required engine reloads");
     var stateWhileReloading = coordinator.State;
     reloadGate.SetResult();
 
     stateWhileReloading.Should().NotBe(EngineCoordinatorState.Running, "the required engine is reloading");
     await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
       MustComplete, "the coordinator runs again once the required engine is Ready");
+  }
+
+  /// <summary>
+  /// Verifies that the Ready event of an engine that reloads after one invalidation does not bring the coordinator back
+  /// to Running while a second invalidation is in flight: the second one's engine reloads next, and the coordinator is
+  /// Running only once that reload has ended.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ReadyDuringAnotherInvalidation_RunningOnlyAfterTheLastReload()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var reloadA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var reloadB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var bAtReset = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var aReloaded = new ManualResetEventSlim();
+    // B's invalidation has begun (it counts as in flight) and waits, before it resets B, until A has reloaded.
+    var logger = new OnMessageLogger("depending on and incl. B.", () =>
+    {
+      bAtReset.TrySetResult();
+      aReloaded.Wait(MustComplete).Should().BeTrue("A reloads");
+    });
+    var coordinator = CreateCoordinator(logger);
+    var engineA = new GatedEngine(FirstLoadAtOnce(reloadA.Task));
+    var engineB = new GatedEngine(FirstLoadAtOnce(reloadB.Task));
+    Register(coordinator, "A", engineA, required: true);
+    Register(coordinator, "B", engineB, required: true);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    await coordinator.InvalidateContextForEngineAsync("A", ct).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => engineA.Loads == 2, MustComplete, "A reloads");
+    var invalidateB = Task.Run(() => coordinator.InvalidateContextForEngineAsync("B", ct), ct);
+    await bAtReset.Task.WaitAsync(MustComplete, ct);
+    reloadA.SetResult();
+    await Wait.UntilAsync(() => engineA.State == EngineState.Ready, MustComplete, "A is Ready again");
+    aReloaded.Set();
+    await invalidateB.WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => engineB.Loads == 2, MustComplete, "B reloads");
+    var stateWhileBReloads = coordinator.State;
+    reloadB.SetResult();
+
+    stateWhileBReloads.Should().Be(EngineCoordinatorState.Initializing, "B is reloading");
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator runs again once B is Ready");
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that an operation that began while the coordinator was Initializing still brings it to Running once the
+  /// required engines are Ready: here the required engine's Ready event arrives while an invalidation of an optional
+  /// engine is in flight, so that invalidation's end brings the coordinator back.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_BeganWhileInitializing_RunningOnceRequiredReady()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var reload = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var optionalAtReset = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var requiredReloaded = new ManualResetEventSlim();
+    var logger = new OnMessageLogger("depending on and incl. Optional.", () =>
+    {
+      optionalAtReset.TrySetResult();
+      requiredReloaded.Wait(MustComplete).Should().BeTrue("the required engine reloads");
+    });
+    var coordinator = CreateCoordinator(logger);
+    var requiredEngine = new GatedEngine(FirstLoadAtOnce(reload.Task));
+    var optionalEngine = new GatedEngine(Task.CompletedTask);
+    Register(coordinator, "Required", requiredEngine, required: true);
+    Register(coordinator, "Optional", optionalEngine, required: false);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => optionalEngine.State == EngineState.Ready, MustComplete, "the optional engine loads");
+
+    await coordinator.InvalidateContextForEngineAsync("Required", ct).WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => requiredEngine.Loads == 2, MustComplete, "the required engine reloads");
+    coordinator.State.Should().Be(EngineCoordinatorState.Initializing);
+    var invalidateOptional = Task.Run(() => coordinator.InvalidateContextForEngineAsync("Optional", ct), ct);
+    await optionalAtReset.Task.WaitAsync(MustComplete, ct);
+    reload.SetResult();
+    await Wait.UntilAsync(() => requiredEngine.State == EngineState.Ready, MustComplete, "the required engine is Ready");
+    requiredReloaded.Set();
+    await invalidateOptional.WaitAsync(MustComplete, ct);
+
+    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
+      MustComplete, "the coordinator runs once the required engine is Ready and no operation is in flight");
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }

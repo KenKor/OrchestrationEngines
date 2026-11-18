@@ -313,7 +313,10 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   private bool KickStartRetryPending(string kickStartTaskName, IEngine engine) =>
     _tasks.TryGetValue(kickStartTaskName, out var kickStart) && !kickStart.IsCompleted
-    && engine is not BaseEngine { IsCancellationRequested: true };
+    && !IsStopped(engine);
+
+  /// <summary>Returns whether the engine was stopped on purpose; an engine that is null was not.</summary>
+  private static bool IsStopped(IEngine engine) => engine is BaseEngine { IsCancellationRequested: true };
 
   /// <summary>
   /// Whether an engine of this name is known: created, or to be created by this mechanic's tasks (its kick-start task
@@ -384,8 +387,11 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   /// <remarks>
   /// It first waits for the engine's kick-start to settle, since an engine's tasks are set up when it starts: until the
-  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start can be reset only
-  /// once the kick-start has given up (or through the engine itself). An engine whose tasks failed is reset like any
+  /// engine is Ready or its start has failed. So a task that hangs during the engine's first start is reset here only
+  /// once the kick-start has given up. To reset it without waiting, reset it through the engine itself
+  /// (<see cref="EngineCoordinator.GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>, then
+  /// <see cref="BaseEngine.ResetTasksAsync"/>), or bound its
+  /// run with the task's <see cref="EngineTask.Timeout"/>. An engine whose tasks failed is reset like any
   /// other, and its tasks run again; the mechanic's own record of the failed start (its kick-start task) is not reset.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
@@ -394,11 +400,13 @@ public partial class MechanicEngine : BaseEngine
   /// <param name="token">Cancels the wait for the kick-start; once the reset has begun, it is not cancelled.</param>
   /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
   /// <exception cref="InvalidOperationException">
-  /// The engine was not created, never started, is stopped, or is not a <see cref="BaseEngine"/>.
+  /// The engine was not created (its kick-start's exception is the <see cref="Exception.InnerException"/>), never
+  /// started, or is not a <see cref="BaseEngine"/>; or a restart of it was prepared and then given up, or its set-up
+  /// failed (see <see cref="BaseEngine.ResetTasksAsync"/>).
   /// </exception>
   /// <exception cref="EngineTaskNotReadyException">
-  /// The engine was stopped while its kick-start was waited for (its kick-start ended Cancelled), for example by a
-  /// generation switch: the next generation has the live engine.
+  /// The engine, or this mechanic, was stopped, before or during the reset, for example by a generation switch: the
+  /// next generation has the live engine. Its <see cref="EngineTaskNotReadyException.State"/> is Cancelled.
   /// </exception>
   public async Task ResetEngineTasksAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
     CancellationToken token = default)
@@ -406,17 +414,32 @@ public partial class MechanicEngine : BaseEngine
     // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
     var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
     // Stopped meanwhile (before or after the engine was created): report the cancelled kick-start, which a caller that
-    // follows generation switches recognises.
-    if (notStarted is { State: EngineTaskState.Cancelled } && engine is null or BaseEngine { IsCancellationRequested: true })
+    // follows generation switches recognises. Only when something was stopped: an engine that was not created is null
+    // whether or not anything was (#58 item 15).
+    if (notStarted is { State: EngineTaskState.Cancelled }
+        && (IsStopped(engine) || (engine == null && IsCancellationRequested)))
       throw notStarted;
     if (engine == null)
-      throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.");
+      throw new InvalidOperationException($"Engine '{engineName}' was not created, so it has no tasks to reset.",
+        notStarted);
     if (engine is not BaseEngine baseEngine)
       throw new InvalidOperationException($"Engine '{engineName}' is not a {nameof(BaseEngine)}, so its tasks cannot be reset.");
     // Tasks it created in its constructor do not count: resetting them would start their work without a context.
     if (!baseEngine.HasTaskSet)
       throw new InvalidOperationException($"Engine '{engineName}' has not started, so it has no tasks to reset.");
-    await baseEngine.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+    // Stopped during the reset: its tasks are not run again, whether the reset noticed (and threw) or not. Report it
+    // with the one "stopped" signal, as above (#58 items 5 and 11).
+    try
+    {
+      await baseEngine.ResetTasksAsync(taskNames, resetDependentTasks).ConfigureAwait(false);
+    }
+    catch (InvalidOperationException) when (baseEngine.IsCancellationRequested)
+    {
+      // Answered below.
+    }
+    if (baseEngine.IsCancellationRequested)
+      throw new EngineTaskNotReadyException(EngineKickStartTask.KickStartName(engineName), EngineTaskState.Cancelled,
+        "The engine was stopped during the reset.");
   }
 
   /// <summary>
@@ -566,10 +589,10 @@ public partial class MechanicEngine : BaseEngine
   /// </summary>
   /// <param name="engine">The engine.</param>
   /// <remarks>
-  /// Created must be waited on as well: StartAsync does not publish Starting, the engine state only
-  /// leaves Created once a required task reaches a terminal state. Waiting on Starting alone let the
-  /// kick-start task complete (and the mechanic report Ready) while the engine's tasks were still
-  /// running, whenever StartAsync returned before its first required task had finished.
+  /// Created must be waited on as well: an engine is Created until its start publishes Starting, which
+  /// <see cref="BaseEngine"/> does just before its tasks run, and another <see cref="IEngine"/> may not do at all.
+  /// Waiting on Starting alone let the kick-start task complete (and the mechanic report Ready) while the engine's
+  /// tasks were still running, whenever StartAsync returned before its first required task had finished.
   /// </remarks>
   internal static async Task<IEngine> EnsureEngineReadyAsync(IEngine engine)
   {
