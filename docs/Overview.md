@@ -526,6 +526,9 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - An engine that existed before is created through its descriptor's restart factory (`SetRestartFactory`), which is
   handed the previous engine once (`EngineRestartInput`, with what changed), so it can take over loaded state. A later
   switch starts from the factory the descriptor was registered with, so generations do not keep each other alive.
+  A restart factory may share or copy the previous engine's state, but must not take it away from that engine, and a
+  next engine's `StopAsync` must not release what it shares with its predecessor: a generation switch that fails before
+  it hands over stops the next engines and keeps the previous ones running.
 - An engine that existed before but has no restart factory is rebuilt from scratch with its regular factory. Its
   previous engine is stopped before the next generation starts, so two copies of its data are never loaded at the same
   time.
