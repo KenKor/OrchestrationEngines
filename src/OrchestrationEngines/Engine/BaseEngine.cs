@@ -1728,27 +1728,13 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Complete list of tasks that this tasks depends on,
-  /// directly or indirectly.
+  /// Every task of the engine that depends on <paramref name="task"/>, directly or indirectly. It holds
+  /// <paramref name="task"/> itself only when <paramref name="task"/> is in a dependency cycle.
   /// </summary>
   /// <param name="task">The task.</param>
   public IReadOnlyCollection<EngineTask> GetAllDependents(EngineTask task)
   {
     var visited = new HashSet<EngineTask>();
-    AddAllDependents([task], visited, DirectDependents(_tasks.Values));
-    return visited;
-  }
-
-  /// <summary>
-  /// <paramref name="task"/> and every task of the engine that depends on it, directly or indirectly.
-  /// </summary>
-  /// <param name="task">The task.</param>
-  public IReadOnlyCollection<EngineTask> GetThisAndAllDependents(EngineTask task)
-  {
-    var visited = new HashSet<EngineTask>
-    {
-      task
-    };
     AddAllDependents([task], visited, DirectDependents(_tasks.Values));
     return visited;
   }
