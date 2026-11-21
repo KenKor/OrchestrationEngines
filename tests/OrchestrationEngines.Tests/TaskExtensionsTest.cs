@@ -62,15 +62,30 @@ public class TaskExtensionsTest
   {
     var latch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     for (var i = 0; i < 3; i++)
-    {
-      using var cancel = new CancellationTokenSource();
-      var wait = ((Task)latch.Task).WaitObservedAsync(cancel.Token);
-      cancel.Cancel();
-      await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
-    }
+      await CancelAWaitAsync(latch.Task);
 
     OrchestrationEngines.Helpers.TaskExtensions.ObserveFailure(latch.Task).Should().BeFalse("the first cancelled wait attached the only observer");
     latch.SetResult(true);
+  }
+
+  /// <summary>
+  /// Starts a wait for <paramref name="waited"/> and cancels it; the wait must end in a cancellation.
+  /// </summary>
+  private static async Task CancelAWaitAsync(Task waited)
+  {
+    using var cancel = new CancellationTokenSource();
+    var wait = waited.WaitObservedAsync(cancel.Token);
+    cancel.Cancel();
+    await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
+  }
+
+  /// <inheritdoc cref="CancelAWaitAsync"/>
+  private static async Task CancelAWaitOfTAsync<T>(Task<T> waited)
+  {
+    using var cancel = new CancellationTokenSource();
+    var wait = waited.WaitObservedAsync(cancel.Token);
+    cancel.Cancel();
+    await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
   }
 
   // Not inlined, so the waited task is unreachable once these return.
@@ -78,10 +93,7 @@ public class TaskExtensionsTest
   private static async Task<WeakReference> CancelTheWaitThenFailTheTaskAsync(string test)
   {
     var waited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    using var cancel = new CancellationTokenSource();
-    var wait = ((Task)waited.Task).WaitObservedAsync(cancel.Token);
-    cancel.Cancel();
-    await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
+    await CancelAWaitAsync(waited.Task);
     waited.SetException(new WaitedTaskFailure(test));
     return new WeakReference(waited.Task);
   }
@@ -90,10 +102,7 @@ public class TaskExtensionsTest
   private static async Task<WeakReference> CancelTheWaitThenFailTheTaskOfTAsync(string test)
   {
     var waited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-    using var cancel = new CancellationTokenSource();
-    var wait = waited.Task.WaitObservedAsync(cancel.Token);
-    cancel.Cancel();
-    await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
+    await CancelAWaitOfTAsync(waited.Task);
     waited.SetException(new WaitedTaskFailure(test));
     return new WeakReference(waited.Task);
   }
