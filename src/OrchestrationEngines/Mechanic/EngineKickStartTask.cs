@@ -228,7 +228,7 @@ public partial class EngineKickStartTask : EngineTask
         // A reset of this task ends this run and prepares a restart of the engine, which only the next run carries out;
         // and the next run starts once this one's work has ended. So stop waiting once this run is ended, or the two wait
         // for each other (#85).
-        await MechanicEngine.EnsureEngineReadyAsync(engine).WaitAsync(token).ConfigureAwait(false);
+        await MechanicEngine.EnsureEngineReadyAsync(engine).WaitObservedAsync(token).ConfigureAwait(false);
 
         // Validate final engine state.
         if (engine.State >= EngineState.Stopped)
