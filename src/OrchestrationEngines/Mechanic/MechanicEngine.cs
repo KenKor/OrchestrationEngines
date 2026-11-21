@@ -395,7 +395,8 @@ public partial class MechanicEngine : BaseEngine
   /// other, and its tasks run again. When its start was given up, its kick-start is reset too, with the kick-starts
   /// that depend on it, but the engine is not started again: the kick-start waits until the engine is Ready, and the
   /// engines that depend on it start, without their contexts being loaded again. If it fails again, its restart policy
-  /// begins a fresh round.
+  /// begins a fresh round. An exception from the reset of those kick-starts comes after the engine's own tasks were
+  /// reset and run again.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
@@ -443,11 +444,12 @@ public partial class MechanicEngine : BaseEngine
     if (baseEngine.IsCancellationRequested)
       throw new EngineTaskNotReadyException(EngineKickStartTask.KickStartName(engineName), EngineTaskState.Cancelled,
         "The engine was stopped during the reset.");
-    // Its start was given up (Failed, or Cancelled while the engine was not stopped, as above): its tasks run again, so
-    // clear the mechanic's record of the failed start too, without restarting the engine, and the kick-starts that
-    // depend on it start their engines (#58 item 2).
-    if (notStarted is not { State: EngineTaskState.Failed or EngineTaskState.Cancelled }
-        || !Tasks.TryGetValue(EngineKickStartTask.KickStartName(engineName), out var task)
+    // Its start was given up (Failed or one of its substates, such as RecoveryFailed once its restart policy gave up, or
+    // Cancelled while the engine was not stopped, as above): its tasks run again, so clear the mechanic's record of the
+    // failed start too, without restarting the engine, and the kick-starts that depend on it start their engines (#58
+    // item 2).
+    if (notStarted is null || !notStarted.State.IsFailed()
+        || !_tasks.TryGetValue(EngineKickStartTask.KickStartName(engineName), out var task)
         || task is not EngineKickStartTask kickStart)
       return;
     try
