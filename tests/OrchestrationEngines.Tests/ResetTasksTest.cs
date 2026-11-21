@@ -889,6 +889,8 @@ public class ResetTasksTest
     catch (EngineTaskNotReadyException)
     {
     }
+    // B's second run is started on the thread pool by the reset: wait for it, so the counts below are final.
+    await graph.EnsureTaskReadyAsync("B", ct).WaitAsync(MustComplete, ct);
 
     graph.Runs("B").Should().Be(2);
     graph.Runs("A").Should().Be(1);
