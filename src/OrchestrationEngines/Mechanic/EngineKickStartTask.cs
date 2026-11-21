@@ -1,6 +1,7 @@
 using System;
 using System.Data;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -93,11 +94,25 @@ public partial class EngineKickStartTask : EngineTask
     private Task _pendingGiveUp = Task.CompletedTask;
 
     /// <summary>
+    /// Set by a reset in a <see cref="ResetRecordOnlyAsync"/>, cleared by any other reset; the next run takes it. That
+    /// run only waits for the engine: it does not run the engine's failed tasks again first (#58 item 2).
+    /// </summary>
+    private bool _waitOnly;
+
+    /// <summary>
     /// Guards <see cref="_generation"/>, <see cref="_starting"/>, <see cref="EngineInstance"/>,
-    /// <see cref="_engineToRestart"/>, <see cref="_givenUpWhileStarting"/> and <see cref="_pendingGiveUp"/> between a run
-    /// and a reset that ends it.
+    /// <see cref="_engineToRestart"/>, <see cref="_givenUpWhileStarting"/>, <see cref="_pendingGiveUp"/> and
+    /// <see cref="_waitOnly"/> between a run and a reset that ends it.
     /// </summary>
     private readonly object _gate = new();
+
+    /// <summary>
+    /// The scope of a <see cref="ResetRecordOnlyAsync"/> in this flow; null otherwise. The runs that the reset starts copy
+    /// it with the flow, so its kick-start is taken by the first reset of that task that enters, and the scope is emptied
+    /// when the reset ends: any later reset of the task, wherever it comes from (a context change), restarts the engine.
+    /// </summary>
+    /// <remarks>The box holds the kick-start whose next reset clears only its record; null once taken.</remarks>
+    private static readonly AsyncLocal<StrongBox<EngineKickStartTask>> s_recordOnly = new();
 
     /// <summary>
     /// Creates a task that starts an engine and ensures it reaches Ready.
@@ -150,9 +165,12 @@ public partial class EngineKickStartTask : EngineTask
         // restart the engine this run starts, with the context it starts it with (#85).
         int generation;
         BaseEngine toRestart;
+        bool waitOnly;
         lock (_gate)
         {
             generation = _generation;
+            waitOnly = _waitOnly;
+            _waitOnly = false;
             _starting = engine;
             toRestart = _engineToRestart;
             _givenUpWhileStarting = null;
@@ -168,7 +186,8 @@ public partial class EngineKickStartTask : EngineTask
             // there the reset ran after the base had already fired SucceedRecovery, which re-runs this work at once, so
             // the first retry found the engine still Faulted and failed without starting it (one restart wasted), and
             // when the policy gave up the reset still ran, leaving the engine Created instead of Faulted.
-            if (NeedsResetBeforeRestart(EngineInstance))
+            // Not in the run after a ResetRecordOnlyAsync: that one only waits for the engine.
+            if (!waitOnly && NeedsResetBeforeRestart(EngineInstance))
                 await EngineInstance.ResetFailedTasksAsync().ConfigureAwait(false);
 
             // A reset found the engine still Created, because a run it ended was starting it, so it could not prepare
@@ -276,6 +295,34 @@ public partial class EngineKickStartTask : EngineTask
     internal override bool RetriesFailureOf(Exception exception) => exception is not EngineCancelledByItsWorkException;
 
     /// <summary>
+    /// Resets this task with <paramref name="mechanic"/>'s <see cref="BaseEngine.ResetTasksAsync"/>, and the tasks that
+    /// depend on it, without restarting its engine: only this task's own outcome is cleared, and it runs again on the
+    /// engine as it is (#58 item 2).
+    /// </summary>
+    /// <remarks>
+    /// For an engine whose start was given up and whose tasks were then reset and run again: the next run finds the
+    /// engine started, so it only waits until the engine is Ready, and fails again if the engine has failed again by
+    /// then (a retry of it runs the engine's failed tasks again first, as usual). The tasks that depend on this one are
+    /// reset as usual. The task keeps its record of the engine, so a reset of it that comes in later, from anywhere,
+    /// restarts the engine.
+    /// </remarks>
+    internal async Task ResetRecordOnlyAsync(BaseEngine mechanic)
+    {
+        var scope = new StrongBox<EngineKickStartTask>(this);
+        var previous = s_recordOnly.Value;
+        s_recordOnly.Value = scope;
+        try
+        {
+            await mechanic.ResetTasksAsync([Name], resetDependentTasks: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            Volatile.Write(ref scope.Value, null);
+            s_recordOnly.Value = previous;
+        }
+    }
+
+    /// <summary>
     /// Resets this task and the associated engine tasks in preparation for re-execution.
     /// </summary>
     protected override async Task OnResetEnteredAsync()
@@ -286,15 +333,22 @@ public partial class EngineKickStartTask : EngineTask
         // the engine loaded with the previous context (#85). If that engine is still Created, the reset prepares nothing;
         // the next run restarts it once the ended run has started it. An engine that no run started needs no restart: the
         // next run starts it.
-        IEngine engine;
+        // A reset in a ResetRecordOnlyAsync restarts nothing and keeps the record of the engine, so a reset that comes in
+        // before the next run has started (a context change) still restarts it.
+        var recordOnly = s_recordOnly.Value is { } scope && Interlocked.CompareExchange(ref scope.Value, null, this) == this;
+        IEngine engine = null;
         lock (_gate)
         {
             _generation++;
-            engine = EngineInstance ?? _starting;
-            // Clear instance reference; it will be re-established on next run.
-            EngineInstance = null;
-            if (engine != null)
-                _engineToRestart = engine as BaseEngine;
+            _waitOnly = recordOnly;
+            if (!recordOnly)
+            {
+                engine = EngineInstance ?? _starting;
+                // Clear instance reference; it will be re-established on next run.
+                EngineInstance = null;
+                if (engine != null)
+                    _engineToRestart = engine as BaseEngine;
+            }
         }
 
         if (engine != null)

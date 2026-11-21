@@ -295,7 +295,9 @@ Resets:
   `EngineTaskNotReadyException` for its kick-start, `Cancelled`, which a generation switch hands on to the next
   generation; an engine that was not created throws an `InvalidOperationException` with its kick-start's exception
   inside. The tasks then run again: a Ready engine
-  goes to `Starting` and back to `Ready`. While a restart is prepared (the kick-start ends the engine's set to start it again
+  goes to `Starting` and back to `Ready`. Through the coordinator, an engine whose start was given up also has its
+  kick-start reset, with the kick-starts that depend on it, but it is not started again: the engines that depend on it
+  start, without their contexts being loaded again, and a new failure begins a fresh round of its restart policy. While a restart is prepared (the kick-start ends the engine's set to start it again
   with a new one, after a context change or for a retry), `ResetTasksAsync` waits until the engine has started again,
   which after a context change lasts until the kick-start has run again on the new context, and then returns without
   resetting: the new set's tasks run fresh. If the restart is given up or its set-up fails, it throws an
