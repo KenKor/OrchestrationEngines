@@ -302,8 +302,9 @@ public partial class EngineKickStartTask : EngineTask
     /// <remarks>
     /// For an engine whose start was given up and whose tasks were then reset and run again: the next run finds the
     /// engine started, so it only waits until the engine is Ready, and fails again if the engine has failed again by
-    /// then (a retry of it runs the engine's failed tasks again first, as usual). The tasks that depend on this one are reset as usual. The task keeps
-    /// its record of the engine, so a reset of it that comes in later, from anywhere, restarts the engine.
+    /// then (a retry of it runs the engine's failed tasks again first, as usual). The tasks that depend on this one are
+    /// reset as usual. The task keeps its record of the engine, so a reset of it that comes in later, from anywhere,
+    /// restarts the engine.
     /// </remarks>
     internal async Task ResetRecordOnlyAsync(BaseEngine mechanic)
     {
