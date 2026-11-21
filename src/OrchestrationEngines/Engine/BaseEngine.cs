@@ -1728,8 +1728,8 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Every task of the engine that depends on <paramref name="task"/>, directly or indirectly, without
-  /// <paramref name="task"/> itself.
+  /// Every task of the engine that depends on <paramref name="task"/>, directly or indirectly. It holds
+  /// <paramref name="task"/> itself only when <paramref name="task"/> is in a dependency cycle.
   /// </summary>
   /// <param name="task">The task.</param>
   public IReadOnlyCollection<EngineTask> GetAllDependents(EngineTask task)
