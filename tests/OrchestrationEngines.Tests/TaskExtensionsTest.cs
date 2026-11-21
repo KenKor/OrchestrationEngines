@@ -22,24 +22,24 @@ public class TaskExtensionsTest
 
   /// <summary>
   /// Verifies that a wait that is cancelled before its task fails leaves no unobserved task exception behind: the
-  /// failure that comes later is read, so the finalizer does not report it (#86 item 6).
+  /// failure that comes later is read, so the finalizer does not report it (#86 item 6). The waited tasks must be
+  /// collected first, or the finalizer has not run and the check proves nothing.
   /// </summary>
   [Fact]
   public async Task WaitObservedAsync_CancelledBeforeTheTaskFails_LeavesNoUnobservedException()
   {
+    const string test = nameof(WaitObservedAsync_CancelledBeforeTheTaskFails_LeavesNoUnobservedException);
     var unobserved = new ConcurrentQueue<AggregateException>();
     void OnUnobserved(object sender, UnobservedTaskExceptionEventArgs e) =>
       unobserved.Enqueue(e.Exception);
     TaskScheduler.UnobservedTaskException += OnUnobserved;
     try
     {
-      await CancelTheWaitThenFailTheTaskAsync(nameof(WaitObservedAsync_CancelledBeforeTheTaskFails_LeavesNoUnobservedException));
-      await CancelTheWaitThenFailTheTaskOfTAsync(nameof(WaitObservedAsync_CancelledBeforeTheTaskFails_LeavesNoUnobservedException));
-      for (var i = 0; i < 3; i++)
-      {
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-      }
+      var waited = await CancelTheWaitThenFailTheTaskAsync(test);
+      var waitedOfT = await CancelTheWaitThenFailTheTaskOfTAsync(test);
+      (await Wait.UntilCollectedAsync(MustComplete, waited, waitedOfT)).Should().BeTrue(
+        "the finalizer reports an unobserved failure only once the task is collected");
+      GC.WaitForPendingFinalizers();
     }
     finally
     {
@@ -49,13 +49,33 @@ public class TaskExtensionsTest
     unobserved
       .SelectMany(e => e.InnerExceptions)
       .OfType<WaitedTaskFailure>()
-      .Where(e => e.Message == nameof(WaitObservedAsync_CancelledBeforeTheTaskFails_LeavesNoUnobservedException))
+      .Where(e => e.Message == test)
       .Should().BeEmpty();
+  }
+
+  /// <summary>
+  /// Verifies that a pending task gets one failure observer, however many waits on it are cancelled: a latch that a
+  /// caller polls with short timeouts does not collect one per poll.
+  /// </summary>
+  [Fact]
+  public async Task WaitObservedAsync_ManyCancelledWaits_LeaveOneObserver()
+  {
+    var latch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    for (var i = 0; i < 3; i++)
+    {
+      using var cancel = new CancellationTokenSource();
+      var wait = ((Task)latch.Task).WaitObservedAsync(cancel.Token);
+      cancel.Cancel();
+      await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    OrchestrationEngines.Helpers.TaskExtensions.ObserveFailure(latch.Task).Should().BeFalse("the first cancelled wait attached the only observer");
+    latch.SetResult(true);
   }
 
   // Not inlined, so the waited task is unreachable once these return.
   [MethodImpl(MethodImplOptions.NoInlining)]
-  private static async Task CancelTheWaitThenFailTheTaskAsync(string test)
+  private static async Task<WeakReference> CancelTheWaitThenFailTheTaskAsync(string test)
   {
     var waited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     using var cancel = new CancellationTokenSource();
@@ -63,10 +83,11 @@ public class TaskExtensionsTest
     cancel.Cancel();
     await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
     waited.SetException(new WaitedTaskFailure(test));
+    return new WeakReference(waited.Task);
   }
 
   [MethodImpl(MethodImplOptions.NoInlining)]
-  private static async Task CancelTheWaitThenFailTheTaskOfTAsync(string test)
+  private static async Task<WeakReference> CancelTheWaitThenFailTheTaskOfTAsync(string test)
   {
     var waited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     using var cancel = new CancellationTokenSource();
@@ -74,5 +95,6 @@ public class TaskExtensionsTest
     cancel.Cancel();
     await FluentActions.Awaiting(() => wait).Should().ThrowAsync<OperationCanceledException>();
     waited.SetException(new WaitedTaskFailure(test));
+    return new WeakReference(waited.Task);
   }
 }

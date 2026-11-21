@@ -1361,9 +1361,10 @@ public abstract partial class BaseEngine : IEngine
       return;
     LogWaitingForTask(task);
     // Cancelling the token ends the wait only; the tasks run on. Each task is waited for in turn (a task's latch never
-    // faults), so a cancelled wait leaves at most the task it was waiting for with a continuation, and that only on
-    // netstandard2.0 (see TaskExtensions.WaitAsync): a WhenAll would stay attached until every task completed, once per
-    // cancelled wait. A token that cannot be cancelled awaits each task directly.
+    // faults), so a cancelled wait leaves a continuation only on the task it was waiting for: the one failure observer
+    // that task keeps however many waits are cancelled, and on netstandard2.0 also the wait's own (see
+    // TaskExtensions.WaitObservedAsync). A WhenAll would stay attached until every task completed, once per cancelled
+    // wait. A token that cannot be cancelled awaits each task directly.
     foreach (var completion in completionTasks)
     {
       if (!completion.IsCompleted)
