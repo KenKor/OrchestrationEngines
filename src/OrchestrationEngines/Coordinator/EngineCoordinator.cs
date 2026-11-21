@@ -1046,7 +1046,7 @@ public partial class EngineCoordinator : IDisposable
   public async Task EnsureReadyAsync(CancellationToken token = default)
   {
     await DispatchAsync(StartAsync, token).ConfigureAwait(false);
-    await Mechanic.EnsureReadyAsync().WaitAsync(token).ConfigureAwait(false);
+    await Mechanic.EnsureReadyAsync().WaitObservedAsync(token).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1170,7 +1170,7 @@ public partial class EngineCoordinator : IDisposable
     // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
     // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
     if (Volatile.Read(ref _rebuildingSwitch) is { } rebuilding && rebuilding.Names.Contains(name))
-      return await rebuilding.Next.Task.WaitAsync(token).ConfigureAwait(false);
+      return await rebuilding.Next.Task.WaitObservedAsync(token).ConfigureAwait(false);
     return null;
   }
 
@@ -1493,7 +1493,7 @@ public partial class EngineCoordinator : IDisposable
     {
       await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       engine = milliSecondsTimeOut == Timeout.Infinite
-        ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound).WaitAsync(token).ConfigureAwait(false)
+        ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound).WaitObservedAsync(token).ConfigureAwait(false)
         : await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, milliSecondsTimeOut, token).ConfigureAwait(false);
     }
     catch (OperationCanceledException) when ((Successor != null || _abandoned) && !token.IsCancellationRequested)

@@ -1295,7 +1295,7 @@ public abstract partial class BaseEngine : IEngine
     while (true)
     {
       // Look the task up after a prepared restart, in the set that replaced the current one.
-      await WaitForRestartAsync().WaitAsync(token).ConfigureAwait(false);
+      await WaitForRestartAsync().WaitObservedAsync(token).ConfigureAwait(false);
       if (!_tasks.TryGetValue(taskName, out var task))
       {
         // The restart's set has no such task (its set-up failed, or no longer creates it): how the task that was
@@ -1346,7 +1346,7 @@ public abstract partial class BaseEngine : IEngine
     // A wait that is cancelled already starts nothing.
     token.ThrowIfCancellationRequested();
     // After a prepared restart a task of the replaced set has ended; the caller looks the task up again.
-    await WaitForRestartAsync().WaitAsync(token).ConfigureAwait(false);
+    await WaitForRestartAsync().WaitObservedAsync(token).ConfigureAwait(false);
     // A completed wait for the restart does not look at the token.
     token.ThrowIfCancellationRequested();
     var allTasks = task.GetThisAndAllDependsOn();
@@ -1367,7 +1367,7 @@ public abstract partial class BaseEngine : IEngine
     foreach (var completion in completionTasks)
     {
       if (!completion.IsCompleted)
-        await completion.WaitAsync(token).ConfigureAwait(false);
+        await completion.WaitObservedAsync(token).ConfigureAwait(false);
     }
   }
 

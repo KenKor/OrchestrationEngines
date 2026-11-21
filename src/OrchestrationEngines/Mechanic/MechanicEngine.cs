@@ -521,7 +521,7 @@ public partial class MechanicEngine : BaseEngine
     {
       try
       {
-        await EnsureEngineReadyAsync(engine).WaitAsync(engine.CancellationToken).ConfigureAwait(false);
+        await EnsureEngineReadyAsync(engine).WaitObservedAsync(engine.CancellationToken).ConfigureAwait(false);
       }
       catch (OperationCanceledException) when (engine.CancellationToken.IsCancellationRequested)
       {
