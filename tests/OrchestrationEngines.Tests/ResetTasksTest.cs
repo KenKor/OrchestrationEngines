@@ -816,6 +816,45 @@ public class ResetTasksTest
   }
 
   /// <summary>
+  /// Verifies that a reset of an engine whose start was given up (a required task failed, no restart policy) also resets
+  /// its kick-start and the kick-starts that depend on it: the dependent engine, left DependencyFailed, is created and
+  /// becomes Ready, as if the start had worked, and the engine is not started again: A runs once more, for the reset
+  /// (#58 item 2).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_GivenUpEngine_StartsItsDependentsToo()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var graph = new GraphEngine(T("A"), T("B", "A"))
+    {
+      Work = (name, run, _) => name == "A" && run == 1
+        ? throw new InvalidOperationException("A fails its first run.")
+        : Task.CompletedTask,
+    };
+    var dependent = Chain();
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var graphDescriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(graph))
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
+    graphDescriptor.RestartPolicy = null;
+    var dependentDescriptor = coordinator.RegisterEngine("Dependent", _ => Task.FromResult<IEngine>(dependent))
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .AddDependsOn("Graph");
+    dependentDescriptor.RestartPolicy = null;
+
+    await coordinator.ResetTasksForEngineAsync("Graph", ["A"], resetDependentTasks: true, ct).WaitAsync(MustComplete, ct);
+
+    (await coordinator.GetEngineAsync("Graph", throwErrorIfNotFound: false, ct).WaitAsync(MustComplete, ct))
+      .Should().BeSameAs(graph);
+    (await coordinator.GetEngineAsync("Dependent", throwErrorIfNotFound: false, ct).WaitAsync(MustComplete, ct))
+      .Should().BeSameAs(dependent);
+    dependent.State.Should().Be(EngineState.Ready);
+    // Read once the dependent is Ready, so once Graph's kick-start has run again: a kick-start reset that restarted
+    // Graph would have run A a third time by then.
+    graph.Runs("A").Should().Be(2);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
   /// Verifies that an engine stopped during the reset (here, as its task's reset begins) reports the stop as a
   /// cancelled kick-start, the signal a caller that follows generation switches recognises (#58 items 5 and 11).
   /// </summary>

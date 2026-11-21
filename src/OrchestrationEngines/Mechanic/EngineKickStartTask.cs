@@ -100,6 +100,13 @@ public partial class EngineKickStartTask : EngineTask
     private readonly object _gate = new();
 
     /// <summary>
+    /// The kick-start whose reset, in this flow, clears only its record (see <see cref="ResetRecordOnlyAsync"/>); null
+    /// otherwise. Per flow, so a reset of the same task that comes from elsewhere meanwhile (a context change) still
+    /// restarts the engine.
+    /// </summary>
+    private static readonly AsyncLocal<EngineKickStartTask> s_recordOnly = new();
+
+    /// <summary>
     /// Creates a task that starts an engine and ensures it reaches Ready.
     /// </summary>
     public EngineKickStartTask(
@@ -276,10 +283,45 @@ public partial class EngineKickStartTask : EngineTask
     internal override bool RetriesFailureOf(Exception exception) => exception is not EngineCancelledByItsWorkException;
 
     /// <summary>
+    /// Resets this task with <paramref name="mechanic"/>'s <see cref="BaseEngine.ResetTasksAsync"/>, and the tasks that
+    /// depend on it, without restarting its engine: only this task's record of the start is cleared, and it runs again
+    /// on the engine as it is (#58 item 2).
+    /// </summary>
+    /// <remarks>
+    /// For an engine whose start was given up and whose tasks were then reset and run again: the next run finds the
+    /// engine started, so it only waits until the engine is Ready. The tasks that depend on this one are reset as usual.
+    /// </remarks>
+    internal async Task ResetRecordOnlyAsync(BaseEngine mechanic)
+    {
+        var previous = s_recordOnly.Value;
+        s_recordOnly.Value = this;
+        try
+        {
+            await mechanic.ResetTasksAsync([Name], resetDependentTasks: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            s_recordOnly.Value = previous;
+        }
+    }
+
+    /// <summary>
     /// Resets this task and the associated engine tasks in preparation for re-execution.
     /// </summary>
     protected override async Task OnResetEnteredAsync()
     {
+        // Only the record of the start (see ResetRecordOnlyAsync): the engine is not restarted.
+        if (s_recordOnly.Value == this)
+        {
+            lock (_gate)
+            {
+                _generation++;
+                EngineInstance = null;
+            }
+            await base.OnResetEnteredAsync().ConfigureAwait(false);
+            return;
+        }
+
         // Reset all engine-level tasks before restarting. That prepares a restart which only this task carries out, when it
         // runs again. A run that is still starting the engine (this reset ended it, but its work goes on) has not recorded
         // it yet: restart the engine it is starting all the same, or a second invalidation that comes in meanwhile leaves

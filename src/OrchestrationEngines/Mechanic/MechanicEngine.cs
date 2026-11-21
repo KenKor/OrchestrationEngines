@@ -392,7 +392,10 @@ public partial class MechanicEngine : BaseEngine
   /// (<see cref="EngineCoordinator.GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>, then
   /// <see cref="BaseEngine.ResetTasksAsync"/>), or bound its
   /// run with the task's <see cref="EngineTask.Timeout"/>. An engine whose tasks failed is reset like any
-  /// other, and its tasks run again; the mechanic's own record of the failed start (its kick-start task) is not reset.
+  /// other, and its tasks run again. When its start was given up, its kick-start is reset too, with the kick-starts
+  /// that depend on it, but the engine is not started again: the kick-start waits until the engine is Ready, and the
+  /// engines that depend on it start, without their contexts being loaded again. If it fails again, its restart policy
+  /// begins a fresh round.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskNames">The names of the tasks to reset (compared ignoring case).</param>
@@ -440,6 +443,22 @@ public partial class MechanicEngine : BaseEngine
     if (baseEngine.IsCancellationRequested)
       throw new EngineTaskNotReadyException(EngineKickStartTask.KickStartName(engineName), EngineTaskState.Cancelled,
         "The engine was stopped during the reset.");
+    // Its start was given up (Failed, or Cancelled while the engine was not stopped, as above): its tasks run again, so
+    // clear the mechanic's record of the failed start too, without restarting the engine, and the kick-starts that
+    // depend on it start their engines (#58 item 2).
+    if (notStarted is not { State: EngineTaskState.Failed or EngineTaskState.Cancelled }
+        || !Tasks.TryGetValue(EngineKickStartTask.KickStartName(engineName), out var task)
+        || task is not EngineKickStartTask kickStart)
+      return;
+    try
+    {
+      await kickStart.ResetRecordOnlyAsync(this).ConfigureAwait(false);
+    }
+    catch (InvalidOperationException) when (IsCancellationRequested)
+    {
+      throw new EngineTaskNotReadyException(kickStart.Name, EngineTaskState.Cancelled,
+        "The mechanic was stopped during the reset.");
+    }
   }
 
   /// <summary>
