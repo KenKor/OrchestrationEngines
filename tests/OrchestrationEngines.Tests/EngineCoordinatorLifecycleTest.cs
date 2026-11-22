@@ -30,8 +30,10 @@ public class EngineCoordinatorLifecycleTest
   private static EngineCoordinator CreateCoordinator() =>
     new(nameof(EngineCoordinatorLifecycleTest), NullLogger.Instance, useDispatcher: false);
 
-  private static EngineDescriptor Descriptor(string name, IEngine engine) =>
-    new EngineDescriptor(name, _ => Task.FromResult(engine), requiredForRunning: true, 1)
+  private static EngineDescriptor Descriptor(string name, IEngine engine) => Descriptor(name, () => engine);
+
+  private static EngineDescriptor Descriptor(string name, Func<IEngine> create) =>
+    new EngineDescriptor(name, _ => Task.FromResult(create()), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .WithoutRestarts();
 
@@ -164,13 +166,11 @@ public class EngineCoordinatorLifecycleTest
     var ct = TestContext.Current.CancellationToken;
     var coordinator = new EngineCoordinator(nameof(EngineCoordinatorLifecycleTest), NullLogger.Instance, useDispatcher);
     var created = 0;
-    coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ =>
-      {
-        Interlocked.Increment(ref created);
-        return Task.FromResult<IEngine>(new NetworkEngine((_, _) => Task.CompletedTask));
-      }, requiredForRunning: true)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts());
+    coordinator.RegisterEngineDescriptor(Descriptor(Name, () =>
+    {
+      Interlocked.Increment(ref created);
+      return new NetworkEngine((_, _) => Task.CompletedTask);
+    }));
 
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
 
