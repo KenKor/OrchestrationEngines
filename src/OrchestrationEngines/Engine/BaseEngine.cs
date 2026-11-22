@@ -226,12 +226,8 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   /// <param name="logger">Logger class to send logging messages to.</param>
   public BaseEngine(ILogger logger)
+    : this(logger, CancellationToken.None)
   {
-    // Link this task's CTS to the engine-wide token
-    _linkedCts = new CancellationTokenSource();
-    _token = _linkedCts.Token;
-    _applicationLogger = new PrefixLogger(logger ?? NullLogger.Instance, () => LogTag);
-    _cancelRegistration = _token.UnsafeRegister(static engine => ((BaseEngine)engine).ReleaseRestartOnCancel(), this);
   }
 
   /// <summary>
