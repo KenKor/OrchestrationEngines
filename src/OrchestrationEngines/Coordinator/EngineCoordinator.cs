@@ -765,10 +765,11 @@ public partial class EngineCoordinator : IDisposable
   {
     private IEngine _previousEngine = previousEngine;
     private EngineDescriptor _previousDescriptor = previousDescriptor;
+    private readonly Lock _sync = new();
 
     public bool TryTake(out IEngine previous, out EngineDescriptor previousDescriptor)
     {
-      lock (this)
+      lock (_sync)
       {
         previous = _previousEngine;
         previousDescriptor = _previousDescriptor;
@@ -778,7 +779,7 @@ public partial class EngineCoordinator : IDisposable
 
     public void Release()
     {
-      lock (this)
+      lock (_sync)
       {
         _previousEngine = null;
         _previousDescriptor = null;
