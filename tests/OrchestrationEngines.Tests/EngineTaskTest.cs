@@ -432,6 +432,65 @@ public class EngineTaskTest
   }
 
   /// <summary>
+  /// Verifies that a dependency completing while the task is still Created takes it to DependencyFailed when another
+  /// dependency has failed already: A's failure was dropped while C's run was ended for a reset, and nothing fires it
+  /// again, so a task parked in WaitingForDependencies waited for good.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_CompleteDependency_InCreated_WithAFailedDependency_EndsDependencyFailed()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var a = NewTask("A", _ => throw new InvalidOperationException("A fails."));
+    var b = NewTask("B", _ => Task.CompletedTask);
+    var c = NewTask("C", _ => Task.CompletedTask).AddDependsOn(a).AddDependsOn(b);
+    await c.EndRunAsync();
+    await RunToEndAsync(a);
+    await c.FireAsync(EngineTaskTrigger.Reset);
+    c.State.Should().Be(EngineTaskState.Created);
+
+    await RunToEndAsync(b);
+    await Wait.UntilAsync(() => c.State != EngineTaskState.Created, MustComplete, "B's completion reaches C");
+    await c.FireAsync(EngineTaskTrigger.Start);
+
+    c.State.Should().Be(EngineTaskState.DependencyFailed);
+    c.FailReason.Should().Be("Dependency 'A' failed: A fails.");
+    await c.InnerTask.WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// A task that finds no dependency failed until <see cref="Failed"/> is set, standing in for a dependency whose
+  /// failure did not reach it.
+  /// </summary>
+  private sealed class UnnoticedFailureTask()
+    : EngineTask("Dependent", _ => Task.CompletedTask, true, NullLogger.Instance, CancellationToken.None)
+  {
+    public bool Failed { get; set; }
+
+    protected override bool DependenciesReady() => false;
+
+    protected override bool AnyDependencyFailed() => Failed;
+  }
+
+  /// <summary>
+  /// Verifies that a dependency completing while the task waits takes it to DependencyFailed when another dependency
+  /// has failed, as it does from Created.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_CompleteDependency_WhileWaiting_WithAFailedDependency_EndsDependencyFailed()
+  {
+    var task = new UnnoticedFailureTask();
+    task.AddDependsOn(NewTask("A", _ => Task.CompletedTask));
+    await task.FireAsync(EngineTaskTrigger.Start);
+    task.State.Should().Be(EngineTaskState.WaitingForDependencies);
+    task.Failed = true;
+
+    await task.FireAsync(EngineTaskTrigger.CompleteDependency);
+
+    task.State.Should().Be(EngineTaskState.DependencyFailed);
+    await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+  }
+
+  /// <summary>
   /// Verifies that a recovering task tells why in its state message: its failure reason is only kept for a task that
   /// ended failed, so without this the error would only be in the log.
   /// </summary>

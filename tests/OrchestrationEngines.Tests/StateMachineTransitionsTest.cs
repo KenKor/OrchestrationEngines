@@ -74,6 +74,7 @@ public class StateMachineTransitionsTest
   public void EngineTask_StateMachine_MatchesSnapshot() => ShouldMatch(new InspectableTask().Info,
     [
       "Created --Cancel--> Cancelled",
+      "Created --CompleteDependency--> DependencyFailed (dynamic)",
       "Created --CompleteDependency--> Running (dynamic)",
       "Created --CompleteDependency--> WaitingForDependencies (dynamic)",
       "Created --FailDependency--> DependencyFailed",
@@ -84,6 +85,7 @@ public class StateMachineTransitionsTest
       "Resetting --Reset--> Created",
       "Resetting ignores CompleteDependency",
       "WaitingForDependencies --Cancel--> Cancelled",
+      "WaitingForDependencies --CompleteDependency--> DependencyFailed (dynamic)",
       "WaitingForDependencies --CompleteDependency--> Running (dynamic)",
       "WaitingForDependencies --CompleteDependency--> WaitingForDependencies (dynamic)",
       "WaitingForDependencies --FailDependency--> DependencyFailed",

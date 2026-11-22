@@ -857,20 +857,16 @@ public partial class EngineTask
         // Start at once without dependencies, or when they have completed; otherwise wait for them, unless one of them has
         // failed already: its failure was signalled before this task was (re)started, so waiting would never end. Fail at
         // once instead.
-        .PermitDynamic(EngineTaskTrigger.Start, StartDestination, possibleDestinationStates: new DynamicStateInfos
-        {
-          { EngineTaskState.Running, "no dependencies, or all completed" },
-          { EngineTaskState.WaitingForDependencies, "not all dependencies completed" },
-          { EngineTaskState.DependencyFailed, "a dependency failed" },
-        })
+        .PermitDynamic(EngineTaskTrigger.Start, DependencyDestination,
+          possibleDestinationStates: DependencyDestinations())
 
         // Dependency failure before we start implies this task cannot run.
         .Permit(EngineTaskTrigger.FailDependency, EngineTaskState.DependencyFailed)
 
         // A dependency completed signal may immediately allow us to run, or we remain waiting if not all dependencies
-        // are done.
-        .PermitDynamic(EngineTaskTrigger.CompleteDependency, CompleteDependencyDestination,
-          possibleDestinationStates: CompleteDependencyDestinations())
+        // are done, or fail at once if another one has failed already.
+        .PermitDynamic(EngineTaskTrigger.CompleteDependency, DependencyDestination,
+          possibleDestinationStates: DependencyDestinations())
 
         // Explicit cancellation.
         .Permit(EngineTaskTrigger.Cancel, EngineTaskState.Cancelled)
@@ -884,9 +880,10 @@ public partial class EngineTask
     machine.Configure(EngineTaskState.WaitingForDependencies)
         .Ignore(EngineTaskTrigger.Start)
         .Permit(EngineTaskTrigger.FailDependency, EngineTaskState.DependencyFailed)
-        // To Running, or back into WaitingForDependencies (a re-entry) while not all dependencies are done.
-        .PermitDynamic(EngineTaskTrigger.CompleteDependency, CompleteDependencyDestination,
-          possibleDestinationStates: CompleteDependencyDestinations())
+        // To Running, back into WaitingForDependencies (a re-entry) while not all dependencies are done, or to
+        // DependencyFailed when another one has failed already.
+        .PermitDynamic(EngineTaskTrigger.CompleteDependency, DependencyDestination,
+          possibleDestinationStates: DependencyDestinations())
         .Permit(EngineTaskTrigger.Cancel, EngineTaskState.Cancelled)
         .Ignore(EngineTaskTrigger.Reset);
 
@@ -979,9 +976,10 @@ public partial class EngineTask
     machine.Configure(EngineTaskState.Failed)
         .OnEntryFrom(_failTriggerWithReason, reason => OnFailedEntered(reason))
         .OnEntryFrom(_failRecoveryTriggerWithReason, reason => OnFailedEntered(reason))
-        .OnEntryFrom(EngineTaskTrigger.FailDependency, _ => OnFailedEntered(DependencyFailReason(), DependenciesOnlyCancelled()))
-        // Started while a dependency had already failed (see the Start transitions of Created).
-        .OnEntryFrom(EngineTaskTrigger.Start, _ => OnFailedEntered(DependencyFailReason(), DependenciesOnlyCancelled()))
+        .OnEntryFrom(EngineTaskTrigger.FailDependency, _ => OnDependencyFailedEntered())
+        // Started, or a dependency completed, while a dependency had already failed (see DependencyDestination).
+        .OnEntryFrom(EngineTaskTrigger.Start, _ => OnDependencyFailedEntered())
+        .OnEntryFrom(EngineTaskTrigger.CompleteDependency, _ => OnDependencyFailedEntered())
         // The superstate is entered before the Cancelled substate, so the reason must be known here: without it the
         // task was reported as failed for an 'Unknown failure.' (and its dependents with it) before Cancelled said why.
         .OnEntryFrom(EngineTaskTrigger.Cancel, _ => OnFailedEntered(FailReason ?? CancellationReason(), cancelled: true))
@@ -1074,10 +1072,15 @@ public partial class EngineTask
   protected virtual bool AnyDependencyFailed() => DependsOn.Any(d => d.IsFailed);
 
   /// <summary>
-  /// Returns where Start takes a task that has not started: Running when it has no dependencies or they have completed,
-  /// DependencyFailed when one of them has failed, and WaitingForDependencies otherwise.
+  /// Returns where Start or a completed dependency takes a task that has not started: Running when it has no
+  /// dependencies or they have completed, DependencyFailed when one of them has failed, and WaitingForDependencies
+  /// otherwise.
   /// </summary>
-  private EngineTaskState StartDestination()
+  /// <remarks>
+  /// A failed dependency fires FailDependency itself, but that signal is dropped while the task's run is ended for a
+  /// reset, and is not fired again: waiting would then never end. Both triggers therefore look for a failed one.
+  /// </remarks>
+  private EngineTaskState DependencyDestination()
   {
     if (!HasDependecies() || DependenciesReady())
       return EngineTaskState.Running;
@@ -1085,19 +1088,13 @@ public partial class EngineTask
   }
 
   /// <summary>
-  /// Returns where a completed dependency takes a task that has not started: Running when all dependencies have
-  /// completed, and WaitingForDependencies otherwise (a failed one fires FailDependency itself).
+  /// The destinations of <see cref="DependencyDestination"/>, for the state machine's description.
   /// </summary>
-  private EngineTaskState CompleteDependencyDestination() =>
-    DependenciesReady() ? EngineTaskState.Running : EngineTaskState.WaitingForDependencies;
-
-  /// <summary>
-  /// The destinations of <see cref="CompleteDependencyDestination"/>, for the state machine's description.
-  /// </summary>
-  private static DynamicStateInfos CompleteDependencyDestinations() => new()
+  private static DynamicStateInfos DependencyDestinations() => new()
   {
-    { EngineTaskState.Running, "all dependencies completed" },
+    { EngineTaskState.Running, "no dependencies, or all completed" },
     { EngineTaskState.WaitingForDependencies, "not all dependencies completed" },
+    { EngineTaskState.DependencyFailed, "a dependency failed" },
   };
 
   /// <summary>
@@ -1188,6 +1185,11 @@ public partial class EngineTask
       _completionTcs.TrySetResult(true);
     }
   }
+
+  /// <summary>
+  /// Enters Failed (as DependencyFailed) with the reason a dependency gave, cancelled when every failed one was.
+  /// </summary>
+  private void OnDependencyFailedEntered() => OnFailedEntered(DependencyFailReason(), DependenciesOnlyCancelled());
 
   /// <summary>
   /// Returns why this task cannot run because of a task it depends on that failed or was cancelled.
