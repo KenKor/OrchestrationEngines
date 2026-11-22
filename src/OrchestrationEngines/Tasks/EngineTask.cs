@@ -1609,10 +1609,7 @@ public partial class EngineTask
           {
             // The recovery waits for this work, so first give the work a while to notice its cancellation.
             await CancelIfCurrentAsync(run).ConfigureAwait(false);
-            using var graceCts = new CancellationTokenSource();
-            var stopped = await Task.WhenAny(workTask, Task.Delay(TimedOutWorkGrace, TimeProvider, graceCts.Token))
-              .ConfigureAwait(false) == workTask;
-            graceCts.Cancel();
+            var stopped = await workTask.EndsWithinAsync(TimedOutWorkGrace, TimeProvider).ConfigureAwait(false);
             await TimeOutIfCurrentAsync(run, stopped).ConfigureAwait(false);
           }
           await WorkEndedAsync(workTask).ConfigureAwait(false);
