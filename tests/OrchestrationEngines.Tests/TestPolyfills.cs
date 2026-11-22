@@ -61,8 +61,7 @@ namespace System.Threading.Tasks
     {
       public bool IsCompletedSuccessfully => task.Status == TaskStatus.RanToCompletion;
 
-      public Task WaitAsync(CancellationToken cancellationToken)
-        => task.WaitAsync(Timeout.InfiniteTimeSpan, cancellationToken);
+      // WaitAsync(CancellationToken) comes from the library's own polyfill (Polyfills.cs), which the tests can see.
 
       public Task WaitAsync(TimeSpan timeout)
         => task.WaitAsync(timeout, CancellationToken.None);

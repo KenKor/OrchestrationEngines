@@ -99,7 +99,7 @@ internal static class TaskExtensions
   {
     try
     {
-      await WaitCoreAsync(task, token).ConfigureAwait(false);
+      await task.WaitAsync(token).ConfigureAwait(false);
     }
     catch (OperationCanceledException) when (token.IsCancellationRequested)
     {
@@ -138,17 +138,4 @@ internal static class TaskExtensions
       TaskScheduler.Default);
     return true;
   }
-
-#if NET6_0_OR_GREATER
-  private static Task WaitCoreAsync(Task task, CancellationToken token) => task.WaitAsync(token);
-#else
-  private static async Task WaitCoreAsync(Task task, CancellationToken token)
-  {
-    // The token can be cancelled: a second task is set up that completes when it is cancelled.
-    var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    using var reg = token.UnsafeRegister(_ => tcs.TrySetCanceled(token), null);
-    var completed = await Task.WhenAny(task, tcs.Task).ConfigureAwait(false);
-    await completed.ConfigureAwait(false);
-  }
-#endif
 }
