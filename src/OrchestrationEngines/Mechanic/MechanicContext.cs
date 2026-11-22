@@ -72,11 +72,12 @@ public class MechanicContext : IEngineContext
   /// Equality is defined in terms of the <see cref="EngineDescriptors"/> set.
   /// Two contexts are considered equal if they contain the same set of descriptors.
   ///
-  /// Note: this relies on <see cref="EngineDescriptor"/> providing a correct
-  /// equality implementation.
+  /// Descriptors are compared as the set compares them, by
+  /// <see cref="EngineDescriptorNameComparer"/>: by name, case-insensitively.
+  /// A <c>null</c> context is not equal.
   /// </remarks>
   public bool Equals(MechanicContext other)
-      => EngineDescriptors.SetEquals(other.EngineDescriptors);
+      => other is not null && (ReferenceEquals(this, other) || EngineDescriptors.SetEquals(other.EngineDescriptors));
 
   /// <summary>
   /// Compares this context with another <see cref="IEngineContext"/>.
@@ -106,12 +107,17 @@ public class MechanicContext : IEngineContext
   /// Computes a hash code for this context.
   /// </summary>
   /// <remarks>
-  /// The hash code is derived from <see cref="EngineDescriptors"/>.
-  /// This is sufficient for current usage patterns, but assumes that
-  /// the descriptor set is not mutated while the context is used as a key.
+  /// The hash code combines the hash codes of the descriptors as the set's
+  /// comparer computes them, independent of their order, so equal contexts
+  /// have equal hash codes. It changes when the descriptor set changes: do not
+  /// change the set while the context is used as a key.
   /// </remarks>
   public override int GetHashCode()
   {
-    return EngineDescriptors.GetHashCode();
+    var comparer = EngineDescriptors.Comparer;
+    var hash = 0;
+    foreach (var descriptor in EngineDescriptors)
+      hash = unchecked(hash + comparer.GetHashCode(descriptor));
+    return hash;
   }
 }
