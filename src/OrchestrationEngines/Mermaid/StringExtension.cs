@@ -3,7 +3,7 @@ using System.Text;
 namespace OrchestrationEngines.Mermaid;
 
 /// <summary>
-/// An extension on strings to produce Mermaid-safe node identifiers.
+/// Extensions on strings to produce Mermaid-safe node identifiers and labels.
 /// </summary>
 public static class StringExtension
 {
@@ -25,4 +25,17 @@ public static class StringExtension
 
     return sb.ToString();
   }
+
+  /// <summary>
+  /// Writes <paramref name="text"/> for a quoted Mermaid label: '#', quotes, '&lt;' and '&gt;' as Mermaid entity
+  /// codes, so they show as text, and a line break as a space, so the node stays on one line.
+  /// </summary>
+  internal static string ForMermaidLabel(this string text) => text
+    .Replace("#", "#35;")
+    .Replace("\"", "#quot;")
+    .Replace("<", "#lt;")
+    .Replace(">", "#gt;")
+    .Replace("\r\n", " ")
+    .Replace('\r', ' ')
+    .Replace('\n', ' ');
 }

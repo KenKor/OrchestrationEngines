@@ -61,7 +61,7 @@ public static class EngineMermaidExtensions
     foreach (var task in tasks.OrderBy(t => t.Name))
     {
       var id = IdOf(task.Name);
-      var label = ForLabel($"{task.Name} ({task.State}, {task.RunDuration?.ToString()})");
+      var label = $"{task.Name} ({task.State}, {task.RunDuration?.ToString()})".ForMermaidLabel();
 
       sb.AppendLine($"    {id}[\"{label}\"]");
 
@@ -73,7 +73,7 @@ public static class EngineMermaidExtensions
       if (task.IsFailed && !string.IsNullOrWhiteSpace(task.FailReason))
       {
         var noteId = UniqueId($"{id}_reason", usedIds);
-        sb.AppendLine($"    {noteId}[\"{ForLabel(task.FailReason)}\"]");
+        sb.AppendLine($"    {noteId}[\"{task.FailReason.ForMermaidLabel()}\"]");
         sb.AppendLine($"    {id} -.-> {noteId}");
         styleSb.AppendLine($"    style {noteId} fill:#ffe5e5,stroke:#ff0000,stroke-width:1px");
       }
@@ -108,19 +108,6 @@ public static class EngineMermaidExtensions
       unique = $"{id}_{n}";
     return unique;
   }
-
-  /// <summary>
-  /// Writes <paramref name="text"/> for a quoted Mermaid label: '#', quotes, '&lt;' and '&gt;' as Mermaid entity
-  /// codes, so they show as text, and a line break as a space, so the node stays on one line.
-  /// </summary>
-  private static string ForLabel(string text) => text
-    .Replace("#", "#35;")
-    .Replace("\"", "#quot;")
-    .Replace("<", "#lt;")
-    .Replace(">", "#gt;")
-    .Replace("\r\n", " ")
-    .Replace('\r', ' ')
-    .Replace('\n', ' ');
 
   private static string GetStyleForState(string id, EngineTaskState state)
   {
