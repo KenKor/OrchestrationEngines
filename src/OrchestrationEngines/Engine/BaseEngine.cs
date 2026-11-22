@@ -196,13 +196,14 @@ public abstract partial class BaseEngine : IEngine
       static type => new EngineNameSource(type))).Name;
 
   /// <summary>
-  /// <see cref="EngineName"/> of this engine's type, kept here so later reads take no lock (on .NET Framework every
+  /// The <see cref="EngineNameSource"/> of this engine's type, kept here so later reads take no lock (on .NET Framework every
   /// lookup in <see cref="s_engineNameSources"/> does).
   /// </summary>
   private EngineNameSource _engineNameSource;
 
   /// <summary>
-  /// <see cref="EngineName"/> by engine type. Weak keys, so a type in an unloadable assembly can still be unloaded.
+  /// The <see cref="EngineNameSource"/> by engine type. Weak keys, so a type in an unloadable assembly can still be
+  /// unloaded.
   /// </summary>
   private static readonly ConditionalWeakTable<Type, EngineNameSource> s_engineNameSources = new();
 
