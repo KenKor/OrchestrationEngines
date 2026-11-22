@@ -96,7 +96,8 @@ public class ResetWaiterTest
   public async Task EngineTask_ResetManyTimesBeforeItCompletes_KeepsOneLatch()
   {
     var runs = new Runs();
-    var task = new EngineTask("Load", _ => runs.Next(), requiredForRunning: true, NullLogger.Instance, CancellationToken.None);
+    var task = new EngineTask("Load", _ => runs.Next(), requiredForRunning: true, NullLogger.Instance,
+      CancellationToken.None);
     var latch = task.InnerTask;
 
     for (var i = 0; i < 3; i++)
