@@ -1002,9 +1002,6 @@ public partial class EngineCoordinator : IDisposable
     // Ensure the dispatcher is up before monitoring begins.
     _mechanicDispatcher.Start();
 
-    // Not necessary: Ensure we do at least one tick immediately after StartAsync is fired.
-    // PulseMonitor();
-
     // Poll while there is unfinished work, otherwise park until pulsed.
     var pollInterval = TimeSpan.FromMilliseconds(200);
 

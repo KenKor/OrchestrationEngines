@@ -75,19 +75,13 @@ internal sealed partial class MechanicDispatcher : IDisposable
   }
 
   /// <summary>
-  /// Starts the dispatcher thread if it has not already been started.
+  /// Enqueues an asynchronous action for execution on the dispatcher thread.
   /// </summary>
-  /// <param name="action">The action.</param>
-  /// <param name="token">The token.</param>
-  /// <remarks>
-  /// <para>
-  /// This method is idempotent: multiple calls are safe and will only start a single worker thread.
-  /// </para>
-  /// <para>
-  /// The worker thread processes queued <see cref="IWorkItem"/> instances sequentially on a dedicated
-  /// background thread. This ensures that mechanic operations execute on a single consistent thread.
-  /// </para>
-  /// </remarks>
+  /// <param name="action">The action to execute on the dispatcher thread.</param>
+  /// <param name="token">
+  /// A cancellation token associated with the caller; see <see cref="InvokeAsync{T}"/>.
+  /// </param>
+  /// <returns>A task that completes once the action has executed on the dispatcher thread.</returns>
   public Task InvokeAsync(Func<Task> action, CancellationToken token = default)
       => InvokeAsync(async () => { await action().ConfigureAwait(false); return true; }, token);
 

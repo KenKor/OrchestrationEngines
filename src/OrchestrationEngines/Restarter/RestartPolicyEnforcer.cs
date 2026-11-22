@@ -12,7 +12,7 @@ namespace OrchestrationEngines.Restarter;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This enforcer is intended to protect the host process from �flapping� tasks that fail
+/// This enforcer is intended to protect the host process from "flapping" tasks that fail
 /// repeatedly in a short time span. It does so by:
 /// </para>
 /// <list type="bullet">
@@ -138,11 +138,11 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   }
 
   /// <summary>
-  /// Resets the enforcer�s internal state to its initial configuration.
+  /// Resets the enforcer's internal state to its initial configuration.
   /// </summary>
   /// <remarks>
   /// <para>
-  /// This clears all recorded restart timestamps and resets <see cref="CurrentBackoff"/> to the policy�s
+  /// This clears all recorded restart timestamps and resets <see cref="CurrentBackoff"/> to the policy's
   /// initial backoff. It should be called when the associated task transitions into a clean start/reset
   /// state so that historical failures do not penalize subsequent independent runs.
   /// </para>
@@ -186,7 +186,7 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// </remarks>
   public async Task Invoke(EngineTask et, CancellationToken token)
   {
-    // Because to the wiring, we should only be called from
+    // The wiring calls this only while the task is Recovering; any other state is a usage error.
     if (et.State != EngineTaskState.Recovering) throw new TaskCanceledException(nameof(et));
 
     TimeSpan delayToApply;
@@ -258,7 +258,6 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
     var maxMs = max.TotalMilliseconds;
 
     if (nextMs > maxMs) nextMs = maxMs;
-    if (nextMs < 0) nextMs = maxMs; // defensive
 
     return TimeSpan.FromMilliseconds(nextMs);
   }

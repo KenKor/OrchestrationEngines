@@ -43,13 +43,9 @@ namespace OrchestrationEngines.Mechanic;
 public partial class MechanicEngine : BaseEngine
 {
   /// <summary>
-  /// Registry of instantiated engines, keyed by engine name.
+  /// The engines behind <see cref="Engines"/>.
   /// </summary>
-  /// <remarks>
-  /// Engines are created during execution of <see cref="EngineCreationTask"/>s
-  /// and remain registered for the lifetime of the mechanic.
-  /// </remarks>
-  private readonly ConcurrentDictionary<string, IEngine> _engines = 
+  private readonly ConcurrentDictionary<string, IEngine> _engines =
     new(StringComparer.OrdinalIgnoreCase);
 
   /// <summary>
@@ -173,21 +169,21 @@ public partial class MechanicEngine : BaseEngine
   /// Wraps a base context with references to dependency engines.
   /// </summary>
   /// <param name="context">The context.</param>
-  /// <param name="DependsOn">The depends on.</param>
+  /// <param name="dependsOn">The names of the engines the engine depends on.</param>
   /// <remarks>
   /// This enables engines to access other engines they depend on
   /// without coupling them directly at construction time.
   /// </remarks>
   private IEngineContext ResolveContext(
       IEngineContext context,
-      IEnumerable<string> DependsOn)
+      IEnumerable<string> dependsOn)
   {
     EngineContextWithDependencies contextWithDependencies = null;
 
-    foreach (var dependsOn in DependsOn)
+    foreach (var name in dependsOn)
     {
       contextWithDependencies ??= new EngineContextWithDependencies(context);
-      contextWithDependencies.AddUnderlyingEngine(dependsOn, _engines[dependsOn]);
+      contextWithDependencies.AddUnderlyingEngine(name, _engines[name]);
     }
 
     return contextWithDependencies ?? context;

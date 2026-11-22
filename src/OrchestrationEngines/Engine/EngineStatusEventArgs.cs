@@ -17,9 +17,6 @@ namespace OrchestrationEngines.Engine;
 /// to publish across threads and async boundaries.
 /// </para>
 /// </remarks>
-/// <remarks>
-/// Creates a new status event for an engine.
-/// </remarks>
 /// <param name="engineName">The name of the engine whose state changed.</param>
 /// <param name="state">The new lifecycle state of the engine.</param>
 /// <param name="error">

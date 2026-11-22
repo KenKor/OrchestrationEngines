@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.Extensions.Logging;
@@ -58,7 +59,7 @@ public sealed partial class ProgressCounter
     _totalCount = 0;
 
     _lastReportedCount = 0;
-    _lastReportedTicks = DateTime.UtcNow.Ticks;
+    _lastReportedTicks = Stopwatch.GetTimestamp();
   }
 
   /// <summary>
@@ -92,27 +93,27 @@ public sealed partial class ProgressCounter
 
       _remainingUntilReport = _reportEvery;
 
-      var nowTicks = DateTime.UtcNow.Ticks;
+      var nowTicks = Stopwatch.GetTimestamp();
 
       var countDelta = _totalCount - _lastReportedCount;
       var tickDelta = nowTicks - _lastReportedTicks;
 
-      // 10,000,000 ticks per second.
+      // Elapsed time, not the wall clock: a clock adjustment must not distort the rate.
       rate = tickDelta > 0
-          ? 10_000_000.0 * countDelta / tickDelta
+          ? (double)Stopwatch.Frequency * countDelta / tickDelta
           : 0.0;
 
       _lastReportedCount = _totalCount;
       _lastReportedTicks = nowTicks;
       totalCount = _totalCount;
     }
-    var progressMessage = FormatMessage(_messageTemplate, totalCount, rate);
+    var progressMessage = String.Format(_messageTemplate, totalCount, rate);
     LogProgress(progressMessage);
     return progressMessage;
   }
 
   /// <summary>
-  /// Ensure's well do a report next time round.
+  /// Makes the next increment report, whatever its size.
   /// </summary>
   public void EnsureNextReport()
   {
@@ -132,14 +133,6 @@ public sealed partial class ProgressCounter
                                        : match.Groups[1].Value.Equals("Count", StringComparison.OrdinalIgnoreCase)
                                            ? "{0"
                                            : "{1");
-
-  private static string FormatMessage(string template, long count, double rate)
-  {
-    // Minimal, dependency-free templating.
-    // Supports numeric formats like {count:n0} and {rate:n0}.
-    // If no format is specified, defaults to invariant ToString().
-    return String.Format(template, count, rate);
-  }
 
   // ---------------------------------------------------------------------
   // Logging methods

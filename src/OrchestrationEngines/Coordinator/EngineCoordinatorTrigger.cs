@@ -2,7 +2,6 @@ namespace OrchestrationEngines.Coordinator;
 
 /// <summary>
 /// Triggers that move the Engine Coordinator through its states.
-/// See also 
 /// </summary>
 public enum EngineCoordinatorTrigger
 {
