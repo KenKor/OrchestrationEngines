@@ -1826,29 +1826,33 @@ public abstract partial class BaseEngine : IEngine
     }
     // Tracks tasks whose subtrees were already printed
     var expanded = new HashSet<EngineTask>();
+    var dependents = DirectDependents(_tasks.Values);
     foreach (var root in roots)
     {
-      WriteDependencyTree(root, sb, expanded);
+      WriteDependencyTree(root, sb, expanded, dependents);
     }
 
     return sb.ToString();
   }
 
-  private void WriteDependencyTree(
+  private static void WriteDependencyTree(
       EngineTask task,
       StringBuilder sb,
       HashSet<EngineTask> expanded,
+      Dictionary<EngineTask, List<EngineTask>> dependents,
       string indent = null)
   {
     // First time printing this task
-    if (!expanded.Contains(task))
+    if (expanded.Add(task))
     {
       sb.AppendLine($"{indent}{task.Name} [{task.State}]");
-      expanded.Add(task);
+      if (!dependents.TryGetValue(task, out var direct))
+        return;
       var childIndent = string.IsNullOrEmpty(indent) ? " -> " : "   " + indent;
-      foreach (var dep in GetDependentsOrdered(task))
+      // A task that depends on this one twice is listed once
+      foreach (var dep in direct.Distinct().OrderBy(t => t.Name))
       {
-        WriteDependencyTree(dep, sb, expanded, childIndent);
+        WriteDependencyTree(dep, sb, expanded, dependents, childIndent);
       }
     }
     else
