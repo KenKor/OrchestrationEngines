@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using AwesomeAssertions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
@@ -14,13 +11,12 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class MechanicContextEqualityTest
 {
-  private static readonly Func<CancellationToken, Task<IEngine>> Factory = _ => Task.FromResult<IEngine>(null);
-
   private static MechanicContext Context(params string[] names)
   {
     var context = new MechanicContext();
     foreach (var name in names)
-      context.EngineDescriptors.Add(new EngineDescriptor(name, Factory, requiredForRunning: true, 1));
+      context.EngineDescriptors.Add(
+        new EngineDescriptor(name, DescriptorTestExtensions.NullEngineFactory, requiredForRunning: true, 1));
     return context;
   }
 
