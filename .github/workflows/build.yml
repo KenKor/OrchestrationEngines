@@ -26,6 +26,18 @@ jobs:
           # Full history and tags, for versioning from git tags (see docs/Releasing.md).
           fetch-depth: 0
 
+      # Lines a pull request adds stay within 120 columns. First the check proves that it still works, then it reads
+      # the difference with the base branch; it changes nothing in the checkout.
+      - name: Line length check, self-test
+        run: python scripts/check-line-length.py --selftest
+
+      - name: Line length of added lines
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        shell: bash
+        run: python scripts/check-line-length.py --base "origin/$BASE_REF"
+
       # The newest SDK of the 10.0.1xx band, the band global.json allows. Not global-json-file: under latestPatch,
       # setup-dotnet would install exactly the version global.json names (10.0.100), not the newest patch.
       - uses: actions/setup-dotnet@v6
