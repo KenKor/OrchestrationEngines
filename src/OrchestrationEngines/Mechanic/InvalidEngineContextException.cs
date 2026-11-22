@@ -6,8 +6,7 @@ namespace OrchestrationEngines.Mechanic;
 /// Thrown by an engine's context task when the engine's context factory returned no context, so the task fails and is
 /// recovered as any other failure.
 /// </summary>
-[Serializable]
-internal class InvalidEngineContextException : Exception
+internal sealed class InvalidEngineContextException : Exception
 {
   /// <summary>
   /// Creates the error for the engine named <paramref name="engineName"/>.
