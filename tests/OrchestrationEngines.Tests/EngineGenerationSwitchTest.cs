@@ -56,6 +56,25 @@ public class EngineGenerationSwitchTest
   }
 
   /// <summary>
+  /// Verifies that a switch to two candidates with one name in another case is refused for the caller's argument,
+  /// and that this generation stays current.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_RestartWithDefinitionsAsync_DuplicateCandidateName_ThrowsAndStaysCurrent()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var log = new RestartLog();
+    var coordinator = await StartedCoordinatorAsync(log);
+
+    var restart = () => coordinator.RestartWithDefinitionsAsync([Descriptor("A", log), Descriptor("a", log)],
+      waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+
+    (await restart.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("candidateDescriptors");
+    coordinator.Successor.Should().BeNull();
+    coordinator.GetEngineIfReady("A").Should().NotBeNull();
+  }
+
+  /// <summary>
   /// Verifies a switch with unchanged definitions hands every restart factory its previous engine with nothing
   /// changed, starts fresh instances and stops the previous ones.
   /// </summary>

@@ -525,6 +525,7 @@ public partial class EngineCoordinator : IDisposable
   {
     ArgumentNullException.ThrowIfNull(candidateDescriptors);
     var candidateList = candidateDescriptors.Where(d => d != null).ToArray();
+    var candidateByName = EngineDefinitionDiff.ToDictionaryByName(candidateList, nameof(candidateDescriptors));
 
     // Fix (GenerationSwitchEdgeCaseTest): a replaced coordinator built a generation from its own stopped engines next
     // to the one running, or, with the dispatcher on, threw a cancellation. It goes to the current generation now.
@@ -533,7 +534,8 @@ public partial class EngineCoordinator : IDisposable
     {
       try
       {
-        next = await DispatchAsync(() => RestartWithDefinitionsAsyncInt(candidateList, waitUntilReady, token), token)
+        next = await DispatchAsync(
+            () => RestartWithDefinitionsAsyncInt(candidateList, candidateByName, waitUntilReady, token), token)
           .ConfigureAwait(false);
       }
       catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
@@ -550,24 +552,23 @@ public partial class EngineCoordinator : IDisposable
 
   /// <returns>The next coordinator, or null when another switch on this coordinator handed over first.</returns>
   private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(EngineDescriptor[] candidateList,
-    bool waitUntilReady, CancellationToken token)
+    Dictionary<string, EngineDescriptor> candidateByName, bool waitUntilReady, CancellationToken token)
   {
-    var diff = BuildDefinitionDiff(candidateList);
-
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
     Dictionary<string, IEngine> currentEngineByName;
     MechanicEngine mechanic;
 
     lock (_sync)
     {
-      currentDescriptorByName = _context.EngineDescriptors
-        .ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+      currentDescriptorByName = EngineDefinitionDiff.ToDictionaryByName(_context.EngineDescriptors,
+        nameof(_context.EngineDescriptors));
 
       currentEngineByName = Engines
         .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
       mechanic = _mechanic;
     }
 
+    var diff = EngineDefinitionDiff.Create(currentDescriptorByName, candidateByName);
     var versionChanged = new HashSet<string>(diff.VersionChangedEngineNames, StringComparer.OrdinalIgnoreCase);
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
     var handovers = new List<(string Name, Handover Handover)>();
