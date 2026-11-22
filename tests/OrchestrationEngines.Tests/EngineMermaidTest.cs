@@ -53,8 +53,8 @@ public class EngineMermaidTest
   }
 
   /// <summary>
-  /// Quotes, '#', '&lt;' and '&gt;' in a task name and in a fail reason are written as Mermaid entity codes, and a
-  /// line break in a fail reason does not end the node's line.
+  /// Quotes, backticks, '#', '&lt;' and '&gt;' in a task name and in a fail reason are written as Mermaid entity
+  /// codes, and a line break in a fail reason does not end the node's line.
   /// </summary>
   [Fact]
   public async Task ReportDependenciesMermaid_MarkupInNameAndReason_IsWrittenAsText()
@@ -62,7 +62,7 @@ public class EngineMermaidTest
     const string name = "Say \"hi\" #1 <b>";
     var engine = new GraphEngine(T(name))
     {
-      Work = (_, _, _) => throw new InvalidOperationException("Bad \"x\"\nsecond line"),
+      Work = (_, _, _) => throw new InvalidOperationException("`Bad \"x\"\nsecond line`"),
     };
     await engine.StartAsync();
     await engine.Tasks[name].InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -73,8 +73,8 @@ public class EngineMermaidTest
 
     labels.Should().HaveCount(2, "one node for the task and one for its fail reason");
     labels.Should().Contain(l => l.StartsWith("Say #quot;hi#quot; #35;1 #lt;b#gt; (", StringComparison.Ordinal));
-    labels.Should().Contain(l => l.Contains("Bad #quot;x#quot; second line"));
-    labels.Should().NotContain(l => l.Contains("\"") || l.Contains("\\"));
+    labels.Should().Contain(l => l.Contains("#96;Bad #quot;x#quot; second line#96;"));
+    labels.Should().NotContain(l => l.Contains("\"") || l.Contains("`") || l.Contains("\\"));
     lines.Take(2).Should().Equal("```mermaid", "graph TD");
     lines.Last().Should().Be("```");
     lines.Skip(2).Take(lines.Length - 3).Should().OnlyContain(l => l.StartsWith("    ", StringComparison.Ordinal),

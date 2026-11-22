@@ -27,12 +27,13 @@ public static class StringExtension
   }
 
   /// <summary>
-  /// Writes <paramref name="text"/> for a quoted Mermaid label: '#', quotes, '&lt;' and '&gt;' as Mermaid entity
-  /// codes, so they show as text, and a line break as a space, so the node stays on one line.
+  /// Writes <paramref name="text"/> for a quoted Mermaid label: '#', quotes, backticks, '&lt;' and '&gt;' as Mermaid
+  /// entity codes, so they show as text, and a line break as a space, so the node stays on one line.
   /// </summary>
   internal static string ForMermaidLabel(this string text) => text
     .Replace("#", "#35;")
     .Replace("\"", "#quot;")
+    .Replace("`", "#96;")
     .Replace("<", "#lt;")
     .Replace(">", "#gt;")
     .Replace("\r\n", " ")
