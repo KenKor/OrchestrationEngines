@@ -1683,11 +1683,13 @@ public partial class EngineTask
   /// </remarks>
   protected virtual async Task ExecuteRecoveryAsync(int run)
   {
-    if (RecoveryHelper == null)
-      throw new ArgumentException(nameof(RecoveryHelper));
-
     try
     {
+      // Read once: the property is public and may be cleared after the task entered Recovering. Without a helper the
+      // recovery fails like any other, so the task ends RecoveryFailed and does not stay in Recovering.
+      var recoveryHelper = RecoveryHelper ??
+        throw new InvalidOperationException($"The task has no {nameof(RecoveryHelper)} to recover with.");
+
       // If only this task was cancelled (but engine is still alive), recreate token to allow recovery to proceed.
       // Under the trigger lock and only for the current run: after a reset the token belongs to the next run. The token
       // is taken there as well, so a reset after the lock does not hand this recovery the next run's live token.
@@ -1713,7 +1715,7 @@ public partial class EngineTask
       else
         LogRecoveryStarted(Logger);
 
-      await RecoveryHelper.Invoke(this, token).ConfigureAwait(false);
+      await recoveryHelper.Invoke(this, token).ConfigureAwait(false);
 
       if (await CheckForCancellationIfCurrentAsync(run, token).ConfigureAwait(false))
         return;
