@@ -36,16 +36,20 @@ public class EngineMermaidTest
   }
 
   /// <summary>
-  /// A task named "end" does not get the id "end", which Mermaid reads as the end of a subgraph.
+  /// A task named after a Mermaid keyword ("end", "style", "click", ...) does not get that word as its id: Mermaid
+  /// does not parse a node whose id is a keyword, and the whole diagram fails to render.
   /// </summary>
   [Fact]
-  public async Task ReportDependenciesMermaid_TaskNamedEnd_GetsAnotherId()
+  public async Task ReportDependenciesMermaid_TaskNamedAfterKeyword_GetsAnotherId()
   {
-    var engine = await ReadyAsync(new GraphEngine(T("end")));
+    var engine = await ReadyAsync(new GraphEngine([.. EngineMermaidExtensions.Keywords.Select(k => T(k))]));
 
-    var node = Lines(engine.ReportDependenciesMermaid()).Select(l => NodeLine.Match(l)).Single(m => m.Success);
+    var ids = Lines(engine.ReportDependenciesMermaid()).Select(l => NodeLine.Match(l)).Where(m => m.Success)
+      .Select(m => m.Groups[1].Value).ToList();
 
-    node.Groups[1].Value.Should().NotBe("end");
+    ids.Should().HaveCount(EngineMermaidExtensions.Keywords.Length);
+    ids.Should().NotIntersectWith(EngineMermaidExtensions.Keywords,
+      "a node id that is a Mermaid keyword does not parse");
   }
 
   /// <summary>

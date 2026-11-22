@@ -13,6 +13,15 @@ namespace OrchestrationEngines.Mermaid;
 public static class EngineMermaidExtensions
 {
   /// <summary>
+  /// The words of a Mermaid flowchart that cannot be a node id. Mermaid matches them case-sensitively, as a whole id.
+  /// </summary>
+  internal static readonly string[] Keywords =
+  [
+    "end", "graph", "flowchart", "subgraph", "direction", "style", "linkStyle", "classDef", "class", "click", "call",
+    "href", "interpolate", "default",
+  ];
+
+  /// <summary>
   /// Produces a Mermaid diagram representing the engine's task dependencies and states.
   /// </summary>
   /// <param name="engine">The engine whose tasks are drawn.</param>
@@ -36,8 +45,8 @@ public static class EngineMermaidExtensions
     var styleSb = new StringBuilder();
 
     // Every node gets its own id: names that differ only in characters an id cannot hold ("A-B", "A B") would
-    // otherwise share one. "end" is taken from the start, as Mermaid reads it as the end of a subgraph.
-    var usedIds = new HashSet<string>(StringComparer.Ordinal) { "end" };
+    // otherwise share one. Mermaid's keywords are taken from the start, as a node id that is one does not parse.
+    var usedIds = new HashSet<string>(Keywords, StringComparer.Ordinal);
     // By name, as task names are unique ignoring case: a dependency held from before a task was replaced points at
     // the node of the task with its name.
     var idByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
