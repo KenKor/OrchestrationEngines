@@ -757,39 +757,28 @@ public partial class EngineTask
     _dependsOn.Add(parent);
 
     // If the dependency completes, re-evaluate DependenciesReady and move to Running if possible.
-    parent.CompletedStateReached += async _ =>
-    {
-      if (_suppressDependencyCallbacks)
-        return;
+    parent.CompletedStateReached += OnParentOutcome(EngineTaskTrigger.CompleteDependency);
 
-      try
-      {
-        await FireDependencyTriggerAsync(EngineTaskTrigger.CompleteDependency).ConfigureAwait(false);
-      }
-      catch (Exception ex)
-      {
-        LogDependencyCallbackFailed(Logger, ex, EngineTaskTrigger.CompleteDependency, parent.Name);
-      }
-    };
-
-    // If the dependency fails/cancels, fail fast.
-    parent.FailedStateReached += async _ =>
-    {
-      if (_suppressDependencyCallbacks)
-        return;
-
-      try
-      {
-        // The reason is taken from the failed dependency on entry into DependencyFailed (see DependencyFailReason).
-        await FireDependencyTriggerAsync(EngineTaskTrigger.FailDependency).ConfigureAwait(false);
-      }
-      catch (Exception ex)
-      {
-        LogDependencyCallbackFailed(Logger, ex, EngineTaskTrigger.FailDependency, parent.Name);
-      }
-    };
+    // If the dependency fails/cancels, fail fast. The reason is taken from the failed dependency on entry into
+    // DependencyFailed (see DependencyFailReason).
+    parent.FailedStateReached += OnParentOutcome(EngineTaskTrigger.FailDependency);
 
     return this;
+
+    Action<EngineTask> OnParentOutcome(EngineTaskTrigger trigger) => async _ =>
+    {
+      if (_suppressDependencyCallbacks)
+        return;
+
+      try
+      {
+        await FireDependencyTriggerAsync(trigger).ConfigureAwait(false);
+      }
+      catch (Exception ex)
+      {
+        LogDependencyCallbackFailed(Logger, ex, trigger, parent.Name);
+      }
+    };
   }
 
   /// <summary>
@@ -818,12 +807,9 @@ public partial class EngineTask
   {
     dependant.AddDependsOn(this);
 
-    if (dependents.Length > 0)
+    foreach (var otherDependent in dependents)
     {
-      foreach (var otherDependent in dependents)
-      {
-        otherDependent.AddDependsOn(this);
-      }
+      otherDependent.AddDependsOn(this);
     }
 
     return this;
@@ -927,15 +913,11 @@ public partial class EngineTask
         .PermitIf(
             EngineTaskTrigger.Cancel,
             EngineTaskState.Cancelled,
-            () => CancellationToken.IsCancellationRequested)
+            () => CancellationToken.IsCancellationRequested || RecoveryHelper == null)
         .PermitIf(
             EngineTaskTrigger.Cancel,
             EngineTaskState.Recovering,
             () => !CancellationToken.IsCancellationRequested && RecoveryHelper != null)
-        .PermitIf(
-            EngineTaskTrigger.Cancel,
-            EngineTaskState.Cancelled,
-            () => !CancellationToken.IsCancellationRequested && RecoveryHelper == null)
 
         // A task with several dependencies can already be Running when a later dependency completes and fires
         // CompleteDependency (via AddDependsOn's CompletedStateReached callback). A late dependency-completion
@@ -1033,7 +1015,7 @@ public partial class EngineTask
     // Resetting
     // ---------------------------
     machine.Configure(EngineTaskState.Resetting)
-        .OnEntryAsync(async () => await OnResetEnteredAsync())
+        .OnEntryAsync(OnResetEnteredAsync)
         // A dependency may complete while this task is resetting — benign, ignore it.
         .Ignore(EngineTaskTrigger.CompleteDependency)
         .Permit(EngineTaskTrigger.Reset, EngineTaskState.Created);

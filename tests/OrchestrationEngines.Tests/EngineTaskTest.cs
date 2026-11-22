@@ -398,6 +398,39 @@ public class EngineTaskTest
   }
 
   /// <summary>
+  /// Verifies that an OperationCanceledException from the work, while the task's token is still live, ends a task
+  /// without a recovery policy in Cancelled after one run.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_WorkCancelsItself_WithoutRecovery_EndsInCancelled()
+  {
+    var runs = 0;
+    var task = NewTask("Load", _ => ++runs == 1 ? throw new OperationCanceledException() : Task.CompletedTask);
+
+    await RunToEndAsync(task);
+
+    task.State.Should().Be(EngineTaskState.Cancelled);
+    runs.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that an OperationCanceledException from the work, while the task's token is still live, sends a task
+  /// with a recovery policy to Recovering: it runs the work again and completes.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_WorkCancelsItself_WithRecovery_RunsTheWorkAgain()
+  {
+    var runs = 0;
+    var task = NewTask("Load", _ => ++runs == 1 ? throw new OperationCanceledException() : Task.CompletedTask)
+      .SetRecovery(NoWait(maxRestarts: 5));
+
+    await RunToEndAsync(task);
+
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+    runs.Should().Be(2);
+  }
+
+  /// <summary>
   /// Verifies that a dependency completing late is ignored in every state where it can arrive (Running, Recovering,
   /// Failed), instead of throwing or changing the state. Release builds crashed on this before the fix.
   /// </summary>

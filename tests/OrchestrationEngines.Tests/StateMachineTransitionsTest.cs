@@ -92,7 +92,6 @@ public class StateMachineTransitionsTest
       "WaitingForDependencies ignores Reset",
       "WaitingForDependencies ignores Start",
       "Running --Cancel--> Cancelled (guarded)",
-      "Running --Cancel--> Cancelled (guarded)",
       "Running --Cancel--> Recovering (guarded)",
       "Running --Fail--> Failed (guarded)",
       "Running --Fail--> Recovering (guarded)",
