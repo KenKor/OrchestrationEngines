@@ -49,7 +49,7 @@ public class EngineCreationTask : EngineTask
         CancellationToken token)
         : base(
             engineDescriptor.Name,
-            async _ => await Task.CompletedTask.ConfigureAwait(false), // Placeholder; replaced immediately.
+            runtimeToken => CreateInstanceAsync(m, engineDescriptor, runtimeToken),
             engineDescriptor.RequiredForRunning,
             Logger,
             token)
@@ -59,9 +59,6 @@ public class EngineCreationTask : EngineTask
         // Creation-time recovery is not the same as runtime restart recovery.
         // This currently reuses the descriptor policy as a pragmatic default, with an enforcer of its own.
         RecoveryHelper = engineDescriptor.CreateRecoveryHelper(TimeProvider);
-
-        // Override the placeholder work delegate with the actual creation logic.
-        _workAsync = runtimeToken => CreateInstanceAsync(m, engineDescriptor, runtimeToken);
     }
 
     /// <summary>

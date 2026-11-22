@@ -634,4 +634,18 @@ public class EngineTaskTest
     task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
     runs.Should().Be(2);
   }
+
+  /// <summary>
+  /// Verifies that the constructor refuses a null work function or a null name, each with an ArgumentNullException for
+  /// that parameter.
+  /// </summary>
+  [Fact]
+  public void EngineTask_NullWorkOrName_ThrowsForThatParameter()
+  {
+    var noWork = Record.Exception(() => NewTask("Load", null));
+    var noName = Record.Exception(() => NewTask(null, _ => Task.CompletedTask));
+
+    noWork.Should().BeOfType<ArgumentNullException>().Which.ParamName.Should().Be("workAsync");
+    noName.Should().BeOfType<ArgumentNullException>().Which.ParamName.Should().Be("name");
+  }
 }
