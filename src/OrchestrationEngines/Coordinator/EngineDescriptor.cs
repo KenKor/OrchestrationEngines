@@ -245,9 +245,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// When the parent engine reaches a terminal state, dependent engine tasks
   /// are signaled via dependency triggers.
   /// </remarks>
+  /// <exception cref="ArgumentNullException"><paramref name="parentEngineName"/> is null.</exception>
   public virtual EngineDescriptor AddDependsOn(string parentEngineName)
   {
-    DependsOn.Add(parentEngineName);
+    DependsOn.Add(parentEngineName ?? throw new ArgumentNullException(nameof(parentEngineName)));
     return this;
   }
 
@@ -397,12 +398,12 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     // code already was not), and DependsOn by reference, so two descriptors were never equal by their dependencies.
     return String.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase) &&
            Version == other.Version &&
-           EngineFactory.Equals(other.EngineFactory) &&
-           (RestartFromPrevious == other.RestartFromPrevious || RestartFromPrevious != null && RestartFromPrevious.Equals(other.RestartFromPrevious)) &&
+           Equals(EngineFactory, other.EngineFactory) &&
+           Equals(RestartFromPrevious, other.RestartFromPrevious) &&
            RequiredForRunning == other.RequiredForRunning &&
-           (ContextFactory == other.ContextFactory || ContextFactory != null && ContextFactory.Equals(other.ContextFactory)) &&
-           (RecoveryHelper == other.RecoveryHelper || RecoveryHelper != null && Equals(RecoveryHelper, other.RecoveryHelper)) &&
-           (RestartPolicy == other.RestartPolicy || RestartPolicy != null && RestartPolicy.Equals(other.RestartPolicy)) &&
+           Equals(ContextFactory, other.ContextFactory) &&
+           Equals(RecoveryHelper, other.RecoveryHelper) &&
+           Equals(RestartPolicy, other.RestartPolicy) &&
            DependsOn.SetEquals(other.DependsOn);
   }
 

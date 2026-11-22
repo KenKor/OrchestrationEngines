@@ -52,4 +52,21 @@ public class EngineDescriptorEqualityTest
     descriptor.Equals(Descriptor("Repair", "AsBuilt")).Should().BeFalse();
     descriptor.Equals(null).Should().BeFalse();
   }
+
+  /// <summary>
+  /// Verifies that a descriptor whose factory was set to <c>null</c> is compared and hashed without throwing.
+  /// </summary>
+  [Fact]
+  public void EngineDescriptor_Equals_FactorySetToNull_ComparesWithoutThrowing()
+  {
+    var descriptor = Descriptor("Patch");
+    descriptor.EngineFactory = null;
+    var same = Descriptor("Patch");
+    same.EngineFactory = null;
+
+    descriptor.Equals(same).Should().BeTrue();
+    descriptor.GetHashCode().Should().Be(same.GetHashCode());
+    descriptor.Equals(Descriptor("Patch")).Should().BeFalse();
+    Descriptor("Patch").Equals(descriptor).Should().BeFalse();
+  }
 }
