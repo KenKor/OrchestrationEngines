@@ -7,9 +7,10 @@ using OrchestrationEngines.Engine;
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// An engine with one load task, whose stop fails with <paramref name="failure"/> after the engine has stopped. The load
+/// An engine with one load task, whose stop fails with <paramref name="failure"/> after the engine has stopped (without
+/// <paramref name="failure"/>, the stop does not fail). The load
 /// runs <paramref name="loadAsync"/>, or ends at once without it; the engine counts its loads. With
-/// <paramref name="holdStop"/>, the stop waits for <see cref="ReleaseStop"/> before it fails, so a test can act while a
+/// <paramref name="holdStop"/>, the stop waits for <see cref="ReleaseStop"/> before it ends, so a test can act while a
 /// stop is in progress.
 /// </summary>
 internal sealed class StopFailingEngine(
@@ -52,6 +53,7 @@ internal sealed class StopFailingEngine(
     await base.StopAsync().ConfigureAwait(false);
     Stopping.TrySetResult();
     await ReleaseStop.Task.ConfigureAwait(false);
-    throw failure;
+    if (failure != null)
+      throw failure;
   }
 }

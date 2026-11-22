@@ -16,6 +16,7 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
   private readonly object _lock = new();
   private readonly List<ManualTimer> _timers = [];
   private DateTimeOffset _now = start;
+  private int _created;
 
   /// <summary>
   /// Creates a clock that starts at a fixed moment.
@@ -30,6 +31,26 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
   public int WaitingTimers
   {
     get { lock (_lock) { return _timers.Count(t => t.DueAt.HasValue); } }
+  }
+
+  /// <summary>
+  /// Gets the number of timers created on this clock so far.
+  /// </summary>
+  public int TimersCreated
+  {
+    get { lock (_lock) { return _created; } }
+  }
+
+  /// <summary>
+  /// Gets the due times of the waiting timers that were created after the first <paramref name="created"/> timers.
+  /// </summary>
+  /// <param name="created">A <see cref="TimersCreated"/> count taken earlier.</param>
+  public IReadOnlyList<DateTimeOffset> DueTimesSince(int created)
+  {
+    lock (_lock)
+    {
+      return [.. _timers.Where(t => t.Number >= created && t.DueAt.HasValue).Select(t => t.DueAt.Value)];
+    }
   }
 
   /// <inheritdoc/>
@@ -83,12 +104,13 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
   /// <inheritdoc/>
   public override ITimer CreateTimer(TimerCallback callback, object state, TimeSpan dueTime, TimeSpan period)
   {
-    var timer = new ManualTimer(this, callback, state);
-    timer.Change(dueTime, period);
+    ManualTimer timer;
     lock (_lock)
     {
+      timer = new ManualTimer(this, callback, state, _created++);
       _timers.Add(timer);
     }
+    timer.Change(dueTime, period);
     return timer;
   }
 
@@ -103,8 +125,11 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
   /// <summary>
   /// A timer on a <see cref="ManualTimeProvider"/>.
   /// </summary>
-  private sealed class ManualTimer(ManualTimeProvider clock, TimerCallback callback, object state) : ITimer
+  private sealed class ManualTimer(ManualTimeProvider clock, TimerCallback callback, object state, int number) : ITimer
   {
+    /// <summary>Gets the order in which this timer was created on its clock, from 0.</summary>
+    public int Number { get; } = number;
+
     public DateTimeOffset? DueAt { get; private set; }
 
     public TimeSpan Period { get; private set; }
