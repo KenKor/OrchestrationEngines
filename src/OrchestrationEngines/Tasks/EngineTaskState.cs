@@ -106,9 +106,7 @@ public static class EngineTaskStateExtension
   /// <param name="value"></param>
   /// <returns></returns>
   public static EngineTaskState FromValue(this EngineTaskState e, string value) =>
-      Enum.TryParse(value, true, out EngineTaskState state) && Enum.IsDefined(typeof(EngineTaskState), state)
-          ? state
-          : e;
+      Enum.TryParse(value, true, out EngineTaskState state) ? e.FromValue(state.AsValue()) : e;
 
   /// <summary>
   /// Get a description for an Engine Task State
