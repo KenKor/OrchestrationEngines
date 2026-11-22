@@ -128,18 +128,16 @@ public class EngineTaskLogLevelTest
   public async Task RestartLimitExceeded_ErrorNamesTheLastFailure()
   {
     var logger = new FakeLogger();
-    var task = NewTask("Root", Throws, logger).SetRecovery(new RestartPolicy
+    var task = await RunUntilRestartLimitAsync(new RestartPolicy
     {
       MaxRestartsInWindow = 1,
       Window = TimeSpan.FromMinutes(1),
       InitialBackoff = TimeSpan.Zero,
       MaxBackoff = TimeSpan.Zero,
-    });
+    }, logger);
 
-    await RunToEndAsync(task);
-
-    task.State.Should().Be(EngineTaskState.RecoveryFailed);
-    task.FailReason.Should().StartWith("Restart limit exceeded for Root.").And.EndWith("(Recovering after an error: No data.)");
+    task.FailReason.Should()
+      .StartWith("Restart limit exceeded for Root. Maximum of 1 restarts allowed within a window");
     var errors = logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).ToList();
     errors.Should().ContainSingle(r => r.Message.Contains("Restart limit exceeded"))
       .Which.Message.Should().Contain("(Recovering after an error: No data.)");
@@ -153,18 +151,29 @@ public class EngineTaskLogLevelTest
   [Fact]
   public async Task ConsecutiveRestartLimitExceeded_ErrorNamesTheLastFailure()
   {
-    var task = NewTask("Root", Throws, new FakeLogger()).SetRecovery(new RestartPolicy
+    var task = await RunUntilRestartLimitAsync(new RestartPolicy
     {
       MaxConsecutiveRestarts = 1,
       InitialBackoff = TimeSpan.Zero,
       MaxBackoff = TimeSpan.Zero,
-    });
+    }, new FakeLogger());
+
+    task.FailReason.Should().StartWith("Restart limit exceeded for Root. Maximum of 1 restarts in a row");
+  }
+
+  /// <summary>
+  /// Runs a task whose work always throws "No data." under <paramref name="policy"/> until the policy gives up, and
+  /// checks that the task failed its recovery with a reason that says what kept failing.
+  /// </summary>
+  private static async Task<EngineTask> RunUntilRestartLimitAsync(RestartPolicy policy, ILogger logger)
+  {
+    var task = NewTask("Root", Throws, logger).SetRecovery(policy);
 
     await RunToEndAsync(task);
 
     task.State.Should().Be(EngineTaskState.RecoveryFailed);
-    task.FailReason.Should().StartWith("Restart limit exceeded for Root. Maximum of 1 restarts in a row")
-      .And.EndWith("(Recovering after an error: No data.)");
+    task.FailReason.Should().EndWith("(Recovering after an error: No data.)");
+    return task;
   }
 
   /// <summary>
