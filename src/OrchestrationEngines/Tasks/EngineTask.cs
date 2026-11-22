@@ -29,7 +29,7 @@ namespace OrchestrationEngines.Tasks;
 ///
 /// <para>
 /// The <see cref="InnerTask"/> is the "completion latch" for external awaiting: it completes when the task reaches a terminal
-/// state (success or failure), and it is reset when the task is reset.
+/// state (success or failure). A reset gives a new one once it has completed; until then, a reset keeps it.
 /// </para>
 /// </remarks>
 public partial class EngineTask
