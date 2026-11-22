@@ -267,16 +267,17 @@ namespace System.Threading.Tasks
   /// </summary>
   internal static class TimeProviderPolyfills
   {
-    /// <summary>
-    /// Creates a source that is cancelled once <paramref name="delay"/> has passed on <paramref name="timeProvider"/>.
-    /// </summary>
-    /// <param name="timeProvider">Measures the delay.</param>
-    /// <param name="delay">
-    /// The time until the source is cancelled; <see cref="Timeout.InfiniteTimeSpan"/> for never.
-    /// </param>
-    /// <returns>The source.</returns>
-    public static CancellationTokenSource CreateCancellationTokenSource(this TimeProvider timeProvider, TimeSpan delay)
-      => new(delay, timeProvider);
+    extension(TimeProvider timeProvider)
+    {
+      /// <summary>
+      /// Creates a source that is cancelled once <paramref name="delay"/> has passed on the time provider.
+      /// </summary>
+      /// <param name="delay">
+      /// The time until the source is cancelled; <see cref="Timeout.InfiniteTimeSpan"/> for never.
+      /// </param>
+      /// <returns>The source.</returns>
+      public CancellationTokenSource CreateCancellationTokenSource(TimeSpan delay) => new(delay, timeProvider);
+    }
   }
 }
 

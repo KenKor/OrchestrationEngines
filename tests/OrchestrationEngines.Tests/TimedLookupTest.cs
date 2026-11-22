@@ -102,6 +102,7 @@ public class TimedLookupTest
 
     (await Wait.UntilCollectedAsync(MustComplete, name)).Should().BeTrue(
       "nothing may still wait for the engine once the lookup has ended");
+    clock.WaitingTimers.Should().Be(timersBefore, "the lookup's timer ends with it, also before its time-out");
     await mechanic.StopAsync().WaitAsync(MustComplete, ct);
   }
 

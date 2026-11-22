@@ -575,6 +575,7 @@ public partial class MechanicEngine : BaseEngine
       CancellationToken token = default)
   {
     var dedicatedCt = (token == default) ? CancellationToken : token;
+    // A Ready engine needs no time-out source or timer; the inner lookup checks the same.
     if (_engines.TryGetValue(name, out var known) && known.State == EngineState.Ready)
       return known;
 
@@ -591,6 +592,12 @@ public partial class MechanicEngine : BaseEngine
       // The caller's cancellation carries the caller's token; the time-out answers null.
       dedicatedCt.ThrowIfCancellationRequested();
       return null;
+    }
+    finally
+    {
+      // On netstandard2.0 the source's timer on a clock other than TimeProvider.System is removed only when the source
+      // is cancelled, not when it is disposed: a lookup that ends early would leave it running until the time-out.
+      timeout.Cancel();
     }
   }
 
