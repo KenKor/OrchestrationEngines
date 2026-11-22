@@ -153,6 +153,44 @@ public class EngineCoordinatorLifecycleTest
   }
 
   /// <summary>
+  /// Verifies that shutting down a coordinator that never started ends it Stopped, as after a start (#153): it takes
+  /// no more engines, creates none, and a later ready-wait behaves as on a coordinator shut down after its start.
+  /// </summary>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task EngineCoordinator_ShutdownAsync_NeverStarted_EndsStopped(bool useDispatcher)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator(nameof(EngineCoordinatorLifecycleTest), NullLogger.Instance, useDispatcher);
+    var created = 0;
+    coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ =>
+      {
+        Interlocked.Increment(ref created);
+        return Task.FromResult<IEngine>(new NetworkEngine((_, _) => Task.CompletedTask));
+      }, requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts());
+
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+    coordinator.TryRegisterEngineDescriptor(Descriptor("Other", new NetworkEngine((_, _) => Task.CompletedTask)))
+      .Should().BeFalse("a shut-down coordinator takes no more engines");
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    // As after a start: with the dispatcher, its queue no longer takes work; without it, the wait returns.
+    var ensureReady = () => coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    if (useDispatcher)
+      await ensureReady.Should().ThrowAsync<OperationCanceledException>();
+    else
+      await ensureReady.Should().NotThrowAsync();
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+    created.Should().Be(0, "a coordinator shut down before its start never creates an engine");
+  }
+
+  /// <summary>
   /// Verifies that shutting down while an engine loads ends a lookup that waits for that engine, instead of leaving
   /// it waiting forever.
   /// </summary>

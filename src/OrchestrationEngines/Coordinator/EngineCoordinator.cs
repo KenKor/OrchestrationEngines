@@ -258,7 +258,8 @@ public partial class EngineCoordinator : IDisposable
         new StateMachine<EngineCoordinatorState, EngineCoordinatorTrigger>(EngineCoordinatorState.Created);
 
     machine.Configure(EngineCoordinatorState.Created)
-        .Permit(EngineCoordinatorTrigger.Start, EngineCoordinatorState.WaitingForEngines);
+        .Permit(EngineCoordinatorTrigger.Start, EngineCoordinatorState.WaitingForEngines)
+        .Permit(EngineCoordinatorTrigger.StartShutdown, EngineCoordinatorState.Stopping);
 
     machine.Configure(EngineCoordinatorState.WaitingForEngines)
         .Ignore(EngineCoordinatorTrigger.Start)
