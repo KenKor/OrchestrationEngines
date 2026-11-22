@@ -19,6 +19,7 @@ public class EngineTaskStateTest
   {
     EngineTaskState.Created.FromValue((int?)65540).Should().Be(EngineTaskState.Created);
     EngineTaskState.Created.FromValue((long?)65540).Should().Be(EngineTaskState.Created);
+    EngineTaskState.Created.FromValue((int?)4).Should().Be(EngineTaskState.Running);
     EngineTaskState.Created.FromValue((long?)4).Should().Be(EngineTaskState.Running);
   }
 
