@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.Extensions.Logging;
@@ -32,7 +31,7 @@ public sealed partial class ProgressCounter
   private int _totalCount;
 
   private int _lastReportedCount;
-  private long _lastReportedTicks;
+  private long _lastReportedTimestamp;
 
   /// <summary>
   /// Creates a progress counter that reports once per <paramref name="reportEvery"/> increments.
@@ -59,7 +58,7 @@ public sealed partial class ProgressCounter
     _totalCount = 0;
 
     _lastReportedCount = 0;
-    _lastReportedTicks = Stopwatch.GetTimestamp();
+    _lastReportedTimestamp = TimeProvider.System.GetTimestamp();
   }
 
   /// <summary>
@@ -93,18 +92,17 @@ public sealed partial class ProgressCounter
 
       _remainingUntilReport = _reportEvery;
 
-      var nowTicks = Stopwatch.GetTimestamp();
+      var now = TimeProvider.System.GetTimestamp();
 
       var countDelta = _totalCount - _lastReportedCount;
-      var tickDelta = nowTicks - _lastReportedTicks;
-
       // Elapsed time, not the wall clock: a clock adjustment must not distort the rate.
-      rate = tickDelta > 0
-          ? (double)Stopwatch.Frequency * countDelta / tickDelta
+      var seconds = TimeProvider.System.GetElapsedTime(_lastReportedTimestamp, now).TotalSeconds;
+      rate = seconds > 0
+          ? countDelta / seconds
           : 0.0;
 
       _lastReportedCount = _totalCount;
-      _lastReportedTicks = nowTicks;
+      _lastReportedTimestamp = now;
       totalCount = _totalCount;
     }
     var progressMessage = String.Format(_messageTemplate, totalCount, rate);
