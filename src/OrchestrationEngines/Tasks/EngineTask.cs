@@ -29,7 +29,7 @@ namespace OrchestrationEngines.Tasks;
 ///
 /// <para>
 /// The <see cref="InnerTask"/> is the "completion latch" for external awaiting: it completes when the task reaches a terminal
-/// state (success or failure), and it is reset when the task is reset.
+/// state (success or failure). A reset gives a new one once it has completed; until then, a reset keeps it.
 /// </para>
 /// </remarks>
 public partial class EngineTask
@@ -124,7 +124,7 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// This is not the same as the underlying work task. It is a durable signal to external callers that the EngineTask lifecycle
-  /// has finished (success/failure/cancel). It is recreated on reset.
+  /// has finished (success/failure/cancel). A reset replaces it once it has completed, and keeps it until then.
   /// </remarks>
   private TaskCompletionSource<bool> _completionTcs = new();
 
@@ -181,7 +181,8 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// This task completes when the EngineTask reaches a terminal state (CompletedWithSuccess, Failed, Cancelled, etc.).
-  /// It is reset when the EngineTask is reset.
+  /// A reset gives a new one once this one has completed; until then, a reset keeps it, and it completes with the next
+  /// run.
   /// </remarks>
   public Task InnerTask => _completionTcs.Task;
 
@@ -1228,8 +1229,8 @@ public partial class EngineTask
   /// Reset handler: clears per-run state before the state machine is recreated.
   /// </summary>
   /// <remarks>
-  /// This method creates a new token and a new completion latch. The caller is responsible for
-  /// replacing the state machine so the task returns to Created.
+  /// This method creates a new token, and a new completion latch when the last one completed. The caller is
+  /// responsible for replacing the state machine so the task returns to Created.
   /// </remarks>
   protected virtual Task OnResetEnteredAsync()
   {
@@ -1253,16 +1254,11 @@ public partial class EngineTask
       // Fix: the run that was reset must not report its outcome into the next run (see ExecuteWorkAsync).
       Interlocked.Increment(ref _runGeneration);
 
-      // Recreate completion latch so new awaiters can observe a fresh lifecycle. Whoever waits on the previous latch
-      // (a run that the reset ended before it completed) is released when the next run completes: replacing the latch
-      // alone left those waiters waiting forever.
-      var previousCompletion = _completionTcs;
-      _completionTcs = new TaskCompletionSource<bool>();
-      if (!previousCompletion.Task.IsCompleted)
-      {
-        _completionTcs.Task.ContinueWith(next => previousCompletion.TrySetResult(next.Result),
-          CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-      }
+      // A completed latch is replaced, so new awaiters observe a fresh lifecycle. A latch that has not completed (a run
+      // that the reset ended before it completed, or no run yet) is kept: whoever waits on it is released when the next
+      // run completes, and repeated resets add nothing to it.
+      if (_completionTcs.Task.IsCompleted)
+        _completionTcs = new TaskCompletionSource<bool>();
     }
     finally
     {

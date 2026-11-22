@@ -89,6 +89,29 @@ public class ResetWaiterTest
   }
 
   /// <summary>
+  /// Verifies that resets of a task whose run never completed keep the one latch whoever waits on the task holds,
+  /// instead of chaining a new latch onto it at each reset.
+  /// </summary>
+  [Fact]
+  public async Task EngineTask_ResetManyTimesBeforeItCompletes_KeepsOneLatch()
+  {
+    var runs = new Runs();
+    var task = new EngineTask("Load", _ => runs.Next(), requiredForRunning: true, NullLogger.Instance,
+      CancellationToken.None);
+    var latch = task.InnerTask;
+
+    for (var i = 0; i < 3; i++)
+      await task.FireAsync(EngineTaskTrigger.Reset);
+
+    task.InnerTask.Should().BeSameAs(latch, "a reset keeps a latch that has not completed");
+    await task.FireAsync(EngineTaskTrigger.Start);
+    await Wait.UntilAsync(() => runs.Count == 1, MustComplete, "the run must have started");
+    runs.Complete(1);
+    await latch.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
+    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
+  }
+
+  /// <summary>
   /// Verifies that waiting until an engine is ready, begun while its load runs, ends when the load runs again after a
   /// reset (as a context change or a change monitor does) and completes.
   /// </summary>
