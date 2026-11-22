@@ -25,23 +25,16 @@ public class EngineNameTest
   private sealed class UnnamedEngine : NoTasksEngine;
 
   /// <summary>
-  /// A display name that counts how often it is read. Reflection builds a new attribute on every lookup, so the count
+  /// A display name that counts how often it is built. Reflection builds a new attribute on every lookup, so the count
   /// is the number of times the attribute was looked up.
   /// </summary>
-  private sealed class CountedDisplayNameAttribute(string displayName) : DisplayNameAttribute(displayName)
+  private sealed class CountedDisplayNameAttribute : DisplayNameAttribute
   {
-    private static int s_reads;
+    private static int s_built;
 
-    public static int Reads => Volatile.Read(ref s_reads);
+    public CountedDisplayNameAttribute(string displayName) : base(displayName) => Interlocked.Increment(ref s_built);
 
-    public override string DisplayName
-    {
-      get
-      {
-        Interlocked.Increment(ref s_reads);
-        return base.DisplayName;
-      }
-    }
+    public static int Built => Volatile.Read(ref s_built);
   }
 
   [CountedDisplayName("Counted")]
@@ -76,6 +69,35 @@ public class EngineNameTest
       second.EngineName.Should().Be("Counted");
     }
 
-    CountedDisplayNameAttribute.Reads.Should().Be(1, "the name of an engine type does not change");
+    CountedDisplayNameAttribute.Built.Should().Be(1, "the attribute of an engine type does not change");
+  }
+
+  /// <summary>
+  /// A display name that changes after it is first read, as a localised one does with the current culture.
+  /// </summary>
+  private sealed class ChangingDisplayNameAttribute() : DisplayNameAttribute
+  {
+    public static volatile string Current = "First";
+
+    public override string DisplayName => Current;
+  }
+
+  [ChangingDisplayName]
+  private sealed class ChangingEngine : NoTasksEngine;
+
+  /// <summary>
+  /// Verifies that the display name is read on every read: a <see cref="DisplayNameAttribute"/> subclass may compute
+  /// it, for example for the current culture.
+  /// </summary>
+  [Fact]
+  public void EngineName_DisplayNameChanges_IsTheCurrentDisplayName()
+  {
+    var engine = new ChangingEngine();
+    engine.EngineName.Should().Be("First");
+
+    ChangingDisplayNameAttribute.Current = "Second";
+
+    engine.EngineName.Should().Be("Second");
+    new ChangingEngine().EngineName.Should().Be("Second");
   }
 }

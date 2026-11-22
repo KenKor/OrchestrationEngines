@@ -188,16 +188,34 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   /// <remarks>
   /// Defaults to the type name, but may be overridden via
-  /// <see cref="DisplayNameAttribute"/>. Read once per engine type: it is read on every enabled log line of the engine
-  /// and its tasks.
+  /// <see cref="DisplayNameAttribute"/>. The attribute is looked up once per engine type, and its
+  /// <see cref="DisplayNameAttribute.DisplayName"/> read on every read, so a subclass may compute it (for example for
+  /// the current culture). It is read on every enabled log line of the engine and its tasks.
   /// </remarks>
-  public virtual string EngineName => s_engineNames.GetValue(GetType(), static type =>
-      type.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName ?? type.Name);
+  public virtual string EngineName => (_engineNameSource ??= s_engineNameSources.GetValue(GetType(),
+      static type => new EngineNameSource(type))).Name;
+
+  /// <summary>
+  /// <see cref="EngineName"/> of this engine's type, kept here so later reads take no lock (on .NET Framework every
+  /// lookup in <see cref="s_engineNameSources"/> does).
+  /// </summary>
+  private EngineNameSource _engineNameSource;
 
   /// <summary>
   /// <see cref="EngineName"/> by engine type. Weak keys, so a type in an unloadable assembly can still be unloaded.
   /// </summary>
-  private static readonly ConditionalWeakTable<Type, string> s_engineNames = new();
+  private static readonly ConditionalWeakTable<Type, EngineNameSource> s_engineNameSources = new();
+
+  /// <summary>
+  /// The <see cref="DisplayNameAttribute"/> of an engine type, looked up once, else its type name.
+  /// </summary>
+  private sealed class EngineNameSource(Type type)
+  {
+    private readonly DisplayNameAttribute _displayName = type.GetCustomAttribute<DisplayNameAttribute>();
+    private readonly string _typeName = type.Name;
+
+    public string Name => _displayName?.DisplayName ?? _typeName;
+  }
 
   private readonly ILogger _applicationLogger;
 
