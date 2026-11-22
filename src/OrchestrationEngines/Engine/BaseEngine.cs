@@ -1258,11 +1258,7 @@ public abstract partial class BaseEngine : IEngine
     // Check if tasks have been fired to start, otherwise do it now.
     await TriggerStartAsync().ConfigureAwait(false);
     // Fix (NameCaseTest): ordinal like every other name comparison, instead of culture-aware.
-    var namesHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-    foreach (string taskName in taskNames)
-    {
-      namesHash.Add(taskName);
-    }
+    var namesHash = new HashSet<string>(taskNames, StringComparer.OrdinalIgnoreCase);
     // Fix (EngineReadinessApiTest): a task that had already completed was left out before the tasks were counted, so
     // asking for completed tasks reported them as not found (false). Count every task found, wait for those still running.
     var foundTasks = _tasks.Values.Where(t => namesHash.Contains(t.Name)).ToArray();
