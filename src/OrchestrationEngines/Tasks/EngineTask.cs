@@ -46,7 +46,7 @@ public partial class EngineTask
   /// <summary>
   /// Serializes externally fired triggers for this task's state machine.
   /// </summary>
-  private readonly SemaphoreSlim _triggerLock = new(1, 1);
+  private readonly AsyncLock _triggerLock = new();
 
   /// <summary>
   /// Guards the lazy creation of <see cref="_machine"/> and its replacement on a reset. The first touch of a pristine task is genuinely
@@ -580,16 +580,11 @@ public partial class EngineTask
   internal async Task ReleaseTokenAsync()
   {
     await LatestRunEnded.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       RequestCancellation();
       lock (_sourceGate)
         _linkedCts.Dispose();
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -787,16 +782,11 @@ public partial class EngineTask
   /// </summary>
   private async Task FireDependencyTriggerAsync(EngineTaskTrigger trigger)
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       if (_runEnded)
         return;
       await StateMachine.FireAsync(trigger).ConfigureAwait(false);
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -1271,8 +1261,7 @@ public partial class EngineTask
       return;
     }
 
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       var wasFailed = State == EngineTaskState.Failed;
       await FireMachineAsync(trigger, reason).ConfigureAwait(false);
@@ -1281,10 +1270,6 @@ public partial class EngineTask
       // Failed logs no error.
       if (trigger == EngineTaskTrigger.Fail && !wasFailed && State == EngineTaskState.Failed)
         LogFailedFromOutside(Logger, FailReason);
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -1307,8 +1292,7 @@ public partial class EngineTask
   /// <param name="reason">Why the task is cancelled.</param>
   internal async Task CancelAsync(string reason)
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       if (State.IsCompleted())
         return;
@@ -1318,10 +1302,6 @@ public partial class EngineTask
       RequestCancellation();
       FailReason = reason;
       await StateMachine.FireAsync(EngineTaskTrigger.Cancel).ConfigureAwait(false);
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -1333,24 +1313,18 @@ public partial class EngineTask
   /// </summary>
   internal async Task EndRunAsync()
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       // Under the trigger lock: an outcome fired after this is not the current run's (see FireIfCurrentAsync).
       Interlocked.Increment(ref _runGeneration);
       RequestCancellation();
       _runEnded = true;
     }
-    finally
-    {
-      _triggerLock.Release();
-    }
   }
 
   private async Task ResetAsync()
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       try
       {
@@ -1371,10 +1345,6 @@ public partial class EngineTask
       }
       ReplaceStateMachine();
       _runEnded = false;
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -1403,8 +1373,7 @@ public partial class EngineTask
   private async Task<bool> FireIfCurrentAsync(int run, EngineTaskTrigger trigger, string reason = "", string failReason = null,
     bool cancelRun = false, Exception exception = null, bool byTheWork = false)
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       if (run != CurrentRun)
         return false;
@@ -1425,10 +1394,6 @@ public partial class EngineTask
       await FireMachineAsync(trigger, reason).ConfigureAwait(false);
       return true;
     }
-    finally
-    {
-      _triggerLock.Release();
-    }
   }
 
   /// <summary>
@@ -1444,15 +1409,10 @@ public partial class EngineTask
   /// <param name="run">The generation the run started in.</param>
   private async Task CancelIfCurrentAsync(int run)
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       if (run == CurrentRun)
         RequestCancellation();
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -1467,8 +1427,7 @@ public partial class EngineTask
   /// </param>
   private async Task TimeOutIfCurrentAsync(int run, bool workStopped)
   {
-    await _triggerLock.WaitAsync().ConfigureAwait(false);
-    try
+    using (await _triggerLock.LockAsync().ConfigureAwait(false))
     {
       if (run != CurrentRun || State != EngineTaskState.Running)
         return;
@@ -1480,10 +1439,6 @@ public partial class EngineTask
         ? $"Task timed out after {Timeout.Value}."
         : $"Task timed out after {Timeout.Value} and its work did not stop within {TimedOutWorkGrace}.";
       await StateMachine.FireAsync(EngineTaskTrigger.TimeOut).ConfigureAwait(false);
-    }
-    finally
-    {
-      _triggerLock.Release();
     }
   }
 
@@ -1675,8 +1630,7 @@ public partial class EngineTask
       // is taken there as well, so a reset after the lock does not hand this recovery the next run's live token.
       bool recreated;
       CancellationToken token;
-      await _triggerLock.WaitAsync().ConfigureAwait(false);
-      try
+      using (await _triggerLock.LockAsync().ConfigureAwait(false))
       {
         if (run != CurrentRun)
           return;
@@ -1684,10 +1638,6 @@ public partial class EngineTask
         if (recreated)
           CreateToken();
         token = CancellationToken;
-      }
-      finally
-      {
-        _triggerLock.Release();
       }
 
       if (recreated)
