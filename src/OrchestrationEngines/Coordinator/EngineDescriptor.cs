@@ -400,8 +400,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
       RegisteredEngineFactory = RegisteredEngineFactory,
     };
 
-    foreach (var dependencyName in DependsOn)
-      clone.AddDependsOn(dependencyName);
+    clone.DependsOn.UnionWith(DependsOn);
 
     return clone;
   }
