@@ -35,13 +35,24 @@ public static class EngineMermaidExtensions
     // Collect style lines separately
     var styleSb = new StringBuilder();
 
-    int failNoteIndex = 0;
+    // Every node gets its own id: names that differ only in characters an id cannot hold ("A-B", "A B") would
+    // otherwise share one. "end" is taken from the start, as Mermaid reads it as the end of a subgraph.
+    var usedIds = new HashSet<string>(StringComparer.Ordinal) { "end" };
+    // By name, as task names are unique ignoring case: a dependency held from before a task was replaced points at
+    // the node of the task with its name.
+    var idByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    string IdOf(string name)
+    {
+      if (!idByName.TryGetValue(name, out var id))
+        idByName[name] = id = UniqueId(name.ForMermaid(), usedIds);
+      return id;
+    }
 
     // 1) Emit all nodes with durations & colors
     foreach (var task in tasks.OrderBy(t => t.Name))
     {
-      var id = task.Name.ForMermaid();
-      var label = $"{task.Name} ({task.State}, {task.RunDuration?.ToString()})";
+      var id = IdOf(task.Name);
+      var label = ForLabel($"{task.Name} ({task.State}, {task.RunDuration?.ToString()})");
 
       sb.AppendLine($"    {id}[\"{label}\"]");
 
@@ -52,9 +63,8 @@ public static class EngineMermaidExtensions
       // Add failure reason note (if applicable)
       if (task.IsFailed && !string.IsNullOrWhiteSpace(task.FailReason))
       {
-        var noteId = $"{id}_reason_{failNoteIndex++}";
-        var reasonLabel = task.FailReason.Replace("\"", "\\\"");
-        sb.AppendLine($"    {noteId}[\"{reasonLabel}\"]");
+        var noteId = UniqueId($"{id}_reason", usedIds);
+        sb.AppendLine($"    {noteId}[\"{ForLabel(task.FailReason)}\"]");
         sb.AppendLine($"    {id} -.-> {noteId}");
         styleSb.AppendLine($"    style {noteId} fill:#ffe5e5,stroke:#ff0000,stroke-width:1px");
       }
@@ -65,7 +75,7 @@ public static class EngineMermaidExtensions
     {
       foreach (var parent in child.DependsOn)
       {
-        var edge = $"{parent.Name.ForMermaid()} --> {child.Name.ForMermaid()}";
+        var edge = $"{IdOf(parent.Name)} --> {IdOf(child.Name)}";
         if (emittedEdges.Add(edge))
           sb.AppendLine($"    {edge}");
       }
@@ -77,6 +87,31 @@ public static class EngineMermaidExtensions
     sb.AppendLine("```");
     return sb.ToString();
   }
+
+  /// <summary>
+  /// Returns <paramref name="id"/>, or the first of "<paramref name="id"/>_2", "_3", ... that is not used yet, and
+  /// marks it used.
+  /// </summary>
+  private static string UniqueId(string id, HashSet<string> usedIds)
+  {
+    var unique = id;
+    for (var n = 2; !usedIds.Add(unique); n++)
+      unique = $"{id}_{n}";
+    return unique;
+  }
+
+  /// <summary>
+  /// Writes <paramref name="text"/> for a quoted Mermaid label: '#', quotes, '&lt;' and '&gt;' as Mermaid entity
+  /// codes, so they show as text, and a line break as a space, so the node stays on one line.
+  /// </summary>
+  private static string ForLabel(string text) => text
+    .Replace("#", "#35;")
+    .Replace("\"", "#quot;")
+    .Replace("<", "#lt;")
+    .Replace(">", "#gt;")
+    .Replace("\r\n", " ")
+    .Replace('\r', ' ')
+    .Replace('\n', ' ');
 
   private static string GetStyleForState(string id, EngineTaskState state)
   {
