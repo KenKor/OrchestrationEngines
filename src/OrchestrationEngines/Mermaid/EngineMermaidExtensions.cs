@@ -13,6 +13,15 @@ namespace OrchestrationEngines.Mermaid;
 public static class EngineMermaidExtensions
 {
   /// <summary>
+  /// The words of a Mermaid flowchart that cannot be a node id. Mermaid matches them case-sensitively, as a whole id.
+  /// </summary>
+  internal static readonly string[] Keywords =
+  [
+    "end", "graph", "flowchart", "subgraph", "direction", "style", "linkStyle", "classDef", "class", "click", "call",
+    "href", "interpolate", "default",
+  ];
+
+  /// <summary>
   /// Produces a Mermaid diagram representing the engine's task dependencies and states.
   /// </summary>
   /// <param name="engine">The engine whose tasks are drawn.</param>
@@ -35,13 +44,24 @@ public static class EngineMermaidExtensions
     // Collect style lines separately
     var styleSb = new StringBuilder();
 
-    int failNoteIndex = 0;
+    // Every node gets its own id: names that differ only in characters an id cannot hold ("A-B", "A B") would
+    // otherwise share one. Mermaid's keywords are taken from the start, as a node id that is one does not parse.
+    var usedIds = new HashSet<string>(Keywords, StringComparer.Ordinal);
+    // By name, as task names are unique ignoring case: a dependency held from before a task was replaced points at
+    // the node of the task with its name.
+    var idByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    string IdOf(string name)
+    {
+      if (!idByName.TryGetValue(name, out var id))
+        idByName[name] = id = UniqueId(name.ForMermaid(), usedIds);
+      return id;
+    }
 
     // 1) Emit all nodes with durations & colors
     foreach (var task in tasks.OrderBy(t => t.Name))
     {
-      var id = task.Name.ForMermaid();
-      var label = $"{task.Name} ({task.State}, {task.RunDuration?.ToString()})";
+      var id = IdOf(task.Name);
+      var label = $"{task.Name} ({task.State}, {task.RunDuration?.ToString()})".ForMermaidLabel();
 
       sb.AppendLine($"    {id}[\"{label}\"]");
 
@@ -52,9 +72,8 @@ public static class EngineMermaidExtensions
       // Add failure reason note (if applicable)
       if (task.IsFailed && !string.IsNullOrWhiteSpace(task.FailReason))
       {
-        var noteId = $"{id}_reason_{failNoteIndex++}";
-        var reasonLabel = task.FailReason.Replace("\"", "\\\"");
-        sb.AppendLine($"    {noteId}[\"{reasonLabel}\"]");
+        var noteId = UniqueId($"{id}_reason", usedIds);
+        sb.AppendLine($"    {noteId}[\"{task.FailReason.ForMermaidLabel()}\"]");
         sb.AppendLine($"    {id} -.-> {noteId}");
         styleSb.AppendLine($"    style {noteId} fill:#ffe5e5,stroke:#ff0000,stroke-width:1px");
       }
@@ -65,7 +84,7 @@ public static class EngineMermaidExtensions
     {
       foreach (var parent in child.DependsOn)
       {
-        var edge = $"{parent.Name.ForMermaid()} --> {child.Name.ForMermaid()}";
+        var edge = $"{IdOf(parent.Name)} --> {IdOf(child.Name)}";
         if (emittedEdges.Add(edge))
           sb.AppendLine($"    {edge}");
       }
@@ -76,6 +95,18 @@ public static class EngineMermaidExtensions
 
     sb.AppendLine("```");
     return sb.ToString();
+  }
+
+  /// <summary>
+  /// Returns <paramref name="id"/>, or the first of "<paramref name="id"/>_2", "_3", ... that is not used yet, and
+  /// marks it used.
+  /// </summary>
+  private static string UniqueId(string id, HashSet<string> usedIds)
+  {
+    var unique = id;
+    for (var n = 2; !usedIds.Add(unique); n++)
+      unique = $"{id}_{n}";
+    return unique;
   }
 
   private static string GetStyleForState(string id, EngineTaskState state)
