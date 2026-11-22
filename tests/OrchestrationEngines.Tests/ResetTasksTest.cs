@@ -676,6 +676,43 @@ public class ResetTasksTest
   }
 
   /// <summary>
+  /// Verifies that resetting B with its dependents, while C's other dependency A has failed, ends C DependencyFailed
+  /// when B's next run completes before C is started: C went to WaitingForDependencies and waited for good. The
+  /// interleaving is forced: B is started and its completion reaches C as the engine publishes Starting, before the
+  /// reset fires Start on C.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_ResetTasksAsync_OtherDependencyFailed_DependencyCompletesFirst_EndsDependencyFailed()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new GraphEngine(T("A"), T("B"), T("C", "A", "B"))
+    {
+      Work = (name, _, _) => name == "A" ? throw new InvalidOperationException("A fails.") : Task.CompletedTask,
+    };
+    await engine.StartAsync();
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+    engine.Tasks["C"].State.Should().Be(EngineTaskState.DependencyFailed);
+    var b = engine.Tasks["B"];
+    var c = engine.Tasks["C"];
+    engine.EngineStatusChanged += (_, e) =>
+    {
+      if (e.State != EngineState.Starting || b.State != EngineTaskState.Created)
+        return;
+      b.FireAsync(EngineTaskTrigger.Start).GetAwaiter().GetResult();
+      SpinWait.SpinUntil(() => c.State != EngineTaskState.Created, MustComplete)
+        .Should().BeTrue("B's completion reaches C");
+    };
+
+    await engine.ResetTasksAsync(["B"], resetDependentTasks: true).WaitAsync(MustComplete, ct);
+    var ready = await Record.ExceptionAsync(() => engine.EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct));
+
+    ready.Should().BeOfType<EngineTaskNotReadyException>();
+    c.State.Should().Be(EngineTaskState.DependencyFailed);
+    engine.Runs("B").Should().Be(2);
+    await engine.StopAsync();
+  }
+
+  /// <summary>
   /// A coordinator whose engine factory builds a fresh <see cref="Chain"/> for every generation and records it in
   /// <paramref name="engines"/>.
   /// </summary>

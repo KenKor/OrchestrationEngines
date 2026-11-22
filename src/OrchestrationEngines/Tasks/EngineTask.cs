@@ -982,6 +982,9 @@ public partial class EngineTask
         .OnEntryFrom(EngineTaskTrigger.FailDependency, _ => OnFailedEntered(DependencyFailReason(), DependenciesOnlyCancelled()))
         // Started while a dependency had already failed (see the Start transitions of Created).
         .OnEntryFrom(EngineTaskTrigger.Start, _ => OnFailedEntered(DependencyFailReason(), DependenciesOnlyCancelled()))
+        // Likewise a completed dependency while another had already failed (see CompleteDependencyDestination).
+        .OnEntryFrom(EngineTaskTrigger.CompleteDependency,
+          _ => OnFailedEntered(DependencyFailReason(), DependenciesOnlyCancelled()))
         // The superstate is entered before the Cancelled substate, so the reason must be known here: without it the
         // task was reported as failed for an 'Unknown failure.' (and its dependents with it) before Cancelled said why.
         .OnEntryFrom(EngineTaskTrigger.Cancel, _ => OnFailedEntered(FailReason ?? CancellationReason(), cancelled: true))
@@ -1086,10 +1089,18 @@ public partial class EngineTask
 
   /// <summary>
   /// Returns where a completed dependency takes a task that has not started: Running when all dependencies have
-  /// completed, and WaitingForDependencies otherwise (a failed one fires FailDependency itself).
+  /// completed, DependencyFailed when one of them has failed, and WaitingForDependencies otherwise.
   /// </summary>
-  private EngineTaskState CompleteDependencyDestination() =>
-    DependenciesReady() ? EngineTaskState.Running : EngineTaskState.WaitingForDependencies;
+  /// <remarks>
+  /// A failed dependency fires FailDependency itself, but that signal is dropped while the task's run is ended for a
+  /// reset, and is not fired again: waiting would then never end.
+  /// </remarks>
+  private EngineTaskState CompleteDependencyDestination()
+  {
+    if (DependenciesReady())
+      return EngineTaskState.Running;
+    return AnyDependencyFailed() ? EngineTaskState.DependencyFailed : EngineTaskState.WaitingForDependencies;
+  }
 
   /// <summary>
   /// The destinations of <see cref="CompleteDependencyDestination"/>, for the state machine's description.
@@ -1098,6 +1109,7 @@ public partial class EngineTask
   {
     { EngineTaskState.Running, "all dependencies completed" },
     { EngineTaskState.WaitingForDependencies, "not all dependencies completed" },
+    { EngineTaskState.DependencyFailed, "a dependency failed" },
   };
 
   /// <summary>
