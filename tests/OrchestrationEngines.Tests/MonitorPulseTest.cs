@@ -13,19 +13,13 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class MonitorPulseTest
 {
-  // Without a dispatcher the monitor loop never runs, so nothing takes the pulses the calls leave, and the work runs
-  // on the calling thread.
-  private sealed class PulsingCoordinator() : EngineCoordinator(nameof(MonitorPulseTest), NullLogger.Instance,
-    useDispatcher: false)
+  // Without a dispatcher (the default here) the monitor loop never runs, so nothing takes the pulses the calls leave,
+  // and the work runs on the calling thread. With one, the monitor loop runs once the coordinator is started.
+  private sealed class PulsingCoordinator(bool useDispatcher = false)
+    : EngineCoordinator(nameof(MonitorPulseTest), NullLogger.Instance, useDispatcher)
   {
     public Task CallAsync(Func<Task> work = null)
       => DispatchAsync(work ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
-  }
-
-  // With a dispatcher, so the monitor loop runs once the coordinator is started.
-  private sealed class MonitoredCoordinator() : EngineCoordinator(nameof(MonitorPulseTest), NullLogger.Instance)
-  {
-    public Task CallAsync() => DispatchAsync(() => Task.CompletedTask, TestContext.Current.CancellationToken);
   }
 
   /// <summary>
@@ -64,7 +58,7 @@ public class MonitorPulseTest
   [Fact]
   public async Task MonitorPulse_ParkedMonitor_TakesEachWakeUp()
   {
-    using var coordinator = new MonitoredCoordinator();
+    using var coordinator = new PulsingCoordinator(useDispatcher: true);
     await coordinator.StartAsync();
 
     for (var call = 1; call <= 2; call++)
