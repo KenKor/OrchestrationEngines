@@ -498,33 +498,45 @@ public partial class EngineCoordinator : IDisposable
   /// its own failure; a failure of the clean-up is logged as a warning. This coordinator stays current, and its engines
   /// keep running, except those rebuilt from scratch that were stopped already.
   /// </para>
+  /// <para>
+  /// A switch asked of a coordinator that another switch replaced, or one that another switch on this coordinator
+  /// beat to the hand-over (without the dispatcher, switches are not queued), switches the current generation of the
+  /// lineage instead (see <see cref="Successor"/>). The coordinator returned can then be more than one generation past
+  /// this one.
+  /// </para>
   /// </remarks>
   public async Task<EngineCoordinator> RestartWithDefinitionsAsync(IEnumerable<EngineDescriptor> candidateDescriptors,
     bool waitUntilReady = true, CancellationToken token = default)
   {
+    ArgumentNullException.ThrowIfNull(candidateDescriptors);
+    var candidateList = candidateDescriptors.Where(d => d != null).ToArray();
+
     // Fix (GenerationSwitchEdgeCaseTest): a replaced coordinator built a generation from its own stopped engines next
     // to the one running, or, with the dispatcher on, threw a cancellation. It goes to the current generation now.
-    if (Successor is { } current)
-      return await current.RestartWithDefinitionsAsync(candidateDescriptors, waitUntilReady, token)
-        .ConfigureAwait(false);
-    try
+    EngineCoordinator next = null;
+    if (Successor == null)
     {
-      return await DispatchAsync(
-        () => RestartWithDefinitionsAsyncInt(candidateDescriptors, waitUntilReady, token), token).ConfigureAwait(false);
+      try
+      {
+        next = await DispatchAsync(() => RestartWithDefinitionsAsyncInt(candidateList, waitUntilReady, token), token)
+          .ConfigureAwait(false);
+      }
+      catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
+      {
+        // Queued behind a switch that replaced this coordinator: its shutdown cancelled the items still queued.
+      }
     }
-    catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
-    {
-      // Queued behind a switch that replaced this coordinator: its shutdown cancelled the items still queued.
-      return await Current.RestartWithDefinitionsAsync(candidateDescriptors, waitUntilReady, token)
-        .ConfigureAwait(false);
-    }
+
+    // Replaced, queued behind the switch that replaced it, or its switch lost the hand-over (null): the current
+    // generation switches.
+    return next ?? await Current.RestartWithDefinitionsAsync(candidateList, waitUntilReady, token)
+      .ConfigureAwait(false);
   }
 
-  private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(IEnumerable<EngineDescriptor> candidateDescriptors, bool waitUntilReady, CancellationToken token)
+  /// <returns>The next coordinator, or null when another switch on this coordinator handed over first.</returns>
+  private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(EngineDescriptor[] candidateList,
+    bool waitUntilReady, CancellationToken token)
   {
-    ArgumentNullException.ThrowIfNull(candidateDescriptors);
-
-    var candidateList = candidateDescriptors.Where(d => d != null).ToArray();
     var diff = BuildDefinitionDiff(candidateList);
 
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
@@ -621,7 +633,7 @@ public partial class EngineCoordinator : IDisposable
       // generation runs in a lineage, so this one is cleaned up, and the switch goes to the current generation.
       nextCoordinator._lineage = new Lineage(nextCoordinator);
       await CleanUpNextGenerationAsync(nextCoordinator, "another switch handed over first").ConfigureAwait(false);
-      return await Current.RestartWithDefinitionsAsync(candidateList, waitUntilReady, token).ConfigureAwait(false);
+      return null;
     }
     try
     {
