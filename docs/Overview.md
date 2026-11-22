@@ -269,7 +269,8 @@ Recovery and restarts:
   gives up on slow failures). The wait between restarts doubles from `InitialBackoff` up to `MaxBackoff`; a `Jitter`
   from 0 (the default) to 1 shortens each wait by that share of a random fraction, so engines that failed together do
   not all restart at once. A success or a reset starts counting again. The settings are fixed once the policy is made.
-- A task that starts while one of its dependencies has failed ends `DependencyFailed` at once.
+- A task that starts, or whose dependency completes, while another of its dependencies has failed ends
+  `DependencyFailed` at once.
 
 Resets:
 
