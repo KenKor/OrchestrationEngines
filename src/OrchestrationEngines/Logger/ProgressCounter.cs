@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -15,8 +16,9 @@ public sealed partial class ProgressCounter
 {
   private const string defaultTemplate = "Processed {Count:n0} elements ({Rate:n0}/sec)";
   private readonly ILogger _logger;
+  // Guards the counters below: Increment updates several of them together.
+  private readonly object _sync = new();
 
-  // Note that I did not include a lock/sync object to avoid unnecessary overhead; this should be fast and not process-safe.
   private readonly int _reportEvery;
   private readonly string _messageTemplate;
 
@@ -60,7 +62,7 @@ public sealed partial class ProgressCounter
   /// <summary>
   /// Total number of processed items so far.
   /// </summary>
-  public int TotalCount => _totalCount;
+  public int TotalCount => Volatile.Read(ref _totalCount);
 
   /// <summary>
   /// Increments the counter and, if the reporting interval is reached, returns a formatted progress message.
@@ -74,27 +76,35 @@ public sealed partial class ProgressCounter
     // 3) resetting counter, 4) calculating performace, 5) formatting message.
     if (delta < 0) { return null; }
 
-    _totalCount += delta;
+    // Fix (ProgressCounterTest): the counters were updated without a lock, so concurrent increments lost counts and
+    // reports. Formatting and logging stay outside the lock.
+    int totalCount;
+    double rate;
+    lock (_sync)
+    {
+      _totalCount += delta;
 
-    // Decrement countdown; when it reaches 0, emit a report and reset countdown.
-    _remainingUntilReport -= delta;
-    if (_remainingUntilReport > 0) { return null; }
+      // Decrement countdown; when it reaches 0, emit a report and reset countdown.
+      _remainingUntilReport -= delta;
+      if (_remainingUntilReport > 0) { return null; }
 
-    _remainingUntilReport = _reportEvery;
+      _remainingUntilReport = _reportEvery;
 
-    var nowTicks = DateTime.UtcNow.Ticks;
+      var nowTicks = DateTime.UtcNow.Ticks;
 
-    var countDelta = _totalCount - _lastReportedCount;
-    var tickDelta = nowTicks - _lastReportedTicks;
+      var countDelta = _totalCount - _lastReportedCount;
+      var tickDelta = nowTicks - _lastReportedTicks;
 
-    // 10,000,000 ticks per second.
-    var rate = tickDelta > 0
-        ? 10_000_000.0 * countDelta / tickDelta
-        : 0.0;
+      // 10,000,000 ticks per second.
+      rate = tickDelta > 0
+          ? 10_000_000.0 * countDelta / tickDelta
+          : 0.0;
 
-    _lastReportedCount = _totalCount;
-    _lastReportedTicks = nowTicks;
-    var progressMessage = FormatMessage(_messageTemplate, _totalCount, rate);
+      _lastReportedCount = _totalCount;
+      _lastReportedTicks = nowTicks;
+      totalCount = _totalCount;
+    }
+    var progressMessage = FormatMessage(_messageTemplate, totalCount, rate);
     LogProgress(progressMessage);
     return progressMessage;
   }
@@ -105,7 +115,8 @@ public sealed partial class ProgressCounter
   public void EnsureNextReport()
   {
     // Make sure we'll report the next round when we increment 1.
-    _remainingUntilReport = 1;
+    lock (_sync)
+      _remainingUntilReport = 1;
   }
 
 
