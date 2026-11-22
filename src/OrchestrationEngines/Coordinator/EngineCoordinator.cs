@@ -1251,17 +1251,37 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// The generation that answers for <paramref name="name"/> once this one was replaced: the one it handed over to, or
-  /// the next one of a switch that rebuilds the engine (once it has started). Null if there is none.
+  /// the next one of a switch that rebuilds the engine (once it has started). Null if there is none, or if that next
+  /// generation has not started within <paramref name="milliSecondsTimeOut"/>.
   /// </summary>
-  private async Task<EngineCoordinator> NextGenerationAsync(string name, CancellationToken token)
+  private async Task<EngineCoordinator> NextGenerationAsync(
+    string name, CancellationToken token, int milliSecondsTimeOut = Timeout.Infinite)
   {
     if (Successor is { } successor)
       return successor;
     // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
     // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
-    if (Volatile.Read(ref _rebuildingSwitch) is { } rebuilding && rebuilding.Names.Contains(name))
+    if (Volatile.Read(ref _rebuildingSwitch) is not { } rebuilding || !rebuilding.Names.Contains(name))
+      return null;
+    if (milliSecondsTimeOut == Timeout.Infinite)
       return await rebuilding.Next.Task.WaitObservedAsync(token).ConfigureAwait(false);
-    return null;
+
+    // A timed lookup waits for it no longer than its time left (#156): stopping the rebuilt engines can take long.
+    using var timeout = TimeProvider.CreateCancellationTokenSource(TimeSpan.FromMilliseconds(milliSecondsTimeOut));
+    using var wait = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+    try
+    {
+      return await rebuilding.Next.Task.WaitObservedAsync(wait.Token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
+    {
+      return null;
+    }
+    finally
+    {
+      // As in MechanicEngine.GetEngineWhenReadyAsync: on netstandard2.0 only a cancel removes the source's timer.
+      timeout.Cancel();
+    }
   }
 
   /// <summary>
@@ -1578,11 +1598,13 @@ public partial class EngineCoordinator : IDisposable
     if (Successor is { } replaced)
       return await replaced.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
 
+    // The time-out counts from the end of the start, as the mechanic's own time-out does.
     var started = TimeProvider.GetTimestamp();
     IEngine engine;
     try
     {
       await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      started = TimeProvider.GetTimestamp();
       engine = milliSecondsTimeOut == Timeout.Infinite
         ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, token).ConfigureAwait(false)
         : await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, milliSecondsTimeOut, token).ConfigureAwait(false);
@@ -1598,7 +1620,7 @@ public partial class EngineCoordinator : IDisposable
     // NextGenerationAsync). An engine that the switch released is not found there, and gives null.
     if (engine != null)
       return engine;
-    var next = await NextGenerationAsync(name, token).ConfigureAwait(false);
+    var next = await NextGenerationAsync(name, token, TimeLeft(milliSecondsTimeOut, started)).ConfigureAwait(false);
     return next == null
       ? null
       : await next.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, started), token)
