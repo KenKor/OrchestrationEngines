@@ -148,6 +148,26 @@ public class EngineTaskLogLevelTest
   }
 
   /// <summary>
+  /// Verifies that when the restarts in a row run out, the error also says what kept failing.
+  /// </summary>
+  [Fact]
+  public async Task ConsecutiveRestartLimitExceeded_ErrorNamesTheLastFailure()
+  {
+    var task = NewTask("Root", Throws, new FakeLogger()).SetRecovery(new RestartPolicy
+    {
+      MaxConsecutiveRestarts = 1,
+      InitialBackoff = TimeSpan.Zero,
+      MaxBackoff = TimeSpan.Zero,
+    });
+
+    await RunToEndAsync(task);
+
+    task.State.Should().Be(EngineTaskState.RecoveryFailed);
+    task.FailReason.Should().StartWith("Restart limit exceeded for Root. Maximum of 1 restarts in a row")
+      .And.EndWith("(Recovering after an error: No data.)");
+  }
+
+  /// <summary>
   /// Verifies that a cancelled task logs one warning and no error, and that the task depending on it, cancelled too,
   /// logs its own Cancelled warning.
   /// </summary>

@@ -86,8 +86,8 @@ public class EngineTaskLimitExceededException : EngineTaskException
   /// <param name="maxConsecutiveRestarts">The maximum number of restarts in a row.</param>
   /// <returns>The exception.</returns>
   public static EngineTaskLimitExceededException ForConsecutiveRestarts(EngineTask et, int maxConsecutiveRestarts) =>
-    new(et, maxConsecutiveRestarts,
-      $"Restart limit exceeded for {et.Name}. Maximum of {maxConsecutiveRestarts} restarts in a row without a successful run.");
+    new(et, maxConsecutiveRestarts, WithLastRecovery(et, $"Restart limit exceeded for {et.Name}. " +
+      $"Maximum of {maxConsecutiveRestarts} restarts in a row without a successful run."));
 
   /// <summary>
   /// Creates a standardized exception message describing the restart limit violation.
@@ -97,21 +97,25 @@ public class EngineTaskLimitExceededException : EngineTaskException
   /// The maximum number of restarts permitted within the window.
   /// </param>
   /// <param name="window">The time window used for restart counting.</param>
-  /// <returns>
-  /// A formatted, human-readable exception message. It ends with why the task last recovered (its
-  /// <see cref="EngineTask.StateMessage"/> while it is <see cref="EngineTaskState.Recovering"/>, for example
-  /// "Recovering after an error: ..."), so the error says what kept failing: a failed engine kick-start, for example,
-  /// is only logged as a warning while the engine can still be started again.
-  /// </returns>
+  /// <returns>A formatted, human-readable exception message, ending as <see cref="WithLastRecovery"/> says.</returns>
   private static string CreateMessage(
       EngineTask et,
       int maxRestartsInWindow,
-      TimeSpan window)
-  {
-    var message = $"Restart limit exceeded for {et.Name}. " +
-                  $"Maximum of {maxRestartsInWindow} restarts allowed within a window of {window}.";
-    return et.State == EngineTaskState.Recovering && !String.IsNullOrEmpty(et.StateMessage)
+      TimeSpan window) =>
+    WithLastRecovery(et, $"Restart limit exceeded for {et.Name}. " +
+                         $"Maximum of {maxRestartsInWindow} restarts allowed within a window of {window}.");
+
+  /// <summary>
+  /// Ends <paramref name="message"/> with why the task last recovered (its <see cref="EngineTask.StateMessage"/>
+  /// while it is <see cref="EngineTaskState.Recovering"/>, for example "Recovering after an error: ..."), so the error
+  /// says what kept failing: a failed engine kick-start, for example, is only logged as a warning while the engine can
+  /// still be started again.
+  /// </summary>
+  /// <param name="et">The engine task that exceeded its restart limit.</param>
+  /// <param name="message">The message without the suffix.</param>
+  /// <returns>The message, with the suffix when the task is recovering and has a state message.</returns>
+  private static string WithLastRecovery(EngineTask et, string message) =>
+    et.State == EngineTaskState.Recovering && !String.IsNullOrEmpty(et.StateMessage)
       ? $"{message} ({et.StateMessage})"
       : message;
-  }
 }
