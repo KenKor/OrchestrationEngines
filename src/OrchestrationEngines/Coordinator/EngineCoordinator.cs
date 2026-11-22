@@ -809,7 +809,9 @@ public partial class EngineCoordinator : IDisposable
 
     // Checked before the handover is released, so a retry is offered the previous engine again, as after a throw.
     if (next == null)
-      throw new InvalidOperationException($"The restart factory of engine '{candidate.Name}' returned null.");
+      throw new InvalidOperationException(candidate.RestartFromPrevious == null
+        ? $"The factory of engine '{candidate.Name}' returned null."
+        : $"The restart factory of engine '{candidate.Name}' returned null.");
 
     // A generation switch must produce a fresh runtime instance with a fresh token chain.
     // Not retried (an EngineTaskException): the factory would return the same instance again.
