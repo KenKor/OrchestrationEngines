@@ -525,6 +525,7 @@ public partial class EngineCoordinator : IDisposable
   {
     ArgumentNullException.ThrowIfNull(candidateDescriptors);
     var candidateList = candidateDescriptors.Where(d => d != null).ToArray();
+    var candidateByName = EngineDefinitionDiff.ToDictionaryByName(candidateList, nameof(candidateDescriptors));
 
     // Fix (GenerationSwitchEdgeCaseTest): a replaced coordinator built a generation from its own stopped engines next
     // to the one running, or, with the dispatcher on, threw a cancellation. It goes to the current generation now.
@@ -533,7 +534,8 @@ public partial class EngineCoordinator : IDisposable
     {
       try
       {
-        next = await DispatchAsync(() => RestartWithDefinitionsAsyncInt(candidateList, waitUntilReady, token), token)
+        next = await DispatchAsync(
+            () => RestartWithDefinitionsAsyncInt(candidateList, candidateByName, waitUntilReady, token), token)
           .ConfigureAwait(false);
       }
       catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
@@ -550,11 +552,8 @@ public partial class EngineCoordinator : IDisposable
 
   /// <returns>The next coordinator, or null when another switch on this coordinator handed over first.</returns>
   private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(EngineDescriptor[] candidateList,
-    bool waitUntilReady, CancellationToken token)
+    Dictionary<string, EngineDescriptor> candidateByName, bool waitUntilReady, CancellationToken token)
   {
-    // A duplicate name is the caller's argument of RestartWithDefinitionsAsync.
-    var candidateByName = EngineDefinitionDiff.ToDictionaryByName(candidateList, "candidateDescriptors");
-
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
     Dictionary<string, IEngine> currentEngineByName;
     MechanicEngine mechanic;
