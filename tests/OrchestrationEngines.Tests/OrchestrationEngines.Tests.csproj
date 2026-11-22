@@ -12,7 +12,7 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <!-- Two test packages say at build time that they do not support net48. The tests run there on purpose (the
          netstandard2.0 build), and the notice would otherwise be the only warning left in the build. -->
-    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
+    <SuppressTfmSupportBuildWarnings Condition="'$(TargetFramework)' == 'net48'">true</SuppressTfmSupportBuildWarnings>
     <!-- Coverage settings and format for a test run with coverage (see README.md, "Code coverage"). The path is absolute,
          because the SDK resolves a relative one against the test app's folder. A run without coverage accepts them too. -->
     <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --coverage-settings "$(MSBuildThisFileDirectory)../CodeCoverage.settings.xml" --coverage-output-format cobertura</TestingPlatformCommandLineArguments>
