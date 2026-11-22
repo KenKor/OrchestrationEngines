@@ -91,8 +91,7 @@ public class TimedLookupTest
     if (cancelled)
     {
       caller.Cancel();
-      await Wait.UntilEndedAsync(lookup, MustComplete);
-      (await lookup.Awaiting(l => l).Should().ThrowAsync<OperationCanceledException>())
+      (await lookup.Invoking(l => l.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>())
         .Which.CancellationToken.Should().Be(caller.Token);
     }
     else
@@ -121,8 +120,7 @@ public class TimedLookupTest
 
     var (name, lookup) = StartLookup(n => coordinator.GetEngineAsync(n, caller.Token));
     caller.Cancel();
-    await Wait.UntilEndedAsync(lookup, MustComplete);
-    (await lookup.Awaiting(l => l).Should().ThrowAsync<OperationCanceledException>())
+    (await lookup.Invoking(l => l.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>())
       .Which.CancellationToken.Should().Be(caller.Token);
 
     (await Wait.UntilCollectedAsync(MustComplete, name)).Should().BeTrue(

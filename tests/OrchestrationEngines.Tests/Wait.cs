@@ -26,14 +26,6 @@ internal static class Wait
   }
 
   /// <summary>
-  /// Waits until <paramref name="task"/> has ended, however it ended, and fails the test once
-  /// <paramref name="timeout"/> has passed. Assert on the task itself afterwards: on net48 the test polyfill of
-  /// <c>Task.WaitAsync</c> passes a cancellation on without its token.
-  /// </summary>
-  public static async Task UntilEndedAsync(Task task, TimeSpan timeout)
-    => await Task.WhenAny(task).WaitAsync(timeout, TestContext.Current.CancellationToken);
-
-  /// <summary>
   /// Collects garbage every 50 ms until none of <paramref name="references"/> is alive, or <paramref name="timeout"/>
   /// has passed; returns whether they are all gone.
   /// </summary>

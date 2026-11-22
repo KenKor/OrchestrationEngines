@@ -62,25 +62,34 @@ namespace System.Threading.Tasks
       public bool IsCompletedSuccessfully => task.Status == TaskStatus.RanToCompletion;
 
       public Task WaitAsync(CancellationToken cancellationToken)
-        => task.WaitAsync(Timeout.InfiniteTimeSpan, TimeProvider.System, cancellationToken);
+        => task.WaitAsync(Timeout.InfiniteTimeSpan, cancellationToken);
 
       public Task WaitAsync(TimeSpan timeout)
-        => task.WaitAsync(timeout, TimeProvider.System, CancellationToken.None);
+        => task.WaitAsync(timeout, CancellationToken.None);
 
-      public Task WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
-        => task.WaitAsync(timeout, TimeProvider.System, cancellationToken);
+      // Waits for the task to end, then passes on the task's own outcome, as the framework's WaitAsync does. The
+      // Microsoft.Bcl.TimeProvider WaitAsync passes on a cancellation of a task it waits on without the task's token.
+      public async Task WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
+      {
+        await Task.WhenAny(task).WaitAsync(timeout, TimeProvider.System, cancellationToken).ConfigureAwait(false);
+        await task.ConfigureAwait(false);
+      }
     }
 
     extension<TResult>(Task<TResult> task)
     {
       public Task<TResult> WaitAsync(CancellationToken cancellationToken)
-        => task.WaitAsync(Timeout.InfiniteTimeSpan, TimeProvider.System, cancellationToken);
+        => task.WaitAsync(Timeout.InfiniteTimeSpan, cancellationToken);
 
       public Task<TResult> WaitAsync(TimeSpan timeout)
-        => task.WaitAsync(timeout, TimeProvider.System, CancellationToken.None);
+        => task.WaitAsync(timeout, CancellationToken.None);
 
-      public Task<TResult> WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
-        => task.WaitAsync(timeout, TimeProvider.System, cancellationToken);
+      // As the non-generic one, then returns the result.
+      public async Task<TResult> WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
+      {
+        await ((Task)task).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        return await task.ConfigureAwait(false);
+      }
     }
 
     extension(ValueTask)

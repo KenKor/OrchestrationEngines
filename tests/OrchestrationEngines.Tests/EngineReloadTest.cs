@@ -180,8 +180,7 @@ public class EngineReloadTest
     await ShouldStillWaitAsync(waiting);
     caller.Cancel();
 
-    await Wait.UntilEndedAsync(waiting, MustComplete);
-    (await waiting.Awaiting(w => w).Should().ThrowAsync<OperationCanceledException>())
+    (await waiting.Invoking(w => w.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>())
       .Which.CancellationToken.Should().Be(caller.Token);
     engine.State.Should().Be(EngineState.Starting, "the caller's cancellation ends only its own wait");
     engine.Load.Open();
