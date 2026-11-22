@@ -30,8 +30,10 @@ public class EngineCoordinatorLifecycleTest
   private static EngineCoordinator CreateCoordinator() =>
     new(nameof(EngineCoordinatorLifecycleTest), NullLogger.Instance, useDispatcher: false);
 
-  private static EngineDescriptor Descriptor(string name, IEngine engine) =>
-    new EngineDescriptor(name, _ => Task.FromResult(engine), requiredForRunning: true, 1)
+  private static EngineDescriptor Descriptor(string name, IEngine engine) => Descriptor(name, () => engine);
+
+  private static EngineDescriptor Descriptor(string name, Func<IEngine> create) =>
+    new EngineDescriptor(name, _ => Task.FromResult(create()), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .WithoutRestarts();
 
@@ -150,6 +152,42 @@ public class EngineCoordinatorLifecycleTest
       await act.Should().ThrowAsync<OperationCanceledException>();
     else
       await act.Should().ThrowAsync<InvalidOperationException>();
+  }
+
+  /// <summary>
+  /// Verifies that shutting down a coordinator that never started ends it Stopped, as after a start (#153): it takes
+  /// no more engines, creates none, and a later ready-wait behaves as on a coordinator shut down after its start.
+  /// </summary>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task EngineCoordinator_ShutdownAsync_NeverStarted_EndsStopped(bool useDispatcher)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator(nameof(EngineCoordinatorLifecycleTest), NullLogger.Instance, useDispatcher);
+    var created = 0;
+    coordinator.RegisterEngineDescriptor(Descriptor(Name, () =>
+    {
+      Interlocked.Increment(ref created);
+      return new NetworkEngine((_, _) => Task.CompletedTask);
+    }));
+
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+    coordinator.TryRegisterEngineDescriptor(Descriptor("Other", new NetworkEngine((_, _) => Task.CompletedTask)))
+      .Should().BeFalse("a shut-down coordinator takes no more engines");
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+
+    // As after a start: with the dispatcher, its queue no longer takes work; without it, the wait returns.
+    var ensureReady = () => coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    if (useDispatcher)
+      await ensureReady.Should().ThrowAsync<OperationCanceledException>();
+    else
+      await ensureReady.Should().NotThrowAsync();
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+    created.Should().Be(0, "a coordinator shut down before its start never creates an engine");
   }
 
   /// <summary>

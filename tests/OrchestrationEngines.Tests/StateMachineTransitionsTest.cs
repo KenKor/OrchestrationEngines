@@ -129,6 +129,7 @@ public class StateMachineTransitionsTest
   public void EngineCoordinator_StateMachine_MatchesSnapshot() => ShouldMatch(new InspectableCoordinator().Info,
     [
       "Created --Start--> WaitingForEngines",
+      "Created --StartShutdown--> Stopping",
       "WaitingForEngines --EngineStarting--> Initializing",
       "WaitingForEngines --StartShutdown--> Stopping",
       "WaitingForEngines ignores EngineFailed",
