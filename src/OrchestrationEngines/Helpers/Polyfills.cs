@@ -58,32 +58,6 @@ namespace System
       }
     }
 
-    extension(string text)
-    {
-      /// <summary>Replaces every occurrence of <paramref name="oldValue"/>, compared with <paramref name="comparisonType"/>.</summary>
-      /// <param name="oldValue">The text to replace.</param>
-      /// <param name="newValue">The replacement text.</param>
-      /// <param name="comparisonType">How occurrences are matched.</param>
-      /// <returns>The text with every occurrence replaced.</returns>
-      public string Replace(string oldValue, string newValue, StringComparison comparisonType)
-      {
-        if (oldValue is null)
-          throw new ArgumentNullException(nameof(oldValue));
-        if (oldValue.Length == 0)
-          throw new ArgumentException("The value cannot be an empty string.", nameof(oldValue));
-
-        var result = new Text.StringBuilder(text.Length);
-        int start = 0;
-        int index;
-        while ((index = text.IndexOf(oldValue, start, comparisonType)) >= 0)
-        {
-          result.Append(text, start, index - start).Append(newValue);
-          start = index + oldValue.Length;
-        }
-        return result.Append(text, start, text.Length - start).ToString();
-      }
-    }
-
     extension(ArgumentOutOfRangeException)
     {
       /// <summary>Throws an <see cref="ArgumentOutOfRangeException"/> if <paramref name="value"/> is negative or zero.</summary>

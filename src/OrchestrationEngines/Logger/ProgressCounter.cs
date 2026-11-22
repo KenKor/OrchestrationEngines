@@ -19,7 +19,7 @@ public sealed partial class ProgressCounter
 {
   private const string defaultTemplate = "Processed {Count:n0} elements ({Rate:n0}/sec)";
   private static readonly Regex Placeholder =
-      new(@"\{\{|\{(Count|Rate)(?=[,:}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+      new(@"\{\{|\{(Count|Rate)(?=\s*[,:}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
   private readonly ILogger _logger;
   // Guards the counters below: Increment updates several of them together.
   private readonly Lock _sync = new();
@@ -125,7 +125,8 @@ public sealed partial class ProgressCounter
   // Fix (ProgressCounter_Template_MapsOnlyItsPlaceholders): a culture-aware replace of "{Count" and "{Rate" also
   // rewrote escaped braces ("{{Count}}") and names that only start with them ("{CountX}").
   // Maps {Count} and {Rate}, in any case and with an optional ",alignment" or ":format", to the composite-format
-  // indexes 0 and 1. An escaped brace ("{{") is matched first, so it stays literal text.
+  // indexes 0 and 1. Spaces after the name are allowed, as String.Format allows them after an index. An escaped
+  // brace ("{{") is matched first, so it stays literal text.
   private static string ToCompositeFormat(string template)
     => Placeholder.Replace(template, match => !match.Groups[1].Success ? match.Value
                                        : match.Groups[1].Value.Equals("Count", StringComparison.OrdinalIgnoreCase)
