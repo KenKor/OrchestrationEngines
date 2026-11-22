@@ -13,15 +13,14 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineDescriptorCloneTest
 {
-  private static readonly Func<CancellationToken, Task<IEngine>> Factory = _ => Task.FromResult<IEngine>(null);
-
   /// <summary>
   /// Verifies that a clone has the source's configuration and a dependency set of its own.
   /// </summary>
   [Fact]
   public void EngineDescriptor_Clone_CopiesTheConfigurationAndNotTheDependencySet()
   {
-    var source = new EngineDescriptor("A", Factory, requiredForRunning: true, version: 3)
+    var source = new EngineDescriptor(
+        "A", DescriptorTestExtensions.NullEngineFactory, requiredForRunning: true, version: 3)
       .AddDependsOn("B")
       .SetRestartFactory((_, _) => Task.FromResult<IEngine>(null));
 
@@ -30,8 +29,8 @@ public class EngineDescriptorCloneTest
     clone.AddDependsOn("C");
 
     clone.Should().NotBeSameAs(source);
-    clone.RegisteredEngineFactory.Should().BeSameAs(Factory);
-    clone.EngineFactory.Should().BeSameAs(Factory);
+    clone.RegisteredEngineFactory.Should().BeSameAs(DescriptorTestExtensions.NullEngineFactory);
+    clone.EngineFactory.Should().BeSameAs(DescriptorTestExtensions.NullEngineFactory);
     clone.RestartFromPrevious.Should().BeSameAs(source.RestartFromPrevious);
     clone.Version.Should().Be(3);
     clone.RequiredForRunning.Should().BeTrue();
@@ -46,11 +45,11 @@ public class EngineDescriptorCloneTest
   public void EngineDescriptor_CloneWithAFactory_KeepsTheRegisteredFactory()
   {
     Func<CancellationToken, Task<IEngine>> handover = _ => Task.FromResult<IEngine>(null);
-    var source = new EngineDescriptor("A", Factory);
+    var source = new EngineDescriptor("A", DescriptorTestExtensions.NullEngineFactory);
 
     var clone = source.Clone(handover);
 
     clone.EngineFactory.Should().BeSameAs(handover);
-    clone.RegisteredEngineFactory.Should().BeSameAs(Factory);
+    clone.RegisteredEngineFactory.Should().BeSameAs(DescriptorTestExtensions.NullEngineFactory);
   }
 }
