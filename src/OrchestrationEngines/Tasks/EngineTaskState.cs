@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace OrchestrationEngines.Tasks;
 
@@ -71,6 +72,18 @@ public enum EngineTaskState : short
 public static class EngineTaskStateExtension
 {
   /// <summary>
+  /// The values of the defined states, built once, so a check needs no boxing or reflection.
+  /// </summary>
+  private static readonly HashSet<short> DefinedValues = BuildDefinedValues();
+
+  private static HashSet<short> BuildDefinedValues()
+  {
+    var values = new HashSet<short>();
+    foreach (EngineTaskState state in Enum.GetValues(typeof(EngineTaskState))) values.Add((short)state);
+    return values;
+  }
+
+  /// <summary>
   /// Try to set a state from a value. If value is not set, or is not one defined state, current state is returned.
   /// </summary>
   /// <param name="e"></param>
@@ -78,7 +91,7 @@ public static class EngineTaskStateExtension
   /// <returns></returns>
   public static EngineTaskState FromValue(this EngineTaskState e, short? value)
   {
-    if (value == null || !Enum.IsDefined(typeof(EngineTaskState), value)) return e;
+    if (value == null || !DefinedValues.Contains(value.Value)) return e;
     return (EngineTaskState)value;
   }
 
