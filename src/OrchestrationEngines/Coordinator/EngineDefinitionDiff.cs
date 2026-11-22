@@ -64,9 +64,18 @@ public sealed class EngineDefinitionDiff
     IEnumerable<EngineDescriptor> currentDescriptors,
     IEnumerable<EngineDescriptor> candidateDescriptors)
   {
-    var currentByName = ToDictionaryByName(currentDescriptors, nameof(currentDescriptors));
-    var candidateByName = ToDictionaryByName(candidateDescriptors, nameof(candidateDescriptors));
+    return Create(
+      ToDictionaryByName(currentDescriptors, nameof(currentDescriptors)),
+      ToDictionaryByName(candidateDescriptors, nameof(candidateDescriptors)));
+  }
 
+  /// <summary>
+  /// Builds a diff between definitions already mapped by name (see <see cref="ToDictionaryByName"/>).
+  /// </summary>
+  internal static EngineDefinitionDiff Create(
+    IReadOnlyDictionary<string, EngineDescriptor> currentByName,
+    IReadOnlyDictionary<string, EngineDescriptor> candidateByName)
+  {
     var added = candidateByName.Keys
       .Except(currentByName.Keys, StringComparer.OrdinalIgnoreCase)
       .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -77,11 +86,9 @@ public sealed class EngineDefinitionDiff
       .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
       .ToArray();
 
-    var versionChanged = candidateByName.Keys
-      .Where(name =>
-        currentByName.TryGetValue(name, out var current) &&
-        candidateByName.TryGetValue(name, out var candidate) &&
-        current.Version != candidate.Version)
+    var versionChanged = candidateByName
+      .Where(pair => currentByName.TryGetValue(pair.Key, out var current) && current.Version != pair.Value.Version)
+      .Select(pair => pair.Key)
       .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
       .ToArray();
 
@@ -90,7 +97,11 @@ public sealed class EngineDefinitionDiff
     return new EngineDefinitionDiff(added, removed, versionChanged, restartRequired);
   }
 
-  private static Dictionary<string, EngineDescriptor> ToDictionaryByName(
+  /// <summary>
+  /// Maps descriptors by name, ignoring case and null descriptors.
+  /// </summary>
+  /// <exception cref="ArgumentException">Two descriptors have the same name.</exception>
+  internal static Dictionary<string, EngineDescriptor> ToDictionaryByName(
     IEnumerable<EngineDescriptor> descriptors,
     string paramName)
   {

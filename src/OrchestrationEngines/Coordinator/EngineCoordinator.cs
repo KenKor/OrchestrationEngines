@@ -552,7 +552,8 @@ public partial class EngineCoordinator : IDisposable
   private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(EngineDescriptor[] candidateList,
     bool waitUntilReady, CancellationToken token)
   {
-    var diff = BuildDefinitionDiff(candidateList);
+    // A duplicate name is the caller's argument of RestartWithDefinitionsAsync.
+    var candidateByName = EngineDefinitionDiff.ToDictionaryByName(candidateList, "candidateDescriptors");
 
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
     Dictionary<string, IEngine> currentEngineByName;
@@ -560,14 +561,15 @@ public partial class EngineCoordinator : IDisposable
 
     lock (_sync)
     {
-      currentDescriptorByName = _context.EngineDescriptors
-        .ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+      currentDescriptorByName = EngineDefinitionDiff.ToDictionaryByName(_context.EngineDescriptors,
+        nameof(_context.EngineDescriptors));
 
       currentEngineByName = Engines
         .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
       mechanic = _mechanic;
     }
 
+    var diff = EngineDefinitionDiff.Create(currentDescriptorByName, candidateByName);
     var versionChanged = new HashSet<string>(diff.VersionChangedEngineNames, StringComparer.OrdinalIgnoreCase);
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
     var handovers = new List<(string Name, Handover Handover)>();
