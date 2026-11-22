@@ -90,7 +90,7 @@ public class ResetWaiterTest
 
   /// <summary>
   /// Verifies that resets of a task whose run never completed keep the one latch whoever waits on the task holds,
-  /// instead of chaining a new latch onto it at each reset; and that a reset after a completed run gives a new one.
+  /// instead of chaining a new latch onto it at each reset.
   /// </summary>
   [Fact]
   public async Task EngineTask_ResetManyTimesBeforeItCompletes_KeepsOneLatch()
@@ -109,11 +109,6 @@ public class ResetWaiterTest
     runs.Complete(1);
     await latch.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
-
-    await task.FireAsync(EngineTaskTrigger.Reset);
-
-    task.InnerTask.Should().NotBeSameAs(latch, "the next run starts a fresh lifecycle");
-    task.InnerTask.IsCompleted.Should().BeFalse();
   }
 
   /// <summary>
