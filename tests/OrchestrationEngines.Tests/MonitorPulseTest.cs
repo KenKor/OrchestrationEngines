@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,9 +13,17 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class MonitorPulseTest
 {
-  // Without a dispatcher the monitor loop never runs, so nothing takes the pulses the calls leave.
+  // Without a dispatcher the monitor loop never runs, so nothing takes the pulses the calls leave, and the work runs
+  // on the calling thread.
   private sealed class PulsingCoordinator() : EngineCoordinator(nameof(MonitorPulseTest), NullLogger.Instance,
     useDispatcher: false)
+  {
+    public Task CallAsync(Func<Task> work = null)
+      => DispatchAsync(work ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
+  }
+
+  // With a dispatcher, so the monitor loop runs once the coordinator is started.
+  private sealed class MonitoredCoordinator() : EngineCoordinator(nameof(MonitorPulseTest), NullLogger.Instance)
   {
     public Task CallAsync() => DispatchAsync(() => Task.CompletedTask, TestContext.Current.CancellationToken);
   }
@@ -30,6 +40,59 @@ public class MonitorPulseTest
     for (var i = 0; i < 3; i++)
       await coordinator.CallAsync();
 
+    coordinator.PendingMonitorPulses.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that calls made at the same time also leave one wake-up between them.
+  /// </summary>
+  [Fact]
+  public async Task MonitorPulse_ConcurrentCalls_LeaveOneWakeUp()
+  {
+    using var coordinator = new PulsingCoordinator();
+    var token = TestContext.Current.CancellationToken;
+
+    await Task.WhenAll(Enumerable.Range(0, 64).Select(_ => Task.Run(() => coordinator.CallAsync(), token)));
+
+    coordinator.PendingMonitorPulses.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that the parked monitor takes the wake-up of each call, the second as well as the first: a wake-up it
+  /// took but left marked pending would stop every later call from waking it.
+  /// </summary>
+  [Fact]
+  public async Task MonitorPulse_ParkedMonitor_TakesEachWakeUp()
+  {
+    using var coordinator = new MonitoredCoordinator();
+    await coordinator.StartAsync();
+
+    for (var call = 1; call <= 2; call++)
+    {
+      await coordinator.CallAsync();
+      await Wait.UntilAsync(() => coordinator.PendingMonitorPulses == 0, MustComplete,
+        $"the parked monitor must take the wake-up of call {call}");
+    }
+  }
+
+  /// <summary>
+  /// Verifies that a call wakes the monitor only once its work is handed over (run here, queued on a dispatcher): the
+  /// tick the wake-up starts must come after that work, or the monitor can park again before the work resets tasks
+  /// for it to start, and only one wake-up is held for all the calls.
+  /// </summary>
+  [Fact]
+  public async Task MonitorPulse_ComesAfterTheWorkIsHandedOver()
+  {
+    using var coordinator = new PulsingCoordinator();
+    var pendingDuringTheWork = -1;
+
+    await coordinator.CallAsync(() =>
+    {
+      pendingDuringTheWork = coordinator.PendingMonitorPulses;
+      return Task.CompletedTask;
+    });
+
+    pendingDuringTheWork.Should().Be(0);
     coordinator.PendingMonitorPulses.Should().Be(1);
   }
 }
