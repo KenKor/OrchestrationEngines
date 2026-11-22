@@ -88,9 +88,9 @@ namespace System.Threading.Tasks
   }
 
   /// <summary>
-  /// Task members that newer .NET versions offer.
+  /// Task members that newer .NET versions offer; each part sits in the block of the version that brought it.
   /// </summary>
-  internal static class TaskPolyfills
+  internal static partial class TaskPolyfills
   {
     extension(Task task)
     {
@@ -222,9 +222,9 @@ namespace System
 namespace System.Threading.Tasks
 {
   /// <summary>
-  /// Task members that .NET 6 offers.
+  /// The task members that .NET 6 brought.
   /// </summary>
-  internal static class TaskWaitPolyfills
+  internal static partial class TaskPolyfills
   {
     extension(Task task)
     {
