@@ -532,17 +532,15 @@ public partial class MechanicEngine : BaseEngine
     // token (IEngine.EnsureReadyAsync), and goes on until the engine settles.
     if (_engines.TryGetValue(name, out engine) && engine.State == EngineState.Starting)
     {
-      using var stopOrCaller = token.CanBeCanceled
-        ? CancellationTokenSource.CreateLinkedTokenSource(engine.CancellationToken, token)
-        : null;
+      using var stopOrCaller = CancellationTokenSource.CreateLinkedTokenSource(engine.CancellationToken, token);
       try
       {
-        await EnsureEngineReadyAsync(engine)
-          .WaitObservedAsync(stopOrCaller?.Token ?? engine.CancellationToken).ConfigureAwait(false);
+        await EnsureEngineReadyAsync(engine).WaitObservedAsync(stopOrCaller.Token).ConfigureAwait(false);
       }
-      catch (OperationCanceledException) when (engine.CancellationToken.IsCancellationRequested
-        && !token.IsCancellationRequested)
+      catch (OperationCanceledException) when (stopOrCaller.IsCancellationRequested)
       {
+        // The caller's cancellation carries the caller's token; a stop of the engine answers null.
+        token.ThrowIfCancellationRequested();
         return null;
       }
     }
@@ -577,27 +575,23 @@ public partial class MechanicEngine : BaseEngine
       CancellationToken token = default)
   {
     var dedicatedCt = (token == default) ? CancellationToken : token;
+    if (_engines.TryGetValue(name, out var known) && known.State == EngineState.Ready)
+      return known;
 
     // The time-out, or the caller, ends the wait inside the lookup too, so polling an engine that never settles does
     // not pile up waiters (#156). The time-out runs on the mechanic's clock.
-    var lookup = CancellationTokenSource.CreateLinkedTokenSource(dedicatedCt);
-    var ready = GetEngineWhenReadyAsync(name, throwErrorIfNotFound, lookup.Token);
-    if (await ready.EndsWithinAsync(TimeSpan.FromMilliseconds(milliSecondsTimeOut), TimeProvider).ConfigureAwait(false))
+    using var timeout = TimeProvider.CreateCancellationTokenSource(TimeSpan.FromMilliseconds(milliSecondsTimeOut));
+    using var lookup = CancellationTokenSource.CreateLinkedTokenSource(dedicatedCt, timeout.Token);
+    try
     {
-      lookup.Dispose();
-      return await ready.ConfigureAwait(false);
+      return await GetEngineWhenReadyAsync(name, throwErrorIfNotFound, lookup.Token).ConfigureAwait(false);
     }
-
-    // Timed out: end the inner wait. It may still be unwinding, so the source is disposed, and its outcome read, only
-    // once it has ended.
-    lookup.Cancel();
-    _ = ready.ContinueWith(static (ended, source) =>
+    catch (OperationCanceledException) when (lookup.IsCancellationRequested)
     {
-      ((CancellationTokenSource)source).Dispose();
-      _ = ended.Exception;
-    }, lookup, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-    dedicatedCt.ThrowIfCancellationRequested();
-    return null;
+      // The caller's cancellation carries the caller's token; the time-out answers null.
+      dedicatedCt.ThrowIfCancellationRequested();
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------------
