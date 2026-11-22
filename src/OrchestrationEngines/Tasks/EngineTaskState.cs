@@ -71,7 +71,7 @@ public enum EngineTaskState : short
 public static class EngineTaskStateExtension
 {
   /// <summary>
-  /// Try to set a state from a value. If value is not set, current state is returned.
+  /// Try to set a state from a value. If value is not set, or is not one defined state, current state is returned.
   /// </summary>
   /// <param name="e"></param>
   /// <param name="value"></param>
@@ -83,29 +83,33 @@ public static class EngineTaskStateExtension
   }
 
   /// <summary>
-  /// Try to set a state from a value. If value is not set, current state is returned.
+  /// Try to set a state from a value. If value is not set, or is not one defined state, current state is returned.
   /// </summary>
   /// <param name="e"></param>
   /// <param name="value"></param>
   /// <returns></returns>
-  public static EngineTaskState FromValue(this EngineTaskState e, int? value) => FromValue(e, (short?)value);
+  public static EngineTaskState FromValue(this EngineTaskState e, int? value) =>
+      value is >= short.MinValue and <= short.MaxValue ? FromValue(e, (short?)value) : e;
 
   /// <summary>
-  /// Try to set a state from a value. If value is not set, current state is returned.
+  /// Try to set a state from a value. If value is not set, or is not one defined state, current state is returned.
   /// </summary>
   /// <param name="e"></param>
   /// <param name="value"></param>
   /// <returns></returns>
-  public static EngineTaskState FromValue(this EngineTaskState e, long? value) => FromValue(e, (short?)value);
+  public static EngineTaskState FromValue(this EngineTaskState e, long? value) =>
+      value is >= short.MinValue and <= short.MaxValue ? FromValue(e, (short?)value) : e;
 
   /// <summary>
-  /// Try to set a state from a value. If value is not set, current state is returned.
+  /// Try to set a state from a value. If value is not set, or is not one defined state, current state is returned.
   /// </summary>
   /// <param name="e"></param>
   /// <param name="value"></param>
   /// <returns></returns>
   public static EngineTaskState FromValue(this EngineTaskState e, string value) =>
-      (Enum.TryParse(value, true, out EngineTaskState state)) ? state : e;
+      Enum.TryParse(value, true, out EngineTaskState state) && Enum.IsDefined(typeof(EngineTaskState), state)
+          ? state
+          : e;
 
   /// <summary>
   /// Get a description for an Engine Task State
@@ -115,6 +119,7 @@ public static class EngineTaskStateExtension
   public static string Description(this EngineTaskState e) => e switch
   {
     EngineTaskState.Created => "Task has been created, but not started.",
+    EngineTaskState.Resetting => "Task is being reset to Created for a new run.",
     EngineTaskState.WaitingForDependencies => "Task is waiting for tasks that it depends on to be completed first.",
     EngineTaskState.Running => "Task is running its normal worker.",
     EngineTaskState.Recovering => "Task is running its recovery worker.",
@@ -123,7 +128,7 @@ public static class EngineTaskStateExtension
     EngineTaskState.Cancelled => "Task has been cancelled (sub state of 'Failed').",
     EngineTaskState.RecoveryFailed => "Task failed during the recovery (sub state of 'Failed').",
     EngineTaskState.DependencyFailed => "Task cannot start because its dependency failed (sub state of 'Failed').",
-    EngineTaskState.TimedOut => "Task timed out (sub state of 'Timeout').",
+    EngineTaskState.TimedOut => "Task timed out (sub state of 'Failed').",
     _ => String.Empty,
   };
 
