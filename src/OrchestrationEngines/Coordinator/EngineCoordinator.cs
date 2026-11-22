@@ -86,8 +86,14 @@ public partial class EngineCoordinator : IDisposable
   // Logger for coordinator-level (application-level) logging.
   private readonly ILogger _applicationLogger;
 
-  // Monitor wake-up signal. Released whenever new work may exist.
-  private readonly SemaphoreSlim _monitorPulse = new SemaphoreSlim(0, int.MaxValue);
+  // Monitor wake-up signal. Released whenever new work may exist; it holds one wake-up at most (see PulseMonitor).
+  private readonly SemaphoreSlim _monitorPulse = new SemaphoreSlim(0, 1);
+
+  // 1 from the release of a wake-up until the monitor loop takes it: only the caller that sets it releases.
+  private int _monitorPulsePending;
+
+  // The wake-ups released that the monitor loop has not taken yet: 0 or 1 (tests).
+  internal int PendingMonitorPulses => Volatile.Read(ref _monitorPulsePending);
 
   // Dispatcher to take in commands, that we'll then execute on a monitoring thread (that will not be aborted).
   private readonly MechanicDispatcher _mechanicDispatcher;
@@ -883,10 +889,18 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   protected Task DispatchAsync(Func<Task> action, CancellationToken token = default)
   {
-    PulseMonitor();
-    if (_mechanicDispatcher == null)
-      return action();
-    return _mechanicDispatcher.InvokeAsync(action, token);
+    // Fix (MonitorPulse_ComesAfterTheWorkIsHandedOver): the pulse came before the work was queued, so the tick it
+    // started could run before that work, and with one wake-up held for all calls no later tick was due for it.
+    try
+    {
+      if (_mechanicDispatcher == null)
+        return action();
+      return _mechanicDispatcher.InvokeAsync(action, token);
+    }
+    finally
+    {
+      PulseMonitor();
+    }
   }
 
   /// <summary>
@@ -908,10 +922,17 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   protected Task<T> DispatchAsync<T>(Func<Task<T>> action, CancellationToken token = default)
   {
-    PulseMonitor();
-    if (_mechanicDispatcher == null)
-      return action();
-    return _mechanicDispatcher.InvokeAsync<T>(action, token);
+    // Pulses once the work is handed over, as the non-generic overload does.
+    try
+    {
+      if (_mechanicDispatcher == null)
+        return action();
+      return _mechanicDispatcher.InvokeAsync<T>(action, token);
+    }
+    finally
+    {
+      PulseMonitor();
+    }
   }
 
   /// <summary>
@@ -922,9 +943,19 @@ public partial class EngineCoordinator : IDisposable
   /// This is a best-effort signal. The monitor uses <see cref="SemaphoreSlim"/> as a wake-up mechanism;
   /// releasing after disposal or after cancellation is benign, so exceptions are intentionally ignored.
   /// </para>
+  /// <para>
+  /// The signal holds one wake-up at most: one tick of the parked monitor sees all the work the calls before it
+  /// scheduled, so calls made while the monitor polls leave one tick for later, not one each. Callers pulse after
+  /// their work is queued, and the loop clears <see cref="_monitorPulsePending"/> before it queues its tick, so a
+  /// caller that finds a wake-up pending has its work queued before that tick.
+  /// </para>
   /// </remarks>
   private void PulseMonitor()
   {
+    // Fix (MonitorPulse_ManyCalls_LeaveOneWakeUp): every call released the semaphore, so calls made while the
+    // monitor polled each left one more tick for later. Only the caller that sets the flag releases, so no caller
+    // releases a full semaphore.
+    if (Interlocked.CompareExchange(ref _monitorPulsePending, 1, 0) != 0) return;
     // Best-effort: do not throw if released after disposal or cancellation.
     try { _monitorPulse.Release(); } catch { /* ignore */ }
   }
@@ -1021,6 +1052,8 @@ public partial class EngineCoordinator : IDisposable
 
       // No pending tasks: wait until someone requests an engine / readiness / invalidation.
       await _monitorPulse.WaitAsync(token).ConfigureAwait(false);
+      // Taken: the next call releases a new wake-up. Cleared before the tick is queued (see PulseMonitor).
+      Volatile.Write(ref _monitorPulsePending, 0);
     }
   }
 
