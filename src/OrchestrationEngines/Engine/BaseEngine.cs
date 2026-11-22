@@ -1764,7 +1764,7 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Collection of tasks, in order as defined by the engine descriptor. 
+  /// Collection of tasks, in order as defined by the engine descriptor. Each call looks through every task.
   /// </summary>
   /// <param name="task">Task's who's dependents (tasks that are depedent on) we want to retrieve.</param>
   /// <returns></returns>
@@ -1772,7 +1772,7 @@ public abstract partial class BaseEngine : IEngine
       .Where(t => t.DependsOn.Contains(task));
 
   /// <summary>
-  /// Collection of tasks, ordered on name. 
+  /// Collection of tasks, ordered on name. Each call looks through every task, as <see cref="GetDependents"/> does.
   /// </summary>
   /// <param name="task">Task's who's dependents (tasks that are depedent on) we want to retrieve.</param>
   /// <returns></returns>
@@ -1814,41 +1814,47 @@ public abstract partial class BaseEngine : IEngine
   {
     var sb = new StringBuilder();
     sb.AppendLine(ToString());
+    // One task set for the roots and the dependents, also when the set is replaced meanwhile
+    var tasks = _tasks.Values;
     // Find roots = tasks with no dependencies
-    var roots = _tasks.Values
+    var roots = tasks
         .Where(t => !t.DependsOn.Any())
         .OrderBy(t => t.Name)
         .ToList();
     // If no task is a root, everything depends on something → treat all as roots
     if (roots.Count == 0)
     {
-      roots = [.. _tasks.Values.OrderBy(t => t.Name)];
+      roots = [.. tasks.OrderBy(t => t.Name)];
     }
     // Tracks tasks whose subtrees were already printed
     var expanded = new HashSet<EngineTask>();
+    var dependents = DirectDependents(tasks);
     foreach (var root in roots)
     {
-      WriteDependencyTree(root, sb, expanded);
+      WriteDependencyTree(root, sb, expanded, dependents);
     }
 
     return sb.ToString();
   }
 
-  private void WriteDependencyTree(
+  private static void WriteDependencyTree(
       EngineTask task,
       StringBuilder sb,
       HashSet<EngineTask> expanded,
+      Dictionary<EngineTask, List<EngineTask>> dependents,
       string indent = null)
   {
     // First time printing this task
-    if (!expanded.Contains(task))
+    if (expanded.Add(task))
     {
       sb.AppendLine($"{indent}{task.Name} [{task.State}]");
-      expanded.Add(task);
+      if (!dependents.TryGetValue(task, out var direct))
+        return;
       var childIndent = string.IsNullOrEmpty(indent) ? " -> " : "   " + indent;
-      foreach (var dep in GetDependentsOrdered(task))
+      // A task that depends on this one twice is listed once
+      foreach (var dep in direct.Distinct().OrderBy(t => t.Name))
       {
-        WriteDependencyTree(dep, sb, expanded, childIndent);
+        WriteDependencyTree(dep, sb, expanded, dependents, childIndent);
       }
     }
     else
