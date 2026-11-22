@@ -213,6 +213,12 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
+  /// The clock of the mechanic, which times the lookups' time-outs; <see cref="TimeProvider.System"/> unless set. The
+  /// next generation of a switch takes it over. Tests set a clock they advance themselves.
+  /// </summary>
+  internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+  /// <summary>
   /// Lazily created mechanic engine.
   /// </summary>
   /// <remarks>
@@ -233,7 +239,7 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   protected virtual MechanicEngine CreateMechanic()
   {
-    var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token);
+    var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token) { TimeProvider = TimeProvider };
 
     // Listen to engine lifecycle events to drive coordinator state.
     mechanic.EngineStatusChanged += Mechanic_EngineStatusChanged;
@@ -607,7 +613,11 @@ public partial class EngineCoordinator : IDisposable
       runtimeDescriptors.Add(runtimeDescriptor);
     }
 
-    var nextCoordinator = new EngineCoordinator(_coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken);
+    var nextCoordinator = new EngineCoordinator(
+      _coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken)
+    {
+      TimeProvider = TimeProvider,
+    };
     NextGenerationCreated?.Invoke(nextCoordinator);
 
     // The previous engines are in the handovers now. Drop these references: they live on in this async method's state,
@@ -1568,6 +1578,7 @@ public partial class EngineCoordinator : IDisposable
     if (Successor is { } replaced)
       return await replaced.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
 
+    var started = TimeProvider.GetTimestamp();
     IEngine engine;
     try
     {
@@ -1588,7 +1599,23 @@ public partial class EngineCoordinator : IDisposable
     if (engine != null)
       return engine;
     var next = await NextGenerationAsync(name, token).ConfigureAwait(false);
-    return next == null ? null : await next.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
+    return next == null
+      ? null
+      : await next.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, started), token)
+        .ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// What is left of a lookup's time-out that started at <paramref name="started"/> (a timestamp of
+  /// <see cref="TimeProvider"/>), so a lookup passed on to the next generation keeps its deadline (#156). Nothing left
+  /// is 0: the next generation then answers only with an engine that is Ready already.
+  /// </summary>
+  private int TimeLeft(int milliSecondsTimeOut, long started)
+  {
+    if (milliSecondsTimeOut == Timeout.Infinite)
+      return Timeout.Infinite;
+    var left = milliSecondsTimeOut - TimeProvider.GetElapsedTime(started).TotalMilliseconds;
+    return left > 0 ? (int)left : 0;
   }
 
   /// <summary>
