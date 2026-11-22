@@ -399,11 +399,11 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     return String.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase) &&
            Version == other.Version &&
            Equals(EngineFactory, other.EngineFactory) &&
-           (RestartFromPrevious == other.RestartFromPrevious || RestartFromPrevious != null && RestartFromPrevious.Equals(other.RestartFromPrevious)) &&
+           Equals(RestartFromPrevious, other.RestartFromPrevious) &&
            RequiredForRunning == other.RequiredForRunning &&
-           (ContextFactory == other.ContextFactory || ContextFactory != null && ContextFactory.Equals(other.ContextFactory)) &&
-           (RecoveryHelper == other.RecoveryHelper || RecoveryHelper != null && Equals(RecoveryHelper, other.RecoveryHelper)) &&
-           (RestartPolicy == other.RestartPolicy || RestartPolicy != null && RestartPolicy.Equals(other.RestartPolicy)) &&
+           Equals(ContextFactory, other.ContextFactory) &&
+           Equals(RecoveryHelper, other.RecoveryHelper) &&
+           Equals(RestartPolicy, other.RestartPolicy) &&
            DependsOn.SetEquals(other.DependsOn);
   }
 
