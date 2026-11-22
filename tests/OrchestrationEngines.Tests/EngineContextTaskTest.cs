@@ -28,7 +28,7 @@ public class EngineContextTaskTest
   public async Task EngineContextTask_ContextFactoryReturnsNull_ThrowsAnErrorThatSaysSo()
   {
     var ct = TestContext.Current.CancellationToken;
-    var descriptor = new EngineDescriptor("Network", _ => Task.FromResult<IEngine>(null))
+    var descriptor = new EngineDescriptor("Network", DescriptorTestExtensions.NullEngineFactory)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(null));
     var task = new ContextTask(new MechanicEngine(NullLogger.Instance), descriptor);
 
