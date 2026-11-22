@@ -26,8 +26,9 @@ namespace OrchestrationEngines.Restarter;
 /// </item>
 /// </list>
 /// <para>
-/// The enforcer maintains per-instance state (restart timestamps and current backoff), and therefore
-/// is expected to be scoped to a single <see cref="EngineTask"/>.
+/// The enforcer maintains per-instance state (restart timestamps, restart count and current backoff). It may be
+/// shared, for example as an <see cref="Coordinator.EngineDescriptor.RecoveryHelper"/> set on a descriptor: the tasks
+/// that share it then share that state, so they count each other's restarts and each doubles the one backoff.
 /// </para>
 /// </remarks>
 public class RestartPolicyEnforcer : IRestartPolicyEnforcer

@@ -433,9 +433,8 @@ public class RestartPolicyEnforcerTest
     holder.Start();
     holding.Wait(MustComplete, TestContext.Current.CancellationToken).Should().BeTrue();
 
-    EngineTask NewSharingTask(string name) =>
-      new EngineTask(name, _ => throw new InvalidOperationException("The run fails."), requiredForRunning: true,
-          NullLogger.Instance, CancellationToken.None)
+    EngineTask NewSharingTask() =>
+      NewTask(_ => throw new InvalidOperationException("The run fails."))
         .SetRecovery(new CustomRestarter((et, token) =>
         {
           lock (invoking)
@@ -446,8 +445,8 @@ public class RestartPolicyEnforcerTest
           return restart;
         }));
 
-    await NewSharingTask("First").FireAsync(EngineTaskTrigger.Start);
-    await NewSharingTask("Second").FireAsync(EngineTaskTrigger.Start);
+    await NewSharingTask().FireAsync(EngineTaskTrigger.Start);
+    await NewSharingTask().FireAsync(EngineTaskTrigger.Start);
     await Wait.UntilAsync(() =>
     {
       lock (invoking)
