@@ -378,6 +378,33 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     return this;
   }
 
+  /// <summary>
+  /// Copies this descriptor, for a generation switch to register.
+  /// </summary>
+  /// <param name="engineFactory">
+  /// The factory the copy creates its engine with, for example one that hands over the previous engine; null for the
+  /// registered factory.
+  /// </param>
+  /// <remarks>
+  /// The copy keeps this descriptor's registered factory, also when it is given another engine factory (see
+  /// <see cref="RegisteredEngineFactory"/>), and has a dependency set of its own.
+  /// </remarks>
+  internal EngineDescriptor Clone(Func<CancellationToken, Task<IEngine>> engineFactory = null)
+  {
+    var clone = new EngineDescriptor(Name, engineFactory ?? RegisteredEngineFactory, RequiredForRunning, Version)
+    {
+      ContextFactory = ContextFactory,
+      RecoveryHelper = RecoveryHelper,
+      RestartPolicy = RestartPolicy,
+      RestartFromPrevious = RestartFromPrevious,
+      RegisteredEngineFactory = RegisteredEngineFactory,
+    };
+
+    clone.DependsOn.UnionWith(DependsOn);
+
+    return clone;
+  }
+
   /*
    * Default IEquatable implementation
    */
