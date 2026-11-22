@@ -591,19 +591,6 @@ public partial class MechanicEngine : BaseEngine
   // ---------------------------------------------------------------------
 
   /// <summary>
-  /// Gets the engine async.
-  /// </summary>
-  /// <param name="engineName">The engine name.</param>
-  /// <returns>The result.</returns>
-  internal ValueTask<IEngine> GetEngineAsync(string engineName)
-  {
-    if (!_engines.TryGetValue(engineName, out var engine))
-      throw new ArgumentException($"Unknown engine '{engineName}'", nameof(engineName));
-
-    return new ValueTask<IEngine>(engine);
-  }
-
-  /// <summary>
   /// Starts an engine if it is in Created state.
   /// </summary>
   /// <param name="engine">The engine.</param>
@@ -631,20 +618,6 @@ public partial class MechanicEngine : BaseEngine
       await engine.EnsureReadyAsync().ConfigureAwait(false);
 
     return engine;
-  }
-
-  /// <summary>
-  /// Stops an engine if it has not yet fully stopped.
-  /// </summary>
-  /// <param name="engineName">The engine name.</param>
-  internal Task StopEngineAsync(string engineName)
-  {
-    if (!_engines.TryGetValue(engineName, out var engine))
-      throw new ArgumentException($"Unknown engine '{engineName}'");
-
-    return engine.State <= EngineState.Ready
-        ? engine.StopAsync()
-        : Task.CompletedTask;
   }
 
   /// <summary>
