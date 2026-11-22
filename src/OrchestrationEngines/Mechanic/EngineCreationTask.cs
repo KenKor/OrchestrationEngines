@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -69,12 +70,16 @@ public class EngineCreationTask : EngineTask
     /// <param name="m">The m.</param>
     /// <param name="engineDescriptor">The engine descriptor.</param>
     /// <param name="token">The token.</param>
+    /// <exception cref="InvalidOperationException">
+    /// The factory returned null: the creation fails as for a factory that throws, and nothing is registered.
+    /// </exception>
     protected static async Task CreateInstanceAsync(
         MechanicEngine m,
         EngineDescriptor engineDescriptor,
         CancellationToken token)
     {
-        var engineInstance = await engineDescriptor.EngineFactory(token).ConfigureAwait(false);
+        var engineInstance = await engineDescriptor.EngineFactory(token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"The factory of engine '{engineDescriptor.Name}' returned null.");
         m.RegisterEngine(engineDescriptor.Name, engineInstance);
     }
 }

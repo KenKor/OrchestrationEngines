@@ -359,7 +359,9 @@ public partial class EngineCoordinator : IDisposable
   /// Registers a new engine with the coordinator.
   /// </summary>
   /// <param name="name">Logical engine name.</param>
-  /// <param name="engineFactory">Factory used to create engine instances.</param>
+  /// <param name="engineFactory">
+  /// Factory used to create engine instances. A null result fails the engine's creation, as a factory that throws does.
+  /// </param>
   /// <param name="requiredForRunning">
   /// Whether this engine must be Ready for the application to be considered running.
   /// </param>
@@ -804,6 +806,12 @@ public partial class EngineCoordinator : IDisposable
       definitionChanged,
       dependencyChanged,
       token).ConfigureAwait(false);
+
+    // Checked before the handover is released, so a retry is offered the previous engine again, as after a throw.
+    if (next == null)
+      throw new InvalidOperationException(candidate.RestartFromPrevious == null
+        ? $"The factory of engine '{candidate.Name}' returned null."
+        : $"The restart factory of engine '{candidate.Name}' returned null.");
 
     // A generation switch must produce a fresh runtime instance with a fresh token chain.
     // Not retried (an EngineTaskException): the factory would return the same instance again.
