@@ -59,7 +59,6 @@ public class EngineContextTask : EngineTask
       CancellationToken token)
       : base(
           ContextName(engineDescriptor.Name),
-          async _ => await Task.CompletedTask.ConfigureAwait(false), // Placeholder; replaced immediately.
           engineDescriptor.RequiredForRunning,
           Logger,
           token)

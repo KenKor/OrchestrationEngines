@@ -380,10 +380,41 @@ public partial class EngineTask
       ILogger logger,
       CancellationToken engineToken,
       TimeProvider timeProvider = null)
+      : this(
+          name,
+          requiredForRunning,
+          logger,
+          engineToken,
+          timeProvider,
+          workAsync ?? throw new ArgumentNullException(nameof(workAsync)))
+  {
+  }
+
+  /// <summary>
+  /// Creates a task whose work the derived class sets in <see cref="_workAsync"/> in its own constructor: for work that
+  /// calls the task's own members, which a constructor initializer cannot reach.
+  /// </summary>
+  private protected EngineTask(
+      string name,
+      bool requiredForRunning,
+      ILogger logger,
+      CancellationToken engineToken,
+      TimeProvider timeProvider = null)
+      : this(name, requiredForRunning, logger, engineToken, timeProvider, workAsync: null)
+  {
+  }
+
+  private EngineTask(
+      string name,
+      bool requiredForRunning,
+      ILogger logger,
+      CancellationToken engineToken,
+      TimeProvider timeProvider,
+      Func<CancellationToken, Task> workAsync)
   {
     Name = name ?? throw new ArgumentNullException(nameof(name));
     TimeProvider = timeProvider ?? TimeProvider.System;
-    _workAsync = workAsync ?? throw new ArgumentNullException(nameof(workAsync));
+    _workAsync = workAsync;
     var taskPrefix = $"{Name}: ";
     Logger = new PrefixLogger(logger ?? NullLogger.Instance, () => taskPrefix);
     RequiredForRunning = requiredForRunning;

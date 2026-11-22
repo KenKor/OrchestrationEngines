@@ -124,7 +124,6 @@ public partial class EngineKickStartTask : EngineTask
         CancellationToken token)
         : base(
             KickStartName(engineDescriptor.Name),
-            async _ => await Task.CompletedTask.ConfigureAwait(false), // Placeholder; replaced immediately.
             engineDescriptor.RequiredForRunning,
             Logger is null ? null : new StartFailureLogger(Logger, canRestart: engineDescriptor.HasRecovery),
             token)
