@@ -31,7 +31,7 @@ public sealed partial class ProgressCounter
   private int _totalCount;
 
   private int _lastReportedCount;
-  private long _lastReportedTicks;
+  private long _lastReportedTimestamp;
 
   /// <summary>
   /// Creates a progress counter that reports once per <paramref name="reportEvery"/> increments.
@@ -58,7 +58,7 @@ public sealed partial class ProgressCounter
     _totalCount = 0;
 
     _lastReportedCount = 0;
-    _lastReportedTicks = DateTime.UtcNow.Ticks;
+    _lastReportedTimestamp = TimeProvider.System.GetTimestamp();
   }
 
   /// <summary>
@@ -92,27 +92,26 @@ public sealed partial class ProgressCounter
 
       _remainingUntilReport = _reportEvery;
 
-      var nowTicks = DateTime.UtcNow.Ticks;
+      var now = TimeProvider.System.GetTimestamp();
 
       var countDelta = _totalCount - _lastReportedCount;
-      var tickDelta = nowTicks - _lastReportedTicks;
-
-      // 10,000,000 ticks per second.
-      rate = tickDelta > 0
-          ? 10_000_000.0 * countDelta / tickDelta
+      // Elapsed time, not the wall clock: a clock adjustment must not distort the rate.
+      var seconds = TimeProvider.System.GetElapsedTime(_lastReportedTimestamp, now).TotalSeconds;
+      rate = seconds > 0
+          ? countDelta / seconds
           : 0.0;
 
       _lastReportedCount = _totalCount;
-      _lastReportedTicks = nowTicks;
+      _lastReportedTimestamp = now;
       totalCount = _totalCount;
     }
-    var progressMessage = FormatMessage(_messageTemplate, totalCount, rate);
+    var progressMessage = String.Format(_messageTemplate, totalCount, rate);
     LogProgress(progressMessage);
     return progressMessage;
   }
 
   /// <summary>
-  /// Ensure's well do a report next time round.
+  /// Makes the next increment report, whatever its size.
   /// </summary>
   public void EnsureNextReport()
   {
@@ -132,14 +131,6 @@ public sealed partial class ProgressCounter
                                        : match.Groups[1].Value.Equals("Count", StringComparison.OrdinalIgnoreCase)
                                            ? "{0"
                                            : "{1");
-
-  private static string FormatMessage(string template, long count, double rate)
-  {
-    // Minimal, dependency-free templating.
-    // Supports numeric formats like {count:n0} and {rate:n0}.
-    // If no format is specified, defaults to invariant ToString().
-    return String.Format(template, count, rate);
-  }
 
   // ---------------------------------------------------------------------
   // Logging methods

@@ -47,8 +47,7 @@ public static class EngineMermaidExtensions
 
       // Style each node based on its state
       var style = GetStyleForState(id, task.State);
-      if (!string.IsNullOrEmpty(style))
-        styleSb.AppendLine($"    {style}");
+      styleSb.AppendLine($"    {style}");
 
       // Add failure reason note (if applicable)
       if (task.IsFailed && !string.IsNullOrWhiteSpace(task.FailReason))

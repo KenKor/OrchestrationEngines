@@ -907,7 +907,6 @@ public partial class EngineTask
         .OnExit(StopCallTimer)
 
         // The work delegate runs on entry into Running.
-        //.OnEntryAsync(() => ExecuteWorkAsync())
         // The run and its token are taken on entry, under the trigger lock, so a reset before the detached work starts
         // still makes it stale (see FireIfCurrentAsync), and the work never reads the token of the run after it.
         .OnEntry(_ =>

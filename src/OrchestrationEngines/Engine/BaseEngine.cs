@@ -39,7 +39,7 @@ namespace OrchestrationEngines.Engine;
 public abstract partial class BaseEngine : IEngine
 {
   /// <summary>
-  /// <inheritdoc/>
+  /// Linked to the token the engine was created with; cancelling it cancels the engine's tasks.
   /// </summary>
   private readonly CancellationTokenSource _linkedCts;
 
@@ -573,7 +573,6 @@ public abstract partial class BaseEngine : IEngine
     var bestState = EngineState.Created;
     var allAreCompletedSuccessfully = true;
     var anyCancelled = false;
-    // var allAreCompleted = true;
     foreach (var t in _tasks.Values.Where(t => t.RequiredForRunning))
     {
       switch (t.State)
@@ -581,15 +580,12 @@ public abstract partial class BaseEngine : IEngine
         case EngineTaskState.Created:
           break;
         case EngineTaskState.WaitingForDependencies:
-          bestState = EngineState.Starting;
-          break;
         case EngineTaskState.Running:
         case EngineTaskState.Recovering:
           bestState = EngineState.Starting;
           break;
         case EngineTaskState.CompletedWithSuccess:
           bestState = EngineState.Starting;
-          // allAreCompleted &= t.InnerTask.IsCompleted;
           continue;
         case EngineTaskState.Cancelled:
           // Keep looking: a failed task elsewhere makes the engine Faulted, not Stopped.
@@ -1369,7 +1365,6 @@ public abstract partial class BaseEngine : IEngine
     await TriggerStartAsync(allTasks).ConfigureAwait(false);
     // Wait for all tasks (CompletedWithSuccess / Failed / Cancelled)
     var completionTasks = allTasks
-        // var completionTasks = task // We do not need to get its dependencies, since the tasks already have that stored in them.
         .Where(t => !t.IsCompleted)
         .Select(t => t.InnerTask).ToArray();
     if (completionTasks.Length == 0)
@@ -1779,7 +1774,7 @@ public abstract partial class BaseEngine : IEngine
   /// Returns a textual summary of engine state and tasks.
   /// </summary>
   public override string ToString() =>
-      $"{EngineName}, State: {State}"; //"Running: {IsRunning}; Cancellation requested: {IsCancellationRequested}; Task cancelled: {IsTaskCancelled}; IsCompleted: {IsCompleted}; Successful: {IsCompletedWithSuccess}; Failed: {IsFailed}.";
+      $"{EngineName}, State: {State}";
 
   /// <summary>
   /// Produces a human-readable report of all tasks and their states.
