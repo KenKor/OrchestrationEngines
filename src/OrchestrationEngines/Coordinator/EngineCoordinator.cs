@@ -143,14 +143,17 @@ public partial class EngineCoordinator : IDisposable
     private EngineCoordinator _current = first;
 
     /// <summary>
-    /// The current coordinator. Written and read with <see cref="Interlocked"/> (full fences), so that a lookup on a
-    /// replaced coordinator does not see a stale "still current" just after a switch.
+    /// The current coordinator. Written (by <see cref="TryHandOver"/>) and read with <see cref="Interlocked"/> (full
+    /// fences), so that a lookup on a replaced coordinator does not see a stale "still current" just after a switch.
     /// </summary>
-    public EngineCoordinator Current
-    {
-      get => Interlocked.CompareExchange(ref _current, null, null);
-      set => Interlocked.Exchange(ref _current, value);
-    }
+    public EngineCoordinator Current => Interlocked.CompareExchange(ref _current, null, null);
+
+    /// <summary>
+    /// Makes <paramref name="next"/> the current coordinator if <paramref name="replaced"/> still is, and says whether
+    /// it did: of two switches on one coordinator, only the first to hand over replaces it.
+    /// </summary>
+    public bool TryHandOver(EngineCoordinator replaced, EngineCoordinator next)
+      => ReferenceEquals(Interlocked.CompareExchange(ref _current, next, replaced), replaced);
   }
 
   private Lineage _lineage;
@@ -495,15 +498,45 @@ public partial class EngineCoordinator : IDisposable
   /// its own failure; a failure of the clean-up is logged as a warning. This coordinator stays current, and its engines
   /// keep running, except those rebuilt from scratch that were stopped already.
   /// </para>
+  /// <para>
+  /// A switch asked of a coordinator that another switch replaced, or one that another switch on this coordinator
+  /// beat to the hand-over (without the dispatcher, switches are not queued), switches the current generation of the
+  /// lineage instead (see <see cref="Successor"/>). The coordinator returned can then be more than one generation past
+  /// this one.
+  /// </para>
   /// </remarks>
-  public Task<EngineCoordinator> RestartWithDefinitionsAsync(IEnumerable<EngineDescriptor> candidateDescriptors, bool waitUntilReady = true, CancellationToken token = default)
-    => DispatchAsync(() => RestartWithDefinitionsAsyncInt(candidateDescriptors, waitUntilReady, token), token);
-
-  private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(IEnumerable<EngineDescriptor> candidateDescriptors, bool waitUntilReady, CancellationToken token)
+  public async Task<EngineCoordinator> RestartWithDefinitionsAsync(IEnumerable<EngineDescriptor> candidateDescriptors,
+    bool waitUntilReady = true, CancellationToken token = default)
   {
     ArgumentNullException.ThrowIfNull(candidateDescriptors);
-
     var candidateList = candidateDescriptors.Where(d => d != null).ToArray();
+
+    // Fix (GenerationSwitchEdgeCaseTest): a replaced coordinator built a generation from its own stopped engines next
+    // to the one running, or, with the dispatcher on, threw a cancellation. It goes to the current generation now.
+    EngineCoordinator next = null;
+    if (Successor == null)
+    {
+      try
+      {
+        next = await DispatchAsync(() => RestartWithDefinitionsAsyncInt(candidateList, waitUntilReady, token), token)
+          .ConfigureAwait(false);
+      }
+      catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
+      {
+        // Queued behind a switch that replaced this coordinator: its shutdown cancelled the items still queued.
+      }
+    }
+
+    // Replaced, queued behind the switch that replaced it, or its switch lost the hand-over (null): the current
+    // generation switches.
+    return next ?? await Current.RestartWithDefinitionsAsync(candidateList, waitUntilReady, token)
+      .ConfigureAwait(false);
+  }
+
+  /// <returns>The next coordinator, or null when another switch on this coordinator handed over first.</returns>
+  private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(EngineDescriptor[] candidateList,
+    bool waitUntilReady, CancellationToken token)
+  {
     var diff = BuildDefinitionDiff(candidateList);
 
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
@@ -585,7 +618,7 @@ public partial class EngineCoordinator : IDisposable
     }
     catch (Exception ex)
     {
-      await CleanUpNextGenerationAsync(nextCoordinator, ex).ConfigureAwait(false);
+      await CleanUpNextGenerationAsync(nextCoordinator, ex.GetType().Name).ConfigureAwait(false);
       throw;
     }
 
@@ -594,7 +627,14 @@ public partial class EngineCoordinator : IDisposable
     // state (a Faulted engine's kick-start would otherwise go on recovering and load it again next to its successor),
     // and cancels this generation's mechanic, so its kick-starts and their recovery end at once.
     nextCoordinator._lineage = _lineage;
-    _lineage.Current = nextCoordinator;
+    if (!_lineage.TryHandOver(this, nextCoordinator))
+    {
+      // Another switch on this coordinator handed over first (without the dispatcher, switches are not queued): one
+      // generation runs in a lineage, so this one is cleaned up, and the switch goes to the current generation.
+      nextCoordinator._lineage = new Lineage(nextCoordinator);
+      await CleanUpNextGenerationAsync(nextCoordinator, "another switch handed over first").ConfigureAwait(false);
+      return null;
+    }
     try
     {
       await ShutdownAsyncInt().ConfigureAwait(false);
@@ -653,15 +693,15 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Cleans up the next coordinator of a generation switch that failed before it handed over: shuts it down if the
-  /// switch started it (its engines and its dispatcher stop), and disposes it otherwise. A failure of the clean-up is
-  /// logged, so that the switch's own failure is the one its caller gets.
+  /// Cleans up the next coordinator of a generation switch that failed before it handed over, or that another switch
+  /// beat to the hand-over: shuts it down if the switch started it (its engines and its dispatcher stop), and disposes
+  /// it otherwise. A failure of the clean-up is logged, so that it does not change what the switch returns or throws.
   /// </summary>
   /// <remarks>
   /// Lookups of an engine the switch rebuilds from scratch are no longer sent to the next generation (see
   /// NextGenerationAsync), and those sent to it already give null: the engine stopped, and nothing replaced it.
   /// </remarks>
-  private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, Exception switchFailure)
+  private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, string reason)
   {
     // The record this switch set, if it rebuilds engines: no generation answers for them now.
     Volatile.Write(ref _rebuildingSwitch, null);
@@ -678,7 +718,7 @@ public partial class EngineCoordinator : IDisposable
     }
     catch (Exception ex)
     {
-      BestEffort.Log(() => LogNextGenerationCleanUpFailed(ex, nextCoordinator._coordinatorName, switchFailure.GetType().Name));
+      BestEffort.Log(() => LogNextGenerationCleanUpFailed(ex, nextCoordinator._coordinatorName, reason));
     }
   }
 
@@ -1547,8 +1587,9 @@ public partial class EngineCoordinator : IDisposable
   [LoggerMessage(Level = LogLevel.Debug, Message = "The kick-start of engine '{EngineName}' did not complete with success, or could not be waited for; letting go of the engine it replaces.")]
   private partial void LogHandoverWaitFailed(Exception exception, string engineName);
 
-  [LoggerMessage(Level = LogLevel.Warning, Message = "'{CoordinatorName}': Cleaning up the next generation of a switch that failed ({SwitchFailure}) failed too; the switch's own failure is thrown.")]
-  private partial void LogNextGenerationCleanUpFailed(Exception exception, string coordinatorName, string switchFailure);
+  [LoggerMessage(Level = LogLevel.Warning, Message = "'{CoordinatorName}': Cleaning up the next generation of a switch "
+    + "that did not hand over ({Reason}) failed; what the switch returns or throws is not changed by it.")]
+  private partial void LogNextGenerationCleanUpFailed(Exception exception, string coordinatorName, string reason);
 
   [LoggerMessage(Level = LogLevel.Warning, Message = "'{CoordinatorName}': Stopping the generation this switch replaced failed; the switch has succeeded.")]
   private partial void LogReplacedGenerationStopFailed(Exception exception, string coordinatorName);

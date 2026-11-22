@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
@@ -262,6 +263,92 @@ public class GenerationSwitchEdgeCaseTest
 
     second.State.Should().Be(EngineCoordinatorState.Stopped);
     engine.State.Should().Be(EngineState.Stopped);
+  }
+
+  /// <summary>
+  /// Verifies that a generation switch asked of a coordinator that an earlier switch replaced goes to the current
+  /// generation, as lookups and context operations do: the current generation is replaced and stopped, exactly one
+  /// generation runs, and shutting down the first coordinator stops it.
+  /// </summary>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task Switch_OnAReplacedCoordinator_ReplacesTheCurrentGeneration(bool useDispatcher)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var second = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), true, ct)
+      .WaitAsync(MustComplete, ct);
+    var secondEngine = second.GetEngineIfReady("A");
+
+    var third = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), true, ct)
+      .WaitAsync(MustComplete, ct);
+
+    try
+    {
+      second.Successor.Should().BeSameAs(third, "the switch replaced the current generation");
+      coordinator.Current.Should().BeSameAs(third);
+      second.State.Should().Be(EngineCoordinatorState.Stopped);
+      secondEngine.State.Should().Be(EngineState.Stopped);
+      new[] { coordinator, second, third }.Should().ContainSingle(c => c.State == EngineCoordinatorState.Running);
+      third.GetEngineIfReady("A").Should().NotBeNull();
+    }
+    finally
+    {
+      await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
+
+    third.State.Should().Be(EngineCoordinatorState.Stopped,
+      "shutting down the first coordinator reaches the current one");
+  }
+
+  /// <summary>
+  /// Verifies that a second switch asked of a coordinator while its first switch waits for the next generation to be
+  /// ready leaves one generation running: without the dispatcher the second switch hands over first, so the first one
+  /// may no longer hand over and goes to the current generation instead; with it, the second switch waits for the first
+  /// and then goes to the generation that replaced the coordinator.
+  /// </summary>
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task Switch_TwoOnOneCoordinator_LeaveOneGenerationRunning(bool useDispatcher)
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var created = new ConcurrentQueue<LoadEngine>();
+    var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    EngineDescriptor Definition(Task engineGate) => new("A", _ =>
+    {
+      var engine = new LoadEngine(engineGate);
+      created.Enqueue(engine);
+      return Task.FromResult<IEngine>(engine);
+    }, requiredForRunning: true);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    coordinator.RegisterEngineDescriptor(Definition(Task.CompletedTask));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    var waiting = coordinator.RestartWithDefinitionsAsync([Definition(gate.Task)], true, ct);
+    await Wait.UntilAsync(() => created.Count == 2, MustComplete, "the first switch created its engine");
+    var other = coordinator.RestartWithDefinitionsAsync([Definition(Task.CompletedTask)], true, ct);
+    if (!useDispatcher)
+      await other.WaitAsync(MustComplete, ct);
+    gate.SetResult();
+    var results = await Task.WhenAll(waiting, other).WaitAsync(MustComplete, ct);
+
+    try
+    {
+      var current = coordinator.Current;
+      results.Should().Contain(current);
+      current.State.Should().Be(EngineCoordinatorState.Running);
+      new[] { coordinator }.Concat(results).Where(c => c != current).Should()
+        .OnlyContain(c => c.State == EngineCoordinatorState.Stopped);
+      created.Where(e => e.State != EngineState.Stopped).Should().ContainSingle("one generation has its engine loaded");
+    }
+    finally
+    {
+      await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
   }
 
   /// <summary>
