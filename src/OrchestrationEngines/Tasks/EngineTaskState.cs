@@ -88,8 +88,7 @@ public static class EngineTaskStateExtension
   /// <param name="e"></param>
   /// <param name="value"></param>
   /// <returns></returns>
-  public static EngineTaskState FromValue(this EngineTaskState e, int? value) =>
-      value is >= short.MinValue and <= short.MaxValue ? FromValue(e, (short?)value) : e;
+  public static EngineTaskState FromValue(this EngineTaskState e, int? value) => e.FromValue((long?)value);
 
   /// <summary>
   /// Try to set a state from a value. If value is not set, or is not one defined state, current state is returned.
