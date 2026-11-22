@@ -1764,8 +1764,7 @@ public abstract partial class BaseEngine : IEngine
   }
 
   /// <summary>
-  /// Collection of tasks, in order as defined by the engine descriptor. Each call looks through every task: for the
-  /// dependents of many tasks, see <see cref="GetAllDependents"/>, which builds the map of dependents once.
+  /// Collection of tasks, in order as defined by the engine descriptor. Each call looks through every task.
   /// </summary>
   /// <param name="task">Task's who's dependents (tasks that are depedent on) we want to retrieve.</param>
   /// <returns></returns>
