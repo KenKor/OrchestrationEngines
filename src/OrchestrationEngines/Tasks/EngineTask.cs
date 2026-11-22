@@ -580,7 +580,7 @@ public partial class EngineTask
   internal async Task ReleaseTokenAsync()
   {
     await LatestRunEnded.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       RequestCancellation();
       lock (_sourceGate)
@@ -782,7 +782,7 @@ public partial class EngineTask
   /// </summary>
   private async Task FireDependencyTriggerAsync(EngineTaskTrigger trigger)
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       if (_runEnded)
         return;
@@ -1261,7 +1261,7 @@ public partial class EngineTask
       return;
     }
 
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       var wasFailed = State == EngineTaskState.Failed;
       await FireMachineAsync(trigger, reason).ConfigureAwait(false);
@@ -1292,7 +1292,7 @@ public partial class EngineTask
   /// <param name="reason">Why the task is cancelled.</param>
   internal async Task CancelAsync(string reason)
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       if (State.IsCompleted())
         return;
@@ -1313,7 +1313,7 @@ public partial class EngineTask
   /// </summary>
   internal async Task EndRunAsync()
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       // Under the trigger lock: an outcome fired after this is not the current run's (see FireIfCurrentAsync).
       Interlocked.Increment(ref _runGeneration);
@@ -1324,7 +1324,7 @@ public partial class EngineTask
 
   private async Task ResetAsync()
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       try
       {
@@ -1373,7 +1373,7 @@ public partial class EngineTask
   private async Task<bool> FireIfCurrentAsync(int run, EngineTaskTrigger trigger, string reason = "", string failReason = null,
     bool cancelRun = false, Exception exception = null, bool byTheWork = false)
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       if (run != CurrentRun)
         return false;
@@ -1409,7 +1409,7 @@ public partial class EngineTask
   /// <param name="run">The generation the run started in.</param>
   private async Task CancelIfCurrentAsync(int run)
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       if (run == CurrentRun)
         RequestCancellation();
@@ -1427,7 +1427,7 @@ public partial class EngineTask
   /// </param>
   private async Task TimeOutIfCurrentAsync(int run, bool workStopped)
   {
-    using (await _triggerLock.LockAsync().ConfigureAwait(false))
+    using (await _triggerLock.LockAsync())
     {
       if (run != CurrentRun || State != EngineTaskState.Running)
         return;
@@ -1630,7 +1630,7 @@ public partial class EngineTask
       // is taken there as well, so a reset after the lock does not hand this recovery the next run's live token.
       bool recreated;
       CancellationToken token;
-      using (await _triggerLock.LockAsync().ConfigureAwait(false))
+      using (await _triggerLock.LockAsync())
       {
         if (run != CurrentRun)
           return;
