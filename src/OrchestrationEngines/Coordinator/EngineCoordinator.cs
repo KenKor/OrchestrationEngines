@@ -86,8 +86,11 @@ public partial class EngineCoordinator : IDisposable
   // Logger for coordinator-level (application-level) logging.
   private readonly ILogger _applicationLogger;
 
-  // Monitor wake-up signal. Released whenever new work may exist.
-  private readonly SemaphoreSlim _monitorPulse = new SemaphoreSlim(0, int.MaxValue);
+  // Monitor wake-up signal. Released whenever new work may exist; it holds one wake-up at most (see PulseMonitor).
+  private readonly SemaphoreSlim _monitorPulse = new SemaphoreSlim(0, 1);
+
+  // The wake-ups the monitor loop has not taken yet (tests).
+  internal int PendingMonitorPulses => _monitorPulse.CurrentCount;
 
   // Dispatcher to take in commands, that we'll then execute on a monitoring thread (that will not be aborted).
   private readonly MechanicDispatcher _mechanicDispatcher;
@@ -922,9 +925,17 @@ public partial class EngineCoordinator : IDisposable
   /// This is a best-effort signal. The monitor uses <see cref="SemaphoreSlim"/> as a wake-up mechanism;
   /// releasing after disposal or after cancellation is benign, so exceptions are intentionally ignored.
   /// </para>
+  /// <para>
+  /// The signal holds one wake-up at most: one tick of the parked monitor sees all the work the calls before it
+  /// scheduled, so calls made while the monitor polls leave one tick for later, not one each.
+  /// </para>
   /// </remarks>
   private void PulseMonitor()
   {
+    // Fix (MonitorPulse_ManyCalls_LeaveOneWakeUp): every call released the semaphore, so calls made while the
+    // monitor polled each left one more tick for later. A second release of a full semaphore throws
+    // SemaphoreFullException (two callers that both saw it empty); the catch below takes it.
+    if (_monitorPulse.CurrentCount > 0) return;
     // Best-effort: do not throw if released after disposal or cancellation.
     try { _monitorPulse.Release(); } catch { /* ignore */ }
   }
