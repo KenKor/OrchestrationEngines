@@ -198,6 +198,48 @@ public class GenerationSwitchEdgeCaseTest
   }
 
   /// <summary>
+  /// Verifies that a restart factory that returns null fails the creation the way a throwing one does (#151): the
+  /// handover is kept, so the retry is offered the previous engine again instead of starting from the registered
+  /// factory.
+  /// </summary>
+  [Fact]
+  public async Task Switch_RestartFactoryReturnsNullOnce_RetryIsOfferedThePreviousEngineAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher: false);
+    var offered = new ConcurrentQueue<IEngine>();
+    var registered = 0;
+    coordinator.RegisterEngine("A", _ =>
+      {
+        Interlocked.Increment(ref registered);
+        return Task.FromResult<IEngine>(Quick());
+      })
+      .SetRestartFactory((input, _) =>
+      {
+        offered.Enqueue(input.PreviousEngine);
+        return Task.FromResult<IEngine>(offered.Count == 1 ? null : Quick());
+      })
+      .SetRestartPolicy(TestRestartPolicies.NoWait(5));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var previous = coordinator.GetEngineIfReady("A");
+
+    var next = await coordinator
+      .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      .WaitAsync(MustComplete, ct);
+
+    try
+    {
+      next.GetEngineIfReady("A").Should().NotBeNull();
+      offered.Should().HaveCount(2).And.OnlyContain(e => ReferenceEquals(e, previous));
+      Volatile.Read(ref registered).Should().Be(1, "only the first generation starts from the registered factory");
+    }
+    finally
+    {
+      await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    }
+  }
+
+  /// <summary>
   /// Verifies that shutting down the coordinator a host started with, after a generation switch replaced it, also shuts
   /// down the current generation: lookups on that coordinator are answered by it, so its shutdown must reach it too.
   /// </summary>
