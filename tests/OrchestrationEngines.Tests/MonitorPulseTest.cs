@@ -20,6 +20,10 @@ public class MonitorPulseTest
   {
     public Task CallAsync(Func<Task> work = null)
       => DispatchAsync(work ?? (() => Task.CompletedTask), TestContext.Current.CancellationToken);
+
+    // Through the generic overload, which pulses on its own.
+    public Task<T> CallWithResultAsync<T>(Func<Task<T>> work)
+      => DispatchAsync(work, TestContext.Current.CancellationToken);
   }
 
   /// <summary>
@@ -85,6 +89,21 @@ public class MonitorPulseTest
       pendingDuringTheWork = coordinator.PendingMonitorPulses;
       return Task.CompletedTask;
     });
+
+    pendingDuringTheWork.Should().Be(0);
+    coordinator.PendingMonitorPulses.Should().Be(1);
+  }
+
+  /// <summary>
+  /// Verifies that a call through the generic overload also wakes the monitor only once its work is handed over.
+  /// </summary>
+  [Fact]
+  public async Task MonitorPulse_WithResult_ComesAfterTheWorkIsHandedOver()
+  {
+    using var coordinator = new PulsingCoordinator();
+
+    var pendingDuringTheWork = await coordinator.CallWithResultAsync(() =>
+      Task.FromResult(coordinator.PendingMonitorPulses));
 
     pendingDuringTheWork.Should().Be(0);
     coordinator.PendingMonitorPulses.Should().Be(1);
