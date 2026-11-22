@@ -402,4 +402,65 @@ public class RestartPolicyEnforcerTest
 
     act.Should().ThrowExactly<ArgumentNullException>().WithParameterName("nextRandom");
   }
+
+  /// <summary>
+  /// Verifies that two recoveries sharing one enforcer each double the backoff: each reads the backoff it waits under
+  /// the same lock that doubles it, so the second does not double the value the first read.
+  /// </summary>
+  [Fact]
+  public async Task RestartPolicyEnforcer_Invoke_SharedByTwoTasks_DoublesTheBackoffForEach()
+  {
+    var enforcer = new RestartPolicyEnforcer(new RestartPolicy
+    {
+      MaxRestartsInWindow = 0,
+      InitialBackoff = TimeSpan.FromSeconds(1),
+      MaxBackoff = TimeSpan.FromSeconds(8),
+    }, new ManualTimeProvider());
+    var invoking = new List<Thread>();
+    var invoked = new List<Task>();
+
+    // Hold the enforcer's lock on a thread of its own, so both recoveries reach it and wait.
+    using var holding = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    var holder = new Thread(() =>
+    {
+      lock (enforcer.RestartTimestamps)
+      {
+        holding.Set();
+        release.Wait(MustComplete);
+      }
+    });
+    holder.Start();
+    holding.Wait(MustComplete, TestContext.Current.CancellationToken).Should().BeTrue();
+
+    EngineTask NewSharingTask() =>
+      NewTask(_ => throw new InvalidOperationException("The run fails."))
+        .SetRecovery(new CustomRestarter((et, token) =>
+        {
+          lock (invoking)
+            invoking.Add(Thread.CurrentThread);
+          var restart = enforcer.Invoke(et, token);
+          lock (invoked)
+            invoked.Add(restart);
+          return restart;
+        }));
+
+    await NewSharingTask().FireAsync(EngineTaskTrigger.Start);
+    await NewSharingTask().FireAsync(EngineTaskTrigger.Start);
+    await Wait.UntilAsync(() =>
+    {
+      lock (invoking)
+        return invoking.Count == 2 && invoking.TrueForAll(t => (t.ThreadState & ThreadState.WaitSleepJoin) != 0);
+    }, MustComplete, "both recoveries must wait for the enforcer's lock");
+
+    release.Set();
+    holder.Join(MustComplete).Should().BeTrue();
+    await Wait.UntilAsync(() =>
+    {
+      lock (invoked)
+        return invoked.Count == 2;
+    }, MustComplete, "both recoveries must pass the enforcer's lock");
+
+    enforcer.CurrentBackoff.Should().Be(TimeSpan.FromSeconds(4), "each of the two recoveries doubles the backoff");
+  }
 }
