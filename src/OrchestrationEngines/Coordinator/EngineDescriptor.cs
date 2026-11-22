@@ -245,9 +245,10 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// When the parent engine reaches a terminal state, dependent engine tasks
   /// are signaled via dependency triggers.
   /// </remarks>
+  /// <exception cref="ArgumentNullException"><paramref name="parentEngineName"/> is null.</exception>
   public virtual EngineDescriptor AddDependsOn(string parentEngineName)
   {
-    DependsOn.Add(parentEngineName);
+    DependsOn.Add(parentEngineName ?? throw new ArgumentNullException(nameof(parentEngineName)));
     return this;
   }
 
@@ -397,7 +398,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
     // code already was not), and DependsOn by reference, so two descriptors were never equal by their dependencies.
     return String.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase) &&
            Version == other.Version &&
-           EngineFactory.Equals(other.EngineFactory) &&
+           Equals(EngineFactory, other.EngineFactory) &&
            (RestartFromPrevious == other.RestartFromPrevious || RestartFromPrevious != null && RestartFromPrevious.Equals(other.RestartFromPrevious)) &&
            RequiredForRunning == other.RequiredForRunning &&
            (ContextFactory == other.ContextFactory || ContextFactory != null && ContextFactory.Equals(other.ContextFactory)) &&
