@@ -10,14 +10,16 @@ namespace OrchestrationEngines.Logger;
 /// a formatted progress message including throughput (items/second).
 /// </summary>
 /// <remarks>
-/// This type is thread-safe for concurrent increments.
+/// This type is thread-safe for concurrent increments. Each report's count and rate are taken together, but
+/// reports are formatted and logged outside the lock, so two reports due close together can be logged in either
+/// order.
 /// </remarks>
 public sealed partial class ProgressCounter
 {
   private const string defaultTemplate = "Processed {Count:n0} elements ({Rate:n0}/sec)";
   private readonly ILogger _logger;
   // Guards the counters below: Increment updates several of them together.
-  private readonly object _sync = new();
+  private readonly Lock _sync = new();
 
   private readonly int _reportEvery;
   private readonly string _messageTemplate;
@@ -77,7 +79,7 @@ public sealed partial class ProgressCounter
     if (delta < 0) { return null; }
 
     // Fix (ProgressCounterTest): the counters were updated without a lock, so concurrent increments lost counts and
-    // reports. Formatting and logging stay outside the lock.
+    // reports. Formatting and logging stay outside the lock, so a slow logger never holds up other increments.
     int totalCount;
     double rate;
     lock (_sync)
