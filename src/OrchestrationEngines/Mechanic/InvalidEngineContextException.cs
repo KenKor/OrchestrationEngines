@@ -3,18 +3,20 @@
 namespace OrchestrationEngines.Mechanic;
 
 /// <summary>
-/// Exception thrown when an engine context that has been computed, is null, which is invalid.
-/// By throwing this exception, we know it is intentional.
+/// Thrown by an engine's context task when the engine's context factory returned no context, so the task fails and is
+/// recovered as any other failure.
 /// </summary>
-[Serializable]
-internal class InvalidEngineContextException : Exception
+internal sealed class InvalidEngineContextException : Exception
 {
-  public InvalidEngineContextException()
-  {
-  }
+  /// <summary>
+  /// Creates the error for the engine named <paramref name="engineName"/>.
+  /// </summary>
+  /// <param name="engineName">The name of the engine whose context factory returned no context.</param>
+  public InvalidEngineContextException(string engineName)
+    : base($"The context factory of engine '{engineName}' returned no context.") => EngineName = engineName;
 
-  public InvalidEngineContextException(string message) : base(message)
-  {
-  }
-
+  /// <summary>
+  /// The name of the engine whose context factory returned no context.
+  /// </summary>
+  public string EngineName { get; }
 }
