@@ -374,7 +374,7 @@ public partial class EngineCoordinator : IDisposable
   /// </param>
   /// <returns>The created engine descriptor.</returns>
   /// <exception cref="InvalidOperationException">
-  /// Thrown if registration is attempted after startup has begun.
+  /// Thrown if registration is attempted after startup has begun, or after a shutdown.
   /// </exception>
   public EngineDescriptor RegisterEngine(
       string name,
@@ -396,7 +396,8 @@ public partial class EngineCoordinator : IDisposable
     TryRegisterEngineDescriptor(descriptor)
       ? descriptor
       : throw new InvalidOperationException(
-        $"Engine '{descriptor.Name}' cannot be registered after the coordinator has started; use RestartWithDefinitionsAsync.");
+        $"Engine '{descriptor.Name}' cannot be registered after the coordinator has started or been shut down; " +
+        "a running coordinator takes new engines through RestartWithDefinitionsAsync.");
 
   /// <summary>
   /// Registers a fully configured descriptor with the coordinator, if it has not started yet.
@@ -404,7 +405,8 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="descriptor">The descriptor.</param>
   /// <returns>
   /// False if the coordinator has started (also when it started just now, on another thread): add the engine with a
-  /// generation switch (<see cref="RestartWithDefinitionsAsync"/>) instead.
+  /// generation switch (<see cref="RestartWithDefinitionsAsync"/>) instead. Also false once it has been shut down,
+  /// started or not.
   /// </returns>
   /// <exception cref="ArgumentException">An engine with the same name is already registered.</exception>
   public bool TryRegisterEngineDescriptor(EngineDescriptor descriptor)
