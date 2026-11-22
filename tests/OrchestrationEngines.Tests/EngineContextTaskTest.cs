@@ -1,4 +1,4 @@
-﻿using System.Threading;
+using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,7 +17,9 @@ public class EngineContextTaskTest
   private sealed class ContextTask(MechanicEngine mechanic, EngineDescriptor descriptor)
     : EngineContextTask(mechanic, descriptor, NullLogger.Instance, CancellationToken.None)
   {
-    public Task ComputeAsync(CancellationToken token) => CreateContextAsync(mechanic, Descriptor, token);
+    public Task ComputeAsync(CancellationToken token) => CreateContextAsync(Mechanic, Descriptor, token);
+
+    private MechanicEngine Mechanic { get; } = mechanic;
   }
 
   /// <summary>
