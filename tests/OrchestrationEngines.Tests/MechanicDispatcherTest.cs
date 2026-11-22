@@ -2,7 +2,10 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OrchestrationEngines.Coordinator;
+using OrchestrationEngines.Engine;
 using OrchestrationEngines.Mechanic;
 using Xunit;
 
@@ -111,8 +114,8 @@ public class MechanicDispatcherTest
 
   /// <summary>
   /// Verifies that disposing the dispatcher while the engine token is not cancelled (a coordinator disposed without a
-  /// shutdown) ends its thread cleanly: a call queued before the dispose still runs, nothing is logged as an error,
-  /// and a call after the dispose is refused.
+  /// shutdown) ends its thread cleanly: a call queued before the dispose still runs, as it did when the worker drained
+  /// its queue before each wait, nothing is logged as an error, and a call after the dispose is refused.
   /// </summary>
   [Fact]
   public async Task Dispose_EngineTokenNotCancelled_EndsThreadWithoutError()
@@ -145,6 +148,40 @@ public class MechanicDispatcherTest
     {
       blocker.TrySetResult();
     }
+  }
+
+  /// <summary>
+  /// A coordinator with a dispatcher that tells which thread its dispatcher runs on.
+  /// </summary>
+  private sealed class ThreadRevealingCoordinator(ILogger logger)
+    : EngineCoordinator(nameof(MechanicDispatcherTest), logger, useDispatcher: true)
+  {
+    public Task<Thread> DispatcherThreadAsync(CancellationToken token) =>
+      DispatchAsync(() => Task.FromResult(Thread.CurrentThread), token);
+  }
+
+  /// <summary>
+  /// Verifies that a coordinator with a dispatcher, disposed without a shutdown, ends the dispatcher's thread without
+  /// the dispatcher logging an error, although the coordinator disposes the engine token's source first.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_DisposeWithoutShutdown_EndsDispatcherThreadWithoutError()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var errors = 0;
+    var logger = new OnMessageLogger(
+      (level, message, _) => level == LogLevel.Error && message.Contains(nameof(MechanicDispatcher)),
+      () => Interlocked.Increment(ref errors));
+    var coordinator = new ThreadRevealingCoordinator(logger);
+    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new GraphEngine(("Load", []))));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var dispatcherThread = await coordinator.DispatcherThreadAsync(ct).WaitAsync(MustComplete, ct);
+
+    coordinator.Dispose();
+
+    dispatcherThread.Join(MustComplete).Should()
+      .BeTrue("the dispatcher's thread ends once the coordinator is disposed");
+    Volatile.Read(ref errors).Should().Be(0, "a disposed coordinator's dispatcher is not a crashed one");
   }
 
   /// <summary>

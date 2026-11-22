@@ -18,7 +18,7 @@ internal sealed partial class MechanicDispatcher : IDisposable
 
   // Not disposed: its semaphores never create a wait handle, so there is nothing to release, and a call that races a
   // dispose must find it completed for adding, not disposed.
-  private readonly BlockingCollection<IWorkItem> _queue = new(new ConcurrentQueue<IWorkItem>());
+  private readonly BlockingCollection<IWorkItem> _queue = new();
   private readonly CancellationToken _engineToken;
   private readonly ILogger _logger;
   private readonly string _threadName;
@@ -116,10 +116,6 @@ internal sealed partial class MechanicDispatcher : IDisposable
     // never ran nor was cancelled, and its caller waited forever.
     if (_engineToken.IsCancellationRequested)
       return Task.FromCanceled<T>(_engineToken);
-    if (_queue.IsAddingCompleted)
-      throw new ObjectDisposedException(nameof(MechanicDispatcher));
-
-    Start();
 
     var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
     try
@@ -129,9 +125,11 @@ internal sealed partial class MechanicDispatcher : IDisposable
     }
     catch (InvalidOperationException)
     {
-      // Disposed since the look above.
+      // Dispose completed adding.
       throw new ObjectDisposedException(nameof(MechanicDispatcher));
     }
+
+    Start();
 
     // Cancelled while this item was being queued: the worker loop may already have drained the queue for the last time.
     if (_engineToken.IsCancellationRequested)
