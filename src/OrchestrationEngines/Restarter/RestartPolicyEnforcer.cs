@@ -68,9 +68,27 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// </summary>
   /// <remarks>
   /// The backoff is updated after each recovery invocation using an exponential progression
-  /// (doubling) and clamped to the configured maximum.
+  /// (doubling) and clamped to the configured maximum. Read and written under the lock on
+  /// <see cref="RestartTimestamps"/>, so recoveries that share this enforcer each double it.
   /// </remarks>
-  public TimeSpan CurrentBackoff { get; set; }
+  public TimeSpan CurrentBackoff
+  {
+    get
+    {
+      lock (RestartTimestamps)
+        return _currentBackoff;
+    }
+    set
+    {
+      lock (RestartTimestamps)
+        _currentBackoff = value;
+    }
+  }
+
+  /// <summary>
+  /// The value of <see cref="CurrentBackoff"/>; only under the lock on <see cref="RestartTimestamps"/>.
+  /// </summary>
+  private TimeSpan _currentBackoff;
 
   /// <summary>
   /// Initializes a new instance of the class.
@@ -115,7 +133,7 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
     _timeProvider = timeProvider ?? TimeProvider.System;
     _nextRandom = nextRandom ?? throw new ArgumentNullException(nameof(nextRandom));
     _policy.Validate();
-    CurrentBackoff = _policy.InitialBackoff;
+    _currentBackoff = _policy.InitialBackoff;
   }
 
   /// <summary>
@@ -134,9 +152,8 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
     {
       RestartTimestamps.Clear();
       ConsecutiveRestarts = 0;
+      _currentBackoff = _policy.InitialBackoff;
     }
-
-    CurrentBackoff = _policy.InitialBackoff;
   }
 
   /// <summary>
@@ -171,10 +188,12 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
     // Because to the wiring, we should only be called from
     if (et.State != EngineTaskState.Recovering) throw new TaskCanceledException(nameof(et));
 
-    var delayToApply = CurrentBackoff;
-
+    TimeSpan delayToApply;
     lock (RestartTimestamps)
     {
+      // Read under the lock that doubles it: a recovery sharing this enforcer must not double the same value.
+      delayToApply = _currentBackoff;
+
       // Check if we check on max nr of restarts.
       if (_policy.MaxRestartsInWindow > 0)
       {
@@ -205,7 +224,7 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
       }
 
       // Exponential backoff update for next time, from the backoff without the jitter.
-      CurrentBackoff = NextBackoff(delayToApply, _policy.MaxBackoff);
+      _currentBackoff = NextBackoff(delayToApply, _policy.MaxBackoff);
     }
 
     if (_policy.Jitter > 0)
