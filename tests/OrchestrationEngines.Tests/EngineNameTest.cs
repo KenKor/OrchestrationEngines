@@ -75,7 +75,7 @@ public class EngineNameTest
   /// <summary>
   /// A display name that changes after it is first read, as a localised one does with the current culture.
   /// </summary>
-  private sealed class ChangingDisplayNameAttribute() : DisplayNameAttribute
+  private sealed class ChangingDisplayNameAttribute : DisplayNameAttribute
   {
     public static volatile string Current = "First";
 
