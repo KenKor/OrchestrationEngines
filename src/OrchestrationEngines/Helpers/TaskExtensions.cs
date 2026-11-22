@@ -31,6 +31,41 @@ internal static class TaskExtensions
   }
 
   /// <summary>
+  /// Runs <paramref name="run"/> with a token that <paramref name="token"/> cancels, and that is cancelled too once
+  /// <paramref name="timeOut"/> has passed on <paramref name="clock"/>; removes the timer when it ends.
+  /// </summary>
+  /// <param name="clock">Measures <paramref name="timeOut"/>.</param>
+  /// <param name="timeOut">How long <paramref name="run"/> may take.</param>
+  /// <param name="token">The caller's token.</param>
+  /// <param name="run">The work, given the token that ends it.</param>
+  /// <returns>
+  /// The result of <paramref name="run"/>; null when the time-out ended it. A cancellation by <paramref name="token"/>
+  /// carries <paramref name="token"/>.
+  /// </returns>
+  public static async Task<T> WithinOrDefaultAsync<T>(
+    this TimeProvider clock, TimeSpan timeOut, CancellationToken token, Func<CancellationToken, Task<T>> run)
+    where T : class
+  {
+    using var timeout = clock.CreateCancellationTokenSource(timeOut);
+    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+    try
+    {
+      return await run(linked.Token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (linked.IsCancellationRequested)
+    {
+      token.ThrowIfCancellationRequested();
+      return null;
+    }
+    finally
+    {
+      // On netstandard2.0 the source's timer on a clock other than TimeProvider.System is removed only when the source
+      // is cancelled, not when it is disposed: work that ends early would leave it running until the time-out.
+      timeout.Cancel();
+    }
+  }
+
+  /// <summary>
   /// Waits for <paramref name="task"/> until <paramref name="token"/> is cancelled. When the wait is cancelled first, a
   /// failure of the task that comes later is still read, so it is not reported as an unobserved task exception (#86
   /// item 6); the task keeps at most one such observer, however many waits on it are cancelled. Named apart from the

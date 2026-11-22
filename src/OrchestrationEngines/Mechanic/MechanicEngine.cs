@@ -580,25 +580,10 @@ public partial class MechanicEngine : BaseEngine
       return known;
 
     // The time-out, or the caller, ends the wait inside the lookup too, so polling an engine that never settles does
-    // not pile up waiters (#156). The time-out runs on the mechanic's clock.
-    using var timeout = TimeProvider.CreateCancellationTokenSource(TimeSpan.FromMilliseconds(milliSecondsTimeOut));
-    using var lookup = CancellationTokenSource.CreateLinkedTokenSource(dedicatedCt, timeout.Token);
-    try
-    {
-      return await GetEngineWhenReadyAsync(name, throwErrorIfNotFound, lookup.Token).ConfigureAwait(false);
-    }
-    catch (OperationCanceledException) when (lookup.IsCancellationRequested)
-    {
-      // The caller's cancellation carries the caller's token; the time-out answers null.
-      dedicatedCt.ThrowIfCancellationRequested();
-      return null;
-    }
-    finally
-    {
-      // On netstandard2.0 the source's timer on a clock other than TimeProvider.System is removed only when the source
-      // is cancelled, not when it is disposed: a lookup that ends early would leave it running until the time-out.
-      timeout.Cancel();
-    }
+    // not pile up waiters (#156). The time-out runs on the mechanic's clock and answers null; the caller's
+    // cancellation carries the caller's token.
+    return await TimeProvider.WithinOrDefaultAsync(TimeSpan.FromMilliseconds(milliSecondsTimeOut), dedicatedCt,
+      lookup => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, lookup)).ConfigureAwait(false);
   }
 
   // ---------------------------------------------------------------------

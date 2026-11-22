@@ -19,22 +19,9 @@ public class LookupAcrossGenerationsTest
 {
   private static readonly TimeSpan TimeOut = TimeSpan.FromMinutes(10);
 
-  /// <summary>An engine whose load never ends and whose stop waits for <see cref="ReleaseStop"/>.</summary>
-  private sealed class HeldStopEngine() : BaseEngine(NullLogger.Instance)
-  {
-    public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public TaskCompletionSource ReleaseStop { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    protected override void SetUpTasks() => CreateTask("Load", token => Task.Delay(Timeout.Infinite, token));
-
-    public override async Task StopAsync()
-    {
-      await base.StopAsync().ConfigureAwait(false);
-      Stopping.TrySetResult();
-      await ReleaseStop.Task.ConfigureAwait(false);
-    }
-  }
+  /// <summary>An engine whose load never ends and whose stop waits for its <c>ReleaseStop</c>.</summary>
+  private static StopFailingEngine HeldStop() =>
+    new(failure: null, token => Task.Delay(Timeout.Infinite, token), holdStop: true);
 
   /// <summary>
   /// A started coordinator on <paramref name="clock"/> with the engine <paramref name="descriptor"/>.
@@ -52,16 +39,32 @@ public class LookupAcrossGenerationsTest
   }
 
   /// <summary>
-  /// Starts a lookup with a time-out of <see cref="TimeOut"/>, waits until it waits on the clock, and uses all but one
-  /// minute of it; returns the lookup and its deadline.
+  /// A descriptor whose first engine is <paramref name="first"/> and which a switch rebuilds from scratch, with an
+  /// engine that never gets Ready.
+  /// </summary>
+  private static EngineDescriptor RebuiltDescriptor(StopFailingEngine first)
+  {
+    var created = 0;
+    return new EngineDescriptor(Name,
+        _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : Hanging()),
+        requiredForRunning: true, 1)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
+  }
+
+  /// <summary>
+  /// Starts a lookup with a time-out of <see cref="TimeOut"/>, waits until the engine exists and the lookup waits on
+  /// the clock, and uses all but one minute of it; returns the lookup and its deadline. <paramref name="token"/> is
+  /// the caller's.
   /// </summary>
   private static async Task<(Task<IEngine> Lookup, DateTimeOffset Deadline)> StartLookupAsync(
-    EngineCoordinator coordinator, ManualTimeProvider clock)
+    EngineCoordinator coordinator, ManualTimeProvider clock, CancellationToken token)
   {
     var deadline = clock.GetUtcNow() + TimeOut;
-    var lookup = coordinator.GetEngineAsync(
-      Name, (int)TimeOut.TotalMilliseconds, TestContext.Current.CancellationToken);
-    await Wait.UntilAsync(() => clock.DueTimesSince(0).Contains(deadline), MustComplete, "the lookup must be waiting");
+    var lookup = coordinator.GetEngineAsync(Name, (int)TimeOut.TotalMilliseconds, token);
+    // A switch before the creation task has run would hand over no engine.
+    await Wait.UntilAsync(() => coordinator.Engines.ContainsKey(Name) && clock.DueTimesSince(0).Contains(deadline),
+      MustComplete, "the engine must exist and the lookup must be waiting");
     clock.Advance(TimeOut - TimeSpan.FromMinutes(1));
     return (lookup, deadline);
   }
@@ -90,7 +93,7 @@ public class LookupAcrossGenerationsTest
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
     var coordinator = await StartAsync(clock, Descriptor(Hanging(), Hanging));
-    var (lookup, deadline) = await StartLookupAsync(coordinator, clock);
+    var (lookup, deadline) = await StartLookupAsync(coordinator, clock, ct);
 
     var timersBeforeSwitch = clock.TimersCreated;
     var next = await coordinator
@@ -111,15 +114,9 @@ public class LookupAcrossGenerationsTest
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
-    var first = new HeldStopEngine();
-    var created = 0;
-    var descriptor = new EngineDescriptor(Name,
-        _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? first : Hanging()),
-        requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
-    var coordinator = await StartAsync(clock, descriptor);
-    var (lookup, deadline) = await StartLookupAsync(coordinator, clock);
+    var first = HeldStop();
+    var coordinator = await StartAsync(clock, RebuiltDescriptor(first));
+    var (lookup, deadline) = await StartLookupAsync(coordinator, clock, ct);
 
     var timersBeforeSwitch = clock.TimersCreated;
     var switching = coordinator.RestartWithDefinitionsAsync(
@@ -129,6 +126,38 @@ public class LookupAcrossGenerationsTest
     await EndsAtTheDeadlineAsync(lookup, clock, timersBeforeSwitch, deadline,
       "the wait for the next generation to start must end at the lookup's deadline");
     switching.IsCompleted.Should().BeFalse("the previous engine is still stopping");
+    first.ReleaseStop.SetResult();
+    var next = await switching.WaitAsync(MustComplete, ct);
+    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a caller who cancels a timed lookup while it waits for a rebuilding switch's next generation to
+  /// start gets a cancellation that carries the caller's token, as an untimed lookup does.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_TimedLookupCancelledWhileWaitingForTheNextGeneration_CarriesTheCallersToken()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var clock = new ManualTimeProvider();
+    var first = HeldStop();
+    var coordinator = await StartAsync(clock, RebuiltDescriptor(first));
+    using var caller = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    var (lookup, deadline) = await StartLookupAsync(coordinator, clock, caller.Token);
+
+    var timersBeforeSwitch = clock.TimersCreated;
+    var switching = coordinator.RestartWithDefinitionsAsync(
+      coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+    await first.Stopping.Task.WaitAsync(MustComplete, ct);
+    await Wait.UntilAsync(() => lookup.IsCompleted || clock.DueTimesSince(timersBeforeSwitch).Contains(deadline),
+      MustComplete, "the lookup must wait for the next generation");
+    lookup.IsCompleted.Should().BeFalse("the deadline has not passed");
+
+    await Task.Run(caller.Cancel, ct);
+    var cancelled = await lookup.Invoking(l => l.WaitAsync(MustComplete, ct))
+      .Should().ThrowAsync<OperationCanceledException>();
+    cancelled.Which.CancellationToken.Should().Be(caller.Token, "the caller cancelled, not the time-out");
+
     first.ReleaseStop.SetResult();
     var next = await switching.WaitAsync(MustComplete, ct);
     await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
