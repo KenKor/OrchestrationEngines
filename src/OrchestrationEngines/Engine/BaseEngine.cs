@@ -196,8 +196,8 @@ public abstract partial class BaseEngine : IEngine
       static type => new EngineNameSource(type))).Name;
 
   /// <summary>
-  /// The <see cref="EngineNameSource"/> of this engine's type, kept here so later reads take no lock (on .NET Framework every
-  /// lookup in <see cref="s_engineNameSources"/> does).
+  /// The <see cref="EngineNameSource"/> of this engine's type, kept here so later reads take no lock (on .NET Framework
+  /// every lookup in <see cref="s_engineNameSources"/> does).
   /// </summary>
   private EngineNameSource _engineNameSource;
 
