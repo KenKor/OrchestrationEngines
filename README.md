@@ -25,7 +25,8 @@ dotnet test
 The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
 Lines are at most 120 columns. `python scripts/check-line-length.py` checks the lines a change adds, against
-`origin/main`; the build on GitHub runs it on every pull request.
+`origin/main`; the build on GitHub runs it on every pull request. Three kinds of long line are let through:
+a line with a URL, a row of a Markdown table, and a long line that only moves from one file to another.
 
 Packing is blocked until the repository URL is set (`RepositoryUrl` in `Directory.Build.props`, see `docs/Releasing.md`).
 
