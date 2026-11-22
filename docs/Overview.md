@@ -541,6 +541,10 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - All generations of a coordinator share a lineage that knows the current one (`Successor`). A lookup on a replaced
   coordinator, also one that was already waiting, is answered by the current coordinator; an engine that the switch
   left out gives null.
+- A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One
+  generation of a lineage runs at a time: of two switches on one coordinator, only the first to hand over replaces it.
+  With the dispatcher on, the second waits for the first and then goes to the next generation; without it, they run
+  side by side, and the one that comes second cleans up its next coordinator and switches the current one.
 - With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
   usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
   state.
