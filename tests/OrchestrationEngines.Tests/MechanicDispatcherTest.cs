@@ -169,9 +169,7 @@ public class MechanicDispatcherTest
   {
     var ct = TestContext.Current.CancellationToken;
     var errors = 0;
-    var logger = new OnMessageLogger(
-      (level, message, _) => level == LogLevel.Error && message.Contains(nameof(MechanicDispatcher)),
-      () => Interlocked.Increment(ref errors));
+    var logger = new OnMessageLogger(nameof(MechanicDispatcher), () => Interlocked.Increment(ref errors));
     var coordinator = new ThreadRevealingCoordinator(logger);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new GraphEngine(("Load", []))));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
