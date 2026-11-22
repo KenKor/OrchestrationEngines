@@ -110,6 +110,44 @@ public class MechanicDispatcherTest
   }
 
   /// <summary>
+  /// Verifies that disposing the dispatcher while the engine token is not cancelled (a coordinator disposed without a
+  /// shutdown) ends its thread cleanly: a call queued before the dispose still runs, nothing is logged as an error,
+  /// and a call after the dispose is refused.
+  /// </summary>
+  [Fact]
+  public async Task Dispose_EngineTokenNotCancelled_EndsThreadWithoutError()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var errors = 0;
+    var logger = OnMessageLogger.OnError(() => Interlocked.Increment(ref errors));
+    var dispatcher = new MechanicDispatcher("Test", logger, CancellationToken.None);
+    var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var running = new TaskCompletionSource<Thread>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    try
+    {
+      var blocking = dispatcher.InvokeAsync(() => { running.SetResult(Thread.CurrentThread); return blocker.Task; },
+        ct);
+      var queued = dispatcher.InvokeAsync(() => Task.FromResult(42), ct);
+      var thread = await running.Task.WaitAsync(MustComplete, ct);
+
+      dispatcher.Dispose();
+      blocker.SetResult();
+
+      await blocking.WaitAsync(MustComplete, ct);
+      (await queued.WaitAsync(MustComplete, ct)).Should().Be(42);
+      thread.Join(MustComplete).Should().BeTrue("the dispatcher's thread ends once it is disposed");
+      Volatile.Read(ref errors).Should().Be(0, "a disposed dispatcher is not a crashed one");
+      Action invokeAfterDispose = () => dispatcher.InvokeAsync(() => Task.CompletedTask, ct);
+      invokeAfterDispose.Should().Throw<ObjectDisposedException>();
+    }
+    finally
+    {
+      blocker.TrySetResult();
+    }
+  }
+
+  /// <summary>
   /// Verifies that a null action is rejected.
   /// </summary>
   [Fact]

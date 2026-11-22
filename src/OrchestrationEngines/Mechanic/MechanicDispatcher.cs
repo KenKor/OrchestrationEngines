@@ -16,8 +16,9 @@ internal sealed partial class MechanicDispatcher : IDisposable
   /// </summary>
   internal const string DefaultThreadName = "EngineMechanicThread";
 
-  private readonly ConcurrentQueue<IWorkItem> _queue = new();
-  private readonly AutoResetEvent _signal = new AutoResetEvent(false);
+  // Not disposed: its semaphores never create a wait handle, so there is nothing to release, and a call that races a
+  // dispose must find it completed for adding, not disposed.
+  private readonly BlockingCollection<IWorkItem> _queue = new(new ConcurrentQueue<IWorkItem>());
   private readonly CancellationToken _engineToken;
   private readonly ILogger _logger;
   private readonly string _threadName;
@@ -115,12 +116,22 @@ internal sealed partial class MechanicDispatcher : IDisposable
     // never ran nor was cancelled, and its caller waited forever.
     if (_engineToken.IsCancellationRequested)
       return Task.FromCanceled<T>(_engineToken);
+    if (_queue.IsAddingCompleted)
+      throw new ObjectDisposedException(nameof(MechanicDispatcher));
 
     Start();
 
     var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-    _queue.Enqueue(new WorkItem<T>(action, tcs, token));
-    _signal.Set();
+    try
+    {
+      // The queue has no bound, so adding never blocks; the caller token belongs to the item, not to the add.
+      _queue.Add(new WorkItem<T>(action, tcs, token), CancellationToken.None);
+    }
+    catch (InvalidOperationException)
+    {
+      // Disposed since the look above.
+      throw new ObjectDisposedException(nameof(MechanicDispatcher));
+    }
 
     // Cancelled while this item was being queued: the worker loop may already have drained the queue for the last time.
     if (_engineToken.IsCancellationRequested)
@@ -134,7 +145,7 @@ internal sealed partial class MechanicDispatcher : IDisposable
   /// </summary>
   private void CancelQueuedItems()
   {
-    while (_queue.TryDequeue(out var item))
+    while (_queue.TryTake(out var item))
       item.Cancel(_engineToken.IsCancellationRequested ? _engineToken : item.CallerToken);
   }
 
@@ -143,8 +154,8 @@ internal sealed partial class MechanicDispatcher : IDisposable
   /// </summary>
   /// <remarks>
   /// <para>
-  /// The loop wakes periodically or when signaled, drains the queue, and executes each
-  /// <see cref="IWorkItem"/> sequentially.
+  /// The loop blocks until an item is queued, and executes each <see cref="IWorkItem"/> sequentially. It ends at once
+  /// when the engine token is cancelled, and once the queue is empty after <see cref="Dispose"/>.
   /// </para>
   /// <para>
   /// Cancellation behavior:
@@ -162,35 +173,34 @@ internal sealed partial class MechanicDispatcher : IDisposable
   {
     try
     {
-      while (!_engineToken.IsCancellationRequested)
+      foreach (var item in _queue.GetConsumingEnumerable(_engineToken))
       {
-        _signal.WaitOne(200);
-
-        while (_queue.TryDequeue(out var item))
+        if (_engineToken.IsCancellationRequested)
         {
-          if (_engineToken.IsCancellationRequested)
-          {
-            item.Cancel(_engineToken);
-            continue;
-          }
+          item.Cancel(_engineToken);
+          continue;
+        }
 
-          if (item.CallerToken.IsCancellationRequested)
-          {
-            item.Cancel(item.CallerToken);
-            continue;
-          }
+        if (item.CallerToken.IsCancellationRequested)
+        {
+          item.Cancel(item.CallerToken);
+          continue;
+        }
 
-          try
-          {
-            item.Execute();
-          }
-          catch (Exception ex)
-          {
-            LogWorkItemFailed(ex);
-            item.Fail(ex);
-          }
+        try
+        {
+          item.Execute();
+        }
+        catch (Exception ex)
+        {
+          LogWorkItemFailed(ex);
+          item.Fail(ex);
         }
       }
+    }
+    catch (OperationCanceledException) when (_engineToken.IsCancellationRequested)
+    {
+      // The engine token ends the loop; the items still queued are cancelled below.
     }
     catch (Exception ex)
     {
@@ -203,22 +213,13 @@ internal sealed partial class MechanicDispatcher : IDisposable
   }
 
   /// <summary>
-  /// Signals and disposes dispatcher synchronization resources.
+  /// Takes no more calls: a later <see cref="InvokeAsync{T}"/> throws <see cref="ObjectDisposedException"/>.
   /// </summary>
   /// <remarks>
-  /// <para>
-  /// This does not forcibly stop the worker thread; the worker loop exits when the engine token
-  /// is cancelled. Disposing the signal unblocks any pending wait.
-  /// </para>
-  /// <para>
-  /// Disposal is best-effort to avoid throwing during shutdown paths.
-  /// </para>
+  /// This does not stop the worker thread at once: it runs the calls already queued, then ends. A cancelled engine
+  /// token ends it sooner, cancelling what is still queued. Calling this more than once is safe.
   /// </remarks>
-  public void Dispose()
-  {
-    try { _signal.Set(); } catch { /* ignore */ }
-    try { _signal.Dispose(); } catch { /* ignore */ }
-  }
+  public void Dispose() => _queue.CompleteAdding();
 
   /// <summary>
   /// Represents a unit of work executed by the <see cref="MechanicDispatcher"/>.
