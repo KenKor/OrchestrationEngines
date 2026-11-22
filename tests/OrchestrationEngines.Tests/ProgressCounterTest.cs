@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
@@ -39,5 +39,21 @@ public class ProgressCounterTest
 
     counter.TotalCount.Should().Be(threads * perThread);
     reports.Should().Be(threads * perThread / reportEvery);
+  }
+
+  /// <summary>
+  /// Verifies that only the placeholders <c>{Count}</c> and <c>{Rate}</c> are mapped (#156), in any case and with an
+  /// alignment or format, and that escaped braces stay literal text.
+  /// </summary>
+  [Theory]
+  [InlineData("{count} items", "1 items")]
+  [InlineData("[{Count,3}]", "[  1]")]
+  [InlineData("{{Count}} is {Count}", "{Count} is 1")]
+  [InlineData("{{Rate}}", "{Rate}")]
+  public void ProgressCounter_Template_MapsOnlyItsPlaceholders(string template, string expected)
+  {
+    var counter = new ProgressCounter(NullLogger.Instance, reportEvery: 1, template);
+
+    counter.Increment().Should().Be(expected);
   }
 }
