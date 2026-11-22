@@ -71,7 +71,8 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <remarks>
   /// <para>
   /// This factory must always return a new engine instance.
-  /// Reusing instances across invocations is not supported.
+  /// Reusing instances across invocations is not supported. A null result fails the engine's creation, as a factory
+  /// that throws does.
   /// </para>
   ///
   /// <para>
@@ -268,7 +269,8 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// <remarks>
   /// A restart factory may share or copy the previous engine's state, but must not take it away from that engine, and a
   /// next engine's <see cref="IEngine.StopAsync"/> must not release what it shares with its predecessor: a generation
-  /// switch that fails before it hands over stops the next engines and keeps the previous ones running.
+  /// switch that fails before it hands over stops the next engines and keeps the previous ones running. A null result
+  /// fails the engine's creation, as a factory that throws does, and a retry is offered the previous engine again.
   /// </remarks>
   public EngineDescriptor SetRestartFactory(Func<EngineRestartInput, CancellationToken, Task<IEngine>> restartFactory)
   {

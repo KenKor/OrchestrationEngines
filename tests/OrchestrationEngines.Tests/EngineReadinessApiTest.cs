@@ -258,4 +258,30 @@ public class EngineReadinessApiTest
       await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
     }
   }
+
+  /// <summary>
+  /// Verifies that an engine whose factory returns null fails to be created with an exception that names it, as a
+  /// factory that throws does: nothing is registered, the lookups and the shutdown throw no NullReferenceException, and
+  /// the coordinator ends Stopped (#151).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_FactoryReturnsNull_FailsTheCreationClearly()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), NullLogger.Instance, useDispatcher: false);
+    coordinator.RegisterEngine("Null", _ => Task.FromResult<IEngine>(null)).WithoutRestarts();
+
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var ensure = () => coordinator.EnsureEngineTaskReadyAsync("Null", "Load", ct).WaitAsync(MustComplete, ct);
+
+    var thrown = (await ensure.Should().ThrowAsync<EngineTaskNotReadyException>()).Which;
+    thrown.TaskName.Should().Be("Null", "the creation task, named after the engine, failed");
+    thrown.InnerException.Should().BeOfType<InvalidOperationException>()
+      .Which.Message.Should().Be("The factory of engine 'Null' returned null.");
+    coordinator.GetEngineIfCreated("Null").Should().BeNull("nothing is registered for the engine");
+    coordinator.GetEngineIfReady("Null").Should().BeNull();
+    (await coordinator.GetEngineAsync("Null", 50, ct).WaitAsync(MustComplete, ct)).Should().BeNull();
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+  }
 }
