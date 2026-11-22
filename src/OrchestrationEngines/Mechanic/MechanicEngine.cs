@@ -471,7 +471,19 @@ public partial class MechanicEngine : BaseEngine
   /// <remarks>
   /// Returns null if the engine transitions to a terminal state beyond Ready, and its kick-start is not retrying it.
   /// </remarks>
-  public async Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound = true)
+  public Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound = true)
+    => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, CancellationToken.None);
+
+  /// <summary>
+  /// Waits for an engine (and its dependencies) to reach Ready, until <paramref name="token"/> is cancelled.
+  /// </summary>
+  /// <param name="name">The name.</param>
+  /// <param name="throwErrorIfNotFound">If true, throws when the engine name is not registered.</param>
+  /// <param name="token">Ends the wait, and everything it waits on, not the engine's start.</param>
+  /// <returns>
+  /// As <see cref="GetEngineWhenReadyAsync(string, bool)"/>; a cancellation when the token is cancelled.
+  /// </returns>
+  internal async Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound, CancellationToken token)
   {
     if (!IsRegistered(name))
       if (throwErrorIfNotFound)
@@ -503,7 +515,7 @@ public partial class MechanicEngine : BaseEngine
     {
       try
       {
-        await EnsureTaskReadyAsync(kickStartTaskName).ConfigureAwait(false);
+        await EnsureTaskReadyAsync(kickStartTaskName, token).ConfigureAwait(false);
       }
       catch (EngineTaskNotReadyException)
       {
@@ -516,14 +528,20 @@ public partial class MechanicEngine : BaseEngine
     // An engine that is loading again (its tasks were reset after its first start, see BaseEngine.TriggerResetAsync) is
     // Starting while its kick-start completed long ago: wait for the engine itself. Its reset tasks have already been
     // started, so this wait fires no triggers. Stopping the engine ends the wait at once, also while a task's work has
-    // not noticed the cancellation yet.
+    // not noticed the cancellation yet. The caller's cancellation ends only this wait: the engine's own one has no
+    // token (IEngine.EnsureReadyAsync), and goes on until the engine settles.
     if (_engines.TryGetValue(name, out engine) && engine.State == EngineState.Starting)
     {
+      using var stopOrCaller = token.CanBeCanceled
+        ? CancellationTokenSource.CreateLinkedTokenSource(engine.CancellationToken, token)
+        : null;
       try
       {
-        await EnsureEngineReadyAsync(engine).WaitObservedAsync(engine.CancellationToken).ConfigureAwait(false);
+        await EnsureEngineReadyAsync(engine)
+          .WaitObservedAsync(stopOrCaller?.Token ?? engine.CancellationToken).ConfigureAwait(false);
       }
-      catch (OperationCanceledException) when (engine.CancellationToken.IsCancellationRequested)
+      catch (OperationCanceledException) when (engine.CancellationToken.IsCancellationRequested
+        && !token.IsCancellationRequested)
       {
         return null;
       }
@@ -560,19 +578,25 @@ public partial class MechanicEngine : BaseEngine
   {
     var dedicatedCt = (token == default) ? CancellationToken : token;
 
-    using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(dedicatedCt);
-    var delay = Task.Delay(milliSecondsTimeOut, delayCts.Token);
-    var ready = GetEngineWhenReadyAsync(name, throwErrorIfNotFound);
-
-    var done = await Task.WhenAny(ready, delay).ConfigureAwait(false);
-    if (done == ready)
+    // The time-out, or the caller, ends the wait inside the lookup too, so polling an engine that never settles does
+    // not pile up waiters (#156). The time-out runs on the mechanic's clock.
+    var lookup = CancellationTokenSource.CreateLinkedTokenSource(dedicatedCt);
+    var ready = GetEngineWhenReadyAsync(name, throwErrorIfNotFound, lookup.Token);
+    if (await ready.EndsWithinAsync(TimeSpan.FromMilliseconds(milliSecondsTimeOut), TimeProvider).ConfigureAwait(false))
     {
-      // Cancel the time delay task.
-      delayCts.Cancel();
+      lookup.Dispose();
       return await ready.ConfigureAwait(false);
     }
-    dedicatedCt.ThrowIfCancellationRequested();
 
+    // Timed out: end the inner wait. It may still be unwinding, so the source is disposed, and its outcome read, only
+    // once it has ended.
+    lookup.Cancel();
+    _ = ready.ContinueWith(static (ended, source) =>
+    {
+      ((CancellationTokenSource)source).Dispose();
+      _ = ended.Exception;
+    }, lookup, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    dedicatedCt.ThrowIfCancellationRequested();
     return null;
   }
 
