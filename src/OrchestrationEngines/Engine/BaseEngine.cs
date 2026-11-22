@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
@@ -187,11 +188,16 @@ public abstract partial class BaseEngine : IEngine
   /// </summary>
   /// <remarks>
   /// Defaults to the type name, but may be overridden via
-  /// <see cref="DisplayNameAttribute"/>.
+  /// <see cref="DisplayNameAttribute"/>. Read once per engine type: it is read on every enabled log line of the engine
+  /// and its tasks.
   /// </remarks>
-  public virtual string EngineName =>
-      GetType().GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
-      ?? GetType().Name;
+  public virtual string EngineName => s_engineNames.GetValue(GetType(), static type =>
+      type.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName ?? type.Name);
+
+  /// <summary>
+  /// <see cref="EngineName"/> by engine type. Weak keys, so a type in an unloadable assembly can still be unloaded.
+  /// </summary>
+  private static readonly ConditionalWeakTable<Type, string> s_engineNames = new();
 
   private readonly ILogger _applicationLogger;
 
