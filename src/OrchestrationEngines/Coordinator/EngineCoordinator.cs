@@ -589,7 +589,7 @@ public partial class EngineCoordinator : IDisposable
       // next generation starts (as in the .NET Framework version).
       if (previousEngine == null || candidate.RestartFromPrevious == null)
       {
-        runtimeDescriptor = CloneDescriptor(candidate);
+        runtimeDescriptor = candidate.Clone();
         if (previousEngine != null)
           rebuiltFromScratch.Add(name);
       }
@@ -600,8 +600,7 @@ public partial class EngineCoordinator : IDisposable
         var handover = new Handover(previousEngine, previousDescriptor);
         handovers.Add((name, handover));
 
-        runtimeDescriptor = CloneDescriptor(
-          candidate,
+        runtimeDescriptor = candidate.Clone(
           ct => CreateReplacementEngineFromPreviousAsync(
             candidate,
             handover,
@@ -819,34 +818,6 @@ public partial class EngineCoordinator : IDisposable
     handover.Release();
     if (_mechanic is { } mechanic && mechanic.Engines.TryGetValue(name, out var engine) && engine is IReplacesPreviousEngine replacing)
       replacing.ReleasePreviousEngine();
-  }
-
-  private static EngineDescriptor CloneDescriptor(
-    EngineDescriptor source,
-    Func<CancellationToken, Task<IEngine>> createOverride = null)
-  {
-    ArgumentNullException.ThrowIfNull(source);
-
-    var clone = new EngineDescriptor(
-      source.Name,
-      createOverride ?? source.RegisteredEngineFactory,
-      source.RequiredForRunning,
-      source.Version)
-    {
-      ContextFactory = source.ContextFactory,
-      RecoveryHelper = source.RecoveryHelper,
-      RestartPolicy = source.RestartPolicy,
-      RestartFromPrevious = source.RestartFromPrevious,
-      // Keep the registered factory, also when the engine factory is a handover (see Handover).
-      RegisteredEngineFactory = source.RegisteredEngineFactory,
-    };
-
-    foreach (var dependencyName in source.DependsOn)
-    {
-      clone.AddDependsOn(dependencyName);
-    }
-
-    return clone;
   }
 
   private static async Task<IEngine> CreateReplacementEngineFromPreviousAsync(
