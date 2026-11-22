@@ -88,9 +88,9 @@ namespace System.Threading.Tasks
   }
 
   /// <summary>
-  /// Task members that newer .NET versions offer.
+  /// Task members that newer .NET versions offer; each part sits in the block of the version that brought it.
   /// </summary>
-  internal static class TaskPolyfills
+  internal static partial class TaskPolyfills
   {
     extension(Task task)
     {
@@ -215,6 +215,37 @@ namespace System
       public override double NextDouble() { lock (_lock) return base.NextDouble(); }
 
       public override void NextBytes(byte[] buffer) { lock (_lock) base.NextBytes(buffer); }
+    }
+  }
+}
+
+namespace System.Threading.Tasks
+{
+  /// <summary>
+  /// The task members that .NET 6 brought.
+  /// </summary>
+  internal static partial class TaskPolyfills
+  {
+    extension(Task task)
+    {
+      /// <summary>
+      /// Stand-in for <c>Task.WaitAsync(CancellationToken)</c> (.NET 6 and later): waits for the task until
+      /// <paramref name="cancellationToken"/> is cancelled. Cancelling ends the wait, not the task.
+      /// </summary>
+      /// <param name="cancellationToken">Ends the wait.</param>
+      /// <returns>The task's own outcome, or a cancellation when the token is cancelled first.</returns>
+      public Task WaitAsync(CancellationToken cancellationToken)
+        => task.IsCompleted || !cancellationToken.CanBeCanceled ? task : WaitCoreAsync(task, cancellationToken);
+    }
+
+    private static async Task WaitCoreAsync(Task task, CancellationToken cancellationToken)
+    {
+      // A second task completes when the token is cancelled; the wait ends with whichever comes first.
+      var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+      using var registration = cancellationToken.UnsafeRegister(
+        _ => cancelled.TrySetCanceled(cancellationToken), null);
+      var first = await Task.WhenAny(task, cancelled.Task).ConfigureAwait(false);
+      await first.ConfigureAwait(false);
     }
   }
 }

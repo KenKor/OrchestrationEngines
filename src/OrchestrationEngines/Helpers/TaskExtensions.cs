@@ -68,8 +68,8 @@ internal static class TaskExtensions
   /// <summary>
   /// Waits for <paramref name="task"/> until <paramref name="token"/> is cancelled. When the wait is cancelled first, a
   /// failure of the task that comes later is still read, so it is not reported as an unobserved task exception (#86
-  /// item 6); the task keeps at most one such observer, however many waits on it are cancelled. Named apart from the
-  /// framework's <c>Task.WaitAsync</c>, which on newer targets would be called instead.
+  /// item 6); the task keeps at most one such observer, however many waits on it are cancelled. Named apart from
+  /// <c>Task.WaitAsync</c> (the framework's, or the polyfill in Polyfills.cs), which it calls.
   /// </summary>
   /// <param name="task">The task to wait for.</param>
   /// <param name="token">Ends the wait, not the task.</param>
@@ -99,7 +99,7 @@ internal static class TaskExtensions
   {
     try
     {
-      await WaitCoreAsync(task, token).ConfigureAwait(false);
+      await task.WaitAsync(token).ConfigureAwait(false);
     }
     catch (OperationCanceledException) when (token.IsCancellationRequested)
     {
@@ -138,17 +138,4 @@ internal static class TaskExtensions
       TaskScheduler.Default);
     return true;
   }
-
-#if NET6_0_OR_GREATER
-  private static Task WaitCoreAsync(Task task, CancellationToken token) => task.WaitAsync(token);
-#else
-  private static async Task WaitCoreAsync(Task task, CancellationToken token)
-  {
-    // The token can be cancelled: a second task is set up that completes when it is cancelled.
-    var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    using var reg = token.UnsafeRegister(_ => tcs.TrySetCanceled(token), null);
-    var completed = await Task.WhenAny(task, tcs.Task).ConfigureAwait(false);
-    await completed.ConfigureAwait(false);
-  }
-#endif
 }
