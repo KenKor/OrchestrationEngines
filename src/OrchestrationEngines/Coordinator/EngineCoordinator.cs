@@ -1573,7 +1573,7 @@ public partial class EngineCoordinator : IDisposable
     {
       await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       engine = milliSecondsTimeOut == Timeout.Infinite
-        ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound).WaitObservedAsync(token).ConfigureAwait(false)
+        ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, token).ConfigureAwait(false)
         : await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, milliSecondsTimeOut, token).ConfigureAwait(false);
     }
     catch (OperationCanceledException) when ((Successor != null || _abandoned) && !token.IsCancellationRequested)

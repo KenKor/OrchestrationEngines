@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -161,6 +162,31 @@ public class EngineReloadTest
     await engine.StopAsync().WaitAsync(MustComplete, ct);
 
     (await waiting.WaitAsync(MustComplete, ct)).Should().BeNull();
+  }
+
+  /// <summary>
+  /// Verifies that a caller who cancels the blocking lookup while the engine loads again gets a cancellation that
+  /// carries the caller's own token, and that the engine goes on loading (#156).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_GetEngineAsync_CallerCancelsWhileLoadingAgain_ThrowsWithTheCallersToken()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var (coordinator, engine) = await StartedAsync();
+    await LoadAgainAsync(engine);
+    using var caller = new CancellationTokenSource();
+
+    var waiting = coordinator.GetEngineAsync(Name, throwErrorIfNotFound: true, token: caller.Token);
+    await ShouldStillWaitAsync(waiting);
+    caller.Cancel();
+
+    (await waiting.Invoking(w => w.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>())
+      .Which.CancellationToken.Should().Be(caller.Token);
+    engine.State.Should().Be(EngineState.Starting, "the caller's cancellation ends only its own wait");
+    engine.Load.Open();
+    engine.Index.Open();
+    (await coordinator.GetEngineAsync(Name, throwErrorIfNotFound: true, token: ct).WaitAsync(MustComplete, ct))
+      .Should().BeSameAs(engine);
   }
 
   /// <summary>

@@ -256,3 +256,29 @@ namespace System.Threading
 }
 
 #endif
+
+#if NET8_0_OR_GREATER
+
+namespace System.Threading.Tasks
+{
+  /// <summary>
+  /// The other way round: on netstandard2.0 the Microsoft.Bcl.TimeProvider package offers this extension, on .NET 8 the
+  /// constructor <c>CancellationTokenSource(TimeSpan, TimeProvider)</c> does the same.
+  /// </summary>
+  internal static class TimeProviderPolyfills
+  {
+    extension(TimeProvider timeProvider)
+    {
+      /// <summary>
+      /// Creates a source that is cancelled once <paramref name="delay"/> has passed on the time provider.
+      /// </summary>
+      /// <param name="delay">
+      /// The time until the source is cancelled; <see cref="Timeout.InfiniteTimeSpan"/> for never.
+      /// </param>
+      /// <returns>The source.</returns>
+      public CancellationTokenSource CreateCancellationTokenSource(TimeSpan delay) => new(delay, timeProvider);
+    }
+  }
+}
+
+#endif
