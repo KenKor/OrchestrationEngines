@@ -1293,10 +1293,7 @@ public partial class EngineTask
     try
     {
       var wasFailed = State == EngineTaskState.Failed;
-      if (string.IsNullOrEmpty(reason))
-        await StateMachine.FireAsync(trigger).ConfigureAwait(false);
-      else
-        await StateMachine.FireAsync(trigger, reason).ConfigureAwait(false);
+      await FireMachineAsync(trigger, reason).ConfigureAwait(false);
 
       // No exception of the work's logs this failure, so it is the one error; a Fail that does not move the task to
       // Failed logs no error.
@@ -1443,10 +1440,7 @@ public partial class EngineTask
       if (cancelRun)
         RequestCancellation();
 
-      if (string.IsNullOrEmpty(reason))
-        await StateMachine.FireAsync(trigger).ConfigureAwait(false);
-      else
-        await StateMachine.FireAsync(trigger, reason).ConfigureAwait(false);
+      await FireMachineAsync(trigger, reason).ConfigureAwait(false);
       return true;
     }
     finally
@@ -1454,6 +1448,13 @@ public partial class EngineTask
       _triggerLock.Release();
     }
   }
+
+  /// <summary>
+  /// Fires <paramref name="trigger"/> into the state machine, with <paramref name="reason"/> as its argument when one
+  /// is given. The caller holds the trigger lock.
+  /// </summary>
+  private Task FireMachineAsync(EngineTaskTrigger trigger, string reason) =>
+    string.IsNullOrEmpty(reason) ? StateMachine.FireAsync(trigger) : StateMachine.FireAsync(trigger, reason);
 
   /// <summary>
   /// Cancels the run's work, but only while the run is still the current one.
