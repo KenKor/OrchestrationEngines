@@ -8,7 +8,7 @@ namespace OrchestrationEngines.Tests;
 
 /// <summary>
 /// A clock that only moves when the test says so. Timers created on it (also those behind
-/// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>) fire when <see cref="Advance"/> passes their
+/// <c>Task.Delay</c> with a time provider) fire when <see cref="Advance"/> passes their
 /// due time.
 /// </summary>
 internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider

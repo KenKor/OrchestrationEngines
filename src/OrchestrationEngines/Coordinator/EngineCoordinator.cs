@@ -1069,10 +1069,8 @@ public partial class EngineCoordinator : IDisposable
   /// </exception>
   public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
   {
-    if (engineName == null)
-      throw new ArgumentNullException(nameof(engineName));
-    if (taskName == null)
-      throw new ArgumentNullException(nameof(taskName));
+    ArgumentNullException.ThrowIfNull(engineName);
+    ArgumentNullException.ThrowIfNull(taskName);
     await ForEngineAsync(engineName,
       generation => generation.EnsureEngineTaskReadyAsync(engineName, taskName, token),
       () => Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token),
@@ -1149,10 +1147,8 @@ public partial class EngineCoordinator : IDisposable
   public async Task ResetTasksForEngineAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
     CancellationToken token = default)
   {
-    if (engineName == null)
-      throw new ArgumentNullException(nameof(engineName));
-    if (taskNames == null)
-      throw new ArgumentNullException(nameof(taskNames));
+    ArgumentNullException.ThrowIfNull(engineName);
+    ArgumentNullException.ThrowIfNull(taskNames);
     await ForEngineAsync(engineName,
       generation => generation.ResetTasksForEngineAsync(engineName, taskNames, resetDependentTasks, token),
       () => Mechanic.ResetEngineTasksAsync(engineName, taskNames, resetDependentTasks, token),

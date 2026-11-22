@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
-using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
 using static OrchestrationEngines.Tests.TestRestartPolicies;

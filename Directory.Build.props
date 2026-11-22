@@ -10,6 +10,23 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 
+  <!--
+    A warning fails the build, and the code-style rules (IDE...) that .editorconfig sets to warning are part of the
+    build. BannedSymbols.txt in each project lists the APIs that may not be called, each with what to use instead.
+  -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)\BannedSymbols.txt" Condition="Exists('$(MSBuildProjectDirectory)\BannedSymbols.txt')" />
+  </ItemGroup>
+
   <PropertyGroup>
     <Authors>Spatial Eye B.V., OrchestrationEngines contributors</Authors>
     <Product>OrchestrationEngines</Product>

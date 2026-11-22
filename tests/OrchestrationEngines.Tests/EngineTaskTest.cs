@@ -18,8 +18,13 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineTaskTest
 {
-  private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null,
-    CancellationToken engineToken = default) =>
+  private static EngineTask NewTask(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock = null) =>
+    new(name, workAsync, requiredForRunning: true, NullLogger.Instance, CancellationToken.None, clock);
+
+  // A separate name, not an optional parameter: the xUnit analyzer asks every caller of a method with a token
+  // parameter for the test's token, and only this caller means an engine's stop token.
+  private static EngineTask NewTaskOfEngine(string name, Func<CancellationToken, Task> workAsync, TimeProvider clock,
+    CancellationToken engineToken) =>
     new(name, workAsync, requiredForRunning: true, NullLogger.Instance, engineToken, clock);
 
   private static async Task RunToEndAsync(EngineTask task)
@@ -133,7 +138,7 @@ public class EngineTaskTest
     {
       var task = NewTask("Load", _ =>
       {
-        workGate.Wait(MustComplete);
+        workGate.Wait(MustComplete, CancellationToken.None);
         return Task.CompletedTask;
       }, clock).SetTimeOut(TimeSpan.FromMinutes(1));
       await task.FireAsync(EngineTaskTrigger.Start);
@@ -172,12 +177,12 @@ public class EngineTaskTest
     var workGate = new ManualResetEventSlim();
     try
     {
-      var task = NewTask("Load", async token =>
+      var task = NewTaskOfEngine("Load", async token =>
       {
         if (!workHonoursToken)
         {
           // Synchronous work, as task bodies often are.
-          workGate.Wait(MustComplete);
+          workGate.Wait(MustComplete, CancellationToken.None);
           return;
         }
         try
@@ -189,7 +194,7 @@ public class EngineTaskTest
           // On .NET Framework this catch runs inline in engineStop.Cancel(), and the wait below would block the test
           // there for its whole 5 s (#55). A cancellation handler should not block: let the stop return first.
           await Task.Yield();
-          workGate.Wait(MustComplete);
+          workGate.Wait(MustComplete, CancellationToken.None);
           throw;
         }
       }, clock, engineStop.Token).SetTimeOut(TimeSpan.FromMinutes(90));

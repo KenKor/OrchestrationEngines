@@ -1,0 +1,3 @@
+T:Xunit.Assert;Assert with Should() (AwesomeAssertions), as the rest of the tests do.
+M:System.Threading.Thread.Sleep(System.Int32);Do not sleep in a test: wait for the condition with Wait.UntilAsync.
+M:System.Threading.Thread.Sleep(System.TimeSpan);Do not sleep in a test: wait for the condition with Wait.UntilAsync.

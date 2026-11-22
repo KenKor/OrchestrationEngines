@@ -5,6 +5,11 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
 
+  <!-- Every project: the analyzer behind BannedSymbols.txt (compile-time only). -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4" />
+  </ItemGroup>
+
   <!-- Library -->
   <ItemGroup>
     <PackageVersion Include="Stateless" Version="5.20.1" />
