@@ -1584,7 +1584,8 @@ public partial class EngineTask
         var timeoutTask = Task.Delay(Timeout.Value, TimeProvider, delayCts.Token);
         // The work runs on the thread pool: synchronous work (as task bodies often are) would otherwise run to its end
         // in the call itself, before the race below, and never time out.
-        workTask = Task.Run(() => _workAsync(token));
+        // Task.Run gets no token: a cancelled one would skip the work instead of letting it see the cancellation.
+        workTask = Task.Run(() => _workAsync(token), CancellationToken.None);
 
         var completed = await Task.WhenAny(workTask, timeoutTask).ConfigureAwait(false);
 

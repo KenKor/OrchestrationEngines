@@ -268,11 +268,14 @@ namespace System.Threading
       /// <returns>The registration, to dispose when the callback is no longer wanted.</returns>
       public CancellationTokenRegistration UnsafeRegister(Action<object> callback, object state)
       {
+        // The one place that may call Register: this is the stand-in the ban points to, and it suppresses the flow.
+#pragma warning disable RS0030
         // SuppressFlow throws when the flow is suppressed already; the registration captures nothing then anyway.
         if (ExecutionContext.IsFlowSuppressed())
           return token.Register(callback, state);
         using (ExecutionContext.SuppressFlow())
           return token.Register(callback, state);
+#pragma warning restore RS0030
       }
     }
   }

@@ -274,7 +274,7 @@ public class KickStartRestartTest
       // was no old watcher to end and the test waited for a second watcher start that never came.
       CreateTask("Load", async _ =>
       {
-        await _watcherRunning.Task.WaitAsync(MustComplete);
+        await _watcherRunning.Task.WaitAsync(MustComplete, CancellationToken.None);
         await loadAsync(Interlocked.Increment(ref _loads));
       });
     }

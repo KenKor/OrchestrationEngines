@@ -1013,8 +1013,7 @@ public abstract partial class BaseEngine : IEngine
   /// (possible only for tasks added after the set-up); nothing is reset.</exception>
   public async Task ResetTasksAsync(IEnumerable<string> taskNames, bool resetDependentTasks)
   {
-    if (taskNames == null)
-      throw new ArgumentNullException(nameof(taskNames));
+    ArgumentNullException.ThrowIfNull(taskNames);
     var tasks = _tasks;
     var named = new HashSet<EngineTask>();
     foreach (var name in taskNames)
@@ -1288,8 +1287,7 @@ public abstract partial class BaseEngine : IEngine
   /// <inheritdoc/>
   public virtual async Task EnsureTaskReadyAsync(string taskName, CancellationToken token = default)
   {
-    if (taskName == null)
-      throw new ArgumentNullException(nameof(taskName));
+    ArgumentNullException.ThrowIfNull(taskName);
     // The task an earlier pass waited for, which a restart or reset ended or made run again.
     EngineTask waitedFor = null;
     while (true)

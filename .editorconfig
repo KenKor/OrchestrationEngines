@@ -387,3 +387,19 @@ dotnet_naming_style.s_camelcase.required_suffix =
 dotnet_naming_style.s_camelcase.word_separator = 
 dotnet_naming_style.s_camelcase.capitalization = camel_case
 
+
+# Rules that fail the build (Directory.Build.props turns warnings into errors).
+[*.cs]
+# Unused using.
+dotnet_diagnostic.IDE0005.severity = warning
+# Private member that is never used; private member that is assigned but never read.
+dotnet_diagnostic.IDE0051.severity = warning
+dotnet_diagnostic.IDE0052.severity = warning
+# Use ArgumentNullException.ThrowIfNull, not a hand-written null check.
+dotnet_diagnostic.CA1510.severity = warning
+# Pass the cancellation token on to a method that takes one.
+dotnet_diagnostic.CA2016.severity = warning
+
+# The library logs through [LoggerMessage] methods, not the ILogger extension methods.
+[src/**.cs]
+dotnet_diagnostic.CA1848.severity = warning

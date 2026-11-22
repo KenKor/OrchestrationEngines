@@ -111,7 +111,7 @@ internal static class TaskExtensions
   {
     // The token can be cancelled: a second task is set up that completes when it is cancelled.
     var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    using var reg = token.Register(() => tcs.TrySetCanceled(token));
+    using var reg = token.UnsafeRegister(_ => tcs.TrySetCanceled(token), null);
     var completed = await Task.WhenAny(task, tcs.Task).ConfigureAwait(false);
     await completed.ConfigureAwait(false);
   }

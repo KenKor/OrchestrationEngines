@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Engine;
-using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Xunit;
 using static OrchestrationEngines.Tests.TestRestartPolicies;
