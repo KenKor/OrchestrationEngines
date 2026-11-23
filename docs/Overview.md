@@ -543,7 +543,8 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - All generations of a coordinator share a lineage that knows the current one (`Successor`). A lookup on a replaced
   coordinator, also one that was already waiting, is answered by the current coordinator; an engine that the switch
   left out gives null. With the dispatcher on, so is a lookup during the switch, once its next generation has started;
-  if the switch fails before it hands over, the replaced coordinator answers.
+  if the switch fails before that, the replaced coordinator answers. If it fails after (during its wait until
+  ready), an engine such a lookup already got is one the failed switch stops.
 - A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One
   generation of a lineage runs at a time: of two switches on one coordinator, only the first to hand over replaces it.
   With the dispatcher on, the second waits for the first and then goes to the next generation (or, when the first
