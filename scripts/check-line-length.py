@@ -5,7 +5,7 @@ Only lines that the change adds are checked, measured against the merge base wit
 (origin/main by default). Long lines that are already there, and long lines that the change only moves,
 are left alone.
 
-    python scripts/check-line-length.py                  # the working tree against origin/main
+    python scripts/check-line-length.py                  # the working tree against origin/main, new files too
     python scripts/check-line-length.py --base origin/x  # against another base
     python scripts/check-line-length.py --selftest       # prove the check still catches a long line
 
@@ -16,6 +16,7 @@ The length is counted in characters.
 """
 import argparse
 import collections
+import os
 import re
 import subprocess
 import sys
@@ -104,11 +105,39 @@ def git(*args):
     return result.stdout
 
 
+def added_file_diff(path, text):
+    """A diff that adds the file <path> with the content <text> whole; empty for an empty file."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    if not lines:
+        return ""
+    return "\n".join(
+        [f"diff --git a/{path} b/{path}", "--- /dev/null", f"+++ b/{path}", f"@@ -0,0 +1,{len(lines)} @@"]
+        + ["+" + line for line in lines])
+
+
+def untracked_as_diff():
+    """The checked files that git does not track yet (and does not ignore), as a diff that adds them whole."""
+    root = git("rev-parse", "--show-toplevel").strip()
+    parts = []
+    for path in git("ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/").split("\0"):
+        if path and is_checked(path):
+            with open(os.path.join(root, path), encoding="utf-8", errors="replace", newline="") as f:
+                parts.append(added_file_diff(path, f.read()))
+    return "\n".join(parts)
+
+
 def selftest():
     long_line = "x" * 121
 
     def file(path, hunk, *lines):
         return [f"diff --git a/{path} b/{path}", f"--- a/{path}", f"+++ b/{path}", hunk, *lines]
+
+    def expect(diff_text, expected, what):
+        actual = find_long_lines(diff_text)
+        if actual != expected:
+            sys.exit(f"check-line-length: selftest FAILED for {what}\n  expected {expected}\n  got      {actual}")
 
     diff = "\n".join(
         file("src/A.cs", "@@ -3,0 +4,3 @@",
@@ -136,15 +165,22 @@ def selftest():
                "+" + "z" * 130)                       # ... so this is new here
         + file("docs/sub/Deep.md", "@@ -0,0 +1 @@",
                "+" + long_line))                      # not directly in docs/
-    expected = [
+    expect(diff, [
         ("src/A.cs", 4, 121), ("tests/Deep/C.cs", 8, 122), ("tests/Deep/C.cs", 9, 123),
         ("tests/Deep/C.cs", 10, 125), ("src/With Space.cs", 2, 121), ("docs/Overview.md", 3, 121),
-        ("src/D.cs", 1, 130)]
-    actual = find_long_lines(diff)
-    if actual != expected:
-        sys.exit(f"check-line-length: selftest FAILED\n  expected {expected}\n  got      {actual}")
-    if find_long_lines("\n".join(file("src/A.cs", "@@ -1 +1 @@", "-a", "+b"))):
-        sys.exit("check-line-length: selftest FAILED: a short line was reported")
+        ("src/D.cs", 1, 130)], "a diff")
+    expect("\n".join(file("src/A.cs", "@@ -1 +1 @@", "-a", "+b")), [], "a short line")
+
+    # New files that git does not track yet: the diff that adds them whole.
+    untracked = "\n".join([
+        added_file_diff("src/NoEol.cs", "a\n" + long_line),               # line 2, no final newline
+        added_file_diff("src/Blank.cs", long_line + "\n\n"),               # line 1, ends in a blank line
+        added_file_diff("src/Crlf.cs", "y" * 120 + "\r\n" + long_line + "\r\n"),  # 120 + CR is not over; line 2
+        added_file_diff("src/Empty.cs", ""),                               # nothing to add
+        added_file_diff("src/sp ace/New.cs", long_line + "\n"),            # a path with a space
+        added_file_diff("notes.txt", long_line + "\n")])                   # not a checked file
+    expect(untracked, [("src/NoEol.cs", 2, 121), ("src/Blank.cs", 1, 121), ("src/Crlf.cs", 2, 121),
+                       ("src/sp ace/New.cs", 1, 121)], "new files")
     print("check-line-length: selftest passed")
 
 
@@ -159,8 +195,10 @@ def main():
         selftest()
         return
     merge_base = git("merge-base", args.base, "HEAD").strip()
+    # A new file counts before it is added to git, so the gate catches it before a commit.
     found = find_long_lines(git(
-        "diff", "--unified=0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", merge_base))
+        "diff", "--unified=0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", merge_base)
+        + "\n" + untracked_as_diff())
     for path, line_no, length in found:
         print(f"{path}:{line_no}: {length} columns, the limit is {LIMIT}")
     if found:
