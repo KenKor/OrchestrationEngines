@@ -41,16 +41,15 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj', 'NuGet.config') }}
           restore-keys: nuget-${{ runner.os }}-
 
-      # The gate a change must pass, as run locally (scripts/gate.sh): the line-length check of the lines the change
-      # adds, against the base branch (on a push the merge base is the commit itself, so nothing is added), restore,
-      # build, and the tests on net10.0. The coverage settings and format are set in the test project
-      # (TestingPlatformCommandLineArguments).
-      - name: Gate (line length, build, net10.0 tests)
+      # The checks a change must pass, as run locally: scripts/gate.sh lists them. A pull request is checked against
+      # its base branch, a push against the script's default. The coverage settings and format are set in the test
+      # project (TestingPlatformCommandLineArguments).
+      - name: Gate (scripts/gate.sh)
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
+          BASE_REF: ${{ github.base_ref }}
         shell: bash
         run: >-
-          bash scripts/gate.sh --base "origin/$BASE_REF"
+          bash scripts/gate.sh ${BASE_REF:+--base "origin/$BASE_REF"}
           -- --coverage --results-directory "${{ github.workspace }}/TestResults"
 
       # The tests on .NET Framework 4.8 need Windows, so they stay outside the gate script.

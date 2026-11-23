@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # The checks a change must pass, in the order CI runs them. Run it before a push:
 #
-#     scripts/gate.sh                              # the working tree against origin/main
+#     scripts/gate.sh                              # the working tree against the default base, origin/main
 #     scripts/gate.sh --base origin/release/1.0    # against another base branch
 #     scripts/gate.sh -- --coverage --results-directory "$PWD/TestResults"   # extra arguments for dotnet test
 #
 # Steps: the line-length check's self-test, the line-length check of the lines the change adds (against the merge
-# base with --base, uncommitted edits to tracked files included), restore, build (Release), and the tests on net10.0.
+# base with --base, uncommitted edits and new files included), restore, build (Release), and the tests on net10.0.
 # The first step that fails stops the script with its exit code. The net48 tests need Windows: the Windows workflow
 # runs them after this script, as it runs the pack.
 #
 # Both workflows call this script. A new home-made check goes here, not into the workflow files.
 set -euo pipefail
 
-base="origin/main"
+# Empty: check-line-length.py's default base, which is set only there.
+base=""
 test_args=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,8 +52,8 @@ step() { echo "== gate: $*"; }
 step "line length, self-test"
 "$python" scripts/check-line-length.py --selftest
 
-step "line length of added lines, against $base"
-"$python" scripts/check-line-length.py --base "$base"
+step "line length of added lines, against ${base:-the default base}"
+"$python" scripts/check-line-length.py ${base:+--base "$base"}
 
 step "restore"
 dotnet restore

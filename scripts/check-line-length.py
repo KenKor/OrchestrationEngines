@@ -5,7 +5,7 @@ Only lines that the change adds are checked, measured against the merge base wit
 (origin/main by default). Long lines that are already there, and long lines that the change only moves,
 are left alone.
 
-    python scripts/check-line-length.py                  # the working tree against origin/main
+    python scripts/check-line-length.py                  # the working tree against origin/main, new files too
     python scripts/check-line-length.py --base origin/x  # against another base
     python scripts/check-line-length.py --selftest       # prove the check still catches a long line
 
@@ -16,6 +16,7 @@ The length is counted in characters.
 """
 import argparse
 import collections
+import os
 import re
 import subprocess
 import sys
@@ -104,6 +105,23 @@ def git(*args):
     return result.stdout
 
 
+def untracked_as_diff():
+    """The checked files that git does not track yet (and does not ignore), as a diff that adds them whole."""
+    parts = []
+    root = git("rev-parse", "--show-toplevel").strip()
+    for path in git("ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/").split("\0"):
+        if not path or not is_checked(path):
+            continue
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as f:
+            lines = f.read().split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        if lines:
+            parts += [f"diff --git a/{path} b/{path}", "--- /dev/null", f"+++ b/{path}", f"@@ -0,0 +1,{len(lines)} @@"]
+            parts += ["+" + line for line in lines]
+    return "\n".join(parts)
+
+
 def selftest():
     long_line = "x" * 121
 
@@ -159,8 +177,10 @@ def main():
         selftest()
         return
     merge_base = git("merge-base", args.base, "HEAD").strip()
+    # A new file counts before it is added to git, so the gate catches it before a commit.
     found = find_long_lines(git(
-        "diff", "--unified=0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", merge_base))
+        "diff", "--unified=0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", merge_base)
+        + "\n" + untracked_as_diff())
     for path, line_no, length in found:
         print(f"{path}:{line_no}: {length} columns, the limit is {LIMIT}")
     if found:

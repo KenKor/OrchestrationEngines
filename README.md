@@ -27,6 +27,8 @@ It checks the length of the lines the change adds, restores, builds (Release) an
 stops at the first step that fails. `--base <branch>` compares with another branch than `origin/main`, and arguments
 after `--` go to `dotnet test`.
 
+Without the gate, or to run the `net48` tests too:
+
 ```bash
 dotnet build
 dotnet test
@@ -35,7 +37,7 @@ dotnet test
 The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
 Lines are at most 120 columns. `python scripts/check-line-length.py` checks the lines a change adds, against
-`origin/main`, also uncommitted edits to tracked files. Three kinds of long line are let through: a line with a URL,
+`origin/main`, also uncommitted edits and new files. Three kinds of long line are let through: a line with a URL,
 a row of a Markdown table, and a long line that only moves from one file to another.
 
 Packing is blocked until the repository URL is set (`RepositoryUrl` in `Directory.Build.props`, see `docs/Releasing.md`).
@@ -44,6 +46,7 @@ Packing is blocked until the repository URL is set (`RepositoryUrl` in `Director
 
 ```bash
 dotnet test --coverage --results-directory "$PWD/TestResults"
+scripts/gate.sh -- --coverage --results-directory "$PWD/TestResults"   # the same, net10.0 only, after the checks
 ```
 
 The results directory must be an absolute path: the .NET 10.0.1xx SDK resolves a relative one against the test app's

@@ -30,8 +30,8 @@ jobs:
       - name: SDK
         run: dotnet --version
 
-      # The gate a change must pass, as run locally: line length of the added lines, restore, build, net10.0 tests.
-      - name: Gate (line length, build, net10.0 tests)
+      # The checks a change must pass, as run locally: scripts/gate.sh lists them.
+      - name: Gate (scripts/gate.sh)
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: bash scripts/gate.sh --base "origin/$BASE_REF"
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/gate.sh ${BASE_REF:+--base "origin/$BASE_REF"}
