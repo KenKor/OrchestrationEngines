@@ -21,14 +21,17 @@ jobs:
     runs-on: [self-hosted, linux, ci]
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The gate's line-length check diffs against the merge base with the base branch.
+          fetch-depth: 0
 
       # Builds with the runner host's SDK: global.json (10.0.100, latestPatch) decides whether it is accepted. Testing on
       # the newest patch is build.yml's job. The version is logged, so a host SDK that falls behind shows here.
       - name: SDK
         run: dotnet --version
 
-      - name: Restore
-        run: dotnet restore
-
-      - name: Build and test (net10.0, Release)
-        run: dotnet test --configuration Release -f net10.0
+      # The gate a change must pass, as run locally: line length of the added lines, restore, build, net10.0 tests.
+      - name: Gate (line length, build, net10.0 tests)
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: bash scripts/gate.sh --base "origin/$BASE_REF"
