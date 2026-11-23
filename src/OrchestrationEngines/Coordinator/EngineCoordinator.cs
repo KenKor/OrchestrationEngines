@@ -574,6 +574,7 @@ public partial class EngineCoordinator : IDisposable
     var restartRequired = new HashSet<string>(diff.RestartRequiredEngineNames, StringComparer.OrdinalIgnoreCase);
     var handovers = new List<(string Name, Handover Handover)>();
     var rebuiltFromScratch = new List<string>();
+    var added = new List<string>();
     var runtimeDescriptors = new List<EngineDescriptor>(candidateList.Length);
 
     // Copy every candidate before the next coordinator is created: a candidate that cannot be copied (a null engine
@@ -594,6 +595,8 @@ public partial class EngineCoordinator : IDisposable
         runtimeDescriptor = candidate.Clone();
         if (previousEngine != null)
           rebuiltFromScratch.Add(name);
+        else
+          added.Add(name);
       }
       else
       {
@@ -629,7 +632,7 @@ public partial class EngineCoordinator : IDisposable
     // Until it hands over, the switch owns the next coordinator: a failure before then cleans it up, so that a switch
     // that fails (and one retried after it) leaves no coordinator behind, nor a next generation running next to this
     // one (#100). This generation stays current.
-    var pending = new SwitchBeforeHandover(rebuiltFromScratch, handovers.Select(h => h.Name));
+    var pending = new SwitchBeforeHandover(rebuiltFromScratch.Concat(added), handovers.Select(h => h.Name));
     try
     {
       foreach (var runtimeDescriptor in runtimeDescriptors)
@@ -749,8 +752,8 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// A generation switch before it hands over: the engines it rebuilds from scratch (stopped before the next generation
-  /// started), those it hands over to their restart factories, and that next generation once it has started (null if
-  /// it did not start).
+  /// started) or adds (none runs on this generation: it is new, or this generation never started it), those it hands
+  /// over to their restart factories, and that next generation once it has started (null if it did not start).
   /// </summary>
   private sealed class SwitchBeforeHandover(IEnumerable<string> rebuilt, IEnumerable<string> handedOver)
   {
@@ -758,8 +761,8 @@ public partial class EngineCoordinator : IDisposable
     private readonly HashSet<string> _handedOver = new(handedOver, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Whether the next generation answers for <paramref name="name"/>: an engine the switch rebuilds from scratch, or,
-    /// with <paramref name="handedOverToo"/>, one it hands over to its restart factory.
+    /// Whether the next generation answers for <paramref name="name"/>: an engine the switch rebuilds from scratch or
+    /// adds, or, with <paramref name="handedOverToo"/>, one it hands over to its restart factory.
     /// </summary>
     public bool Answers(string name, bool handedOverToo) =>
       _rebuilt.Contains(name) || (handedOverToo && _handedOver.Contains(name));
@@ -1137,6 +1140,8 @@ public partial class EngineCoordinator : IDisposable
   /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
   /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
   /// reports it as unknown (<see cref="ArgumentException"/>).
+  /// As with <see cref="GetEngineAsync(string, bool, CancellationToken)"/>, a call during a switch before it hands
+  /// over does not wait for the switch to end, so an engine of the next generation can make it from its own tasks.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
@@ -1155,6 +1160,16 @@ public partial class EngineCoordinator : IDisposable
       () => Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token),
       token, handedOverToo: false).ConfigureAwait(false);
   }
+
+  /// <summary>
+  /// Whether this generation has started and a switch has begun to replace it, before the hand-over. Fix (#154): the
+  /// switch holds the dispatcher until it ends, also while it waits for the next generation to get ready, and an engine
+  /// of that generation may be what calls. A call then does not queue behind the switch to start this generation: it
+  /// has started, and a start would only kick-start the engines the switch stops.
+  /// </summary>
+  private bool StartedBeforeSwitch =>
+    Volatile.Read(ref _switchBeforeHandover) != null
+    && Volatile.Read(ref _mechanicStart) is { Status: TaskStatus.RanToCompletion };
 
   /// <summary>
   /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
@@ -1188,7 +1203,7 @@ public partial class EngineCoordinator : IDisposable
 
     try
     {
-      if (start)
+      if (start && !StartedBeforeSwitch)
         await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       await onMechanic().ConfigureAwait(false);
     }
@@ -1538,6 +1553,13 @@ public partial class EngineCoordinator : IDisposable
   /// If true, throws when the engine name is not registered.
   /// </param>
   /// <param name="token">Cancels the caller's wait; the engine goes on starting.</param>
+  /// <remarks>
+  /// During a generation switch, before it hands over, a lookup does not wait for the switch to end, so an engine of
+  /// the next generation can make one from its own tasks through this coordinator. An engine that the switch rebuilds
+  /// from scratch or adds is looked up on the next generation once that has started. An engine that it hands over to
+  /// its restart factory is answered by this generation: the previous engine, which runs until the hand-over. Once the
+  /// switch has handed over, the next generation answers every lookup.
+  /// </remarks>
   public Task<IEngine> GetEngineAsync(string name, bool throwErrorIfNotFound = true, CancellationToken token = default)
     => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, Timeout.Infinite, token);
 
@@ -1546,6 +1568,7 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   /// <param name="name">Engine name.</param>
   /// <param name="token">Cancellation token controlling the wait.</param>
+  /// <remarks><inheritdoc cref="GetEngineAsync(string, bool, CancellationToken)" path="/remarks"/></remarks>
   public Task<IEngine> GetEngineAsync(string name, CancellationToken token) => GetEngineAsync(name, Timeout.Infinite, token);
 
   /// <summary>
@@ -1554,6 +1577,7 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="name">Engine name.</param>
   /// <param name="milliSecondsTimeOut">Maximum wait time in milliseconds.</param>
   /// <param name="token">Cancellation token controlling the wait.</param>
+  /// <remarks><inheritdoc cref="GetEngineAsync(string, bool, CancellationToken)" path="/remarks"/></remarks>
   public Task<IEngine> GetEngineAsync(string name, int milliSecondsTimeOut, CancellationToken token = default)
     => GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token);
 
@@ -1565,6 +1589,7 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="milliSecondsTimeOut">Maximum wait time in milliseconds.</param>
   /// <param name="token">Cancellation token controlling the wait.</param>
   /// <returns>The engine once Ready; null when it is not Ready within the time-out (it goes on starting).</returns>
+  /// <remarks><inheritdoc cref="GetEngineAsync(string, bool, CancellationToken)" path="/remarks"/></remarks>
   public Task<IEngine> GetEngineAsync(string name, bool throwErrorIfNotFound, int milliSecondsTimeOut, CancellationToken token = default)
     => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, milliSecondsTimeOut, token);
 
@@ -1578,7 +1603,9 @@ public partial class EngineCoordinator : IDisposable
   /// <returns>The engine once Ready; otherwise null.</returns>
   /// <remarks>
   /// Only the start runs on the dispatcher: waiting there would hold the dispatcher, and every call queued behind it
-  /// (other lookups, a shutdown), until the engine is Ready. The wait itself runs as it does without a dispatcher.
+  /// (other lookups, a shutdown), until the engine is Ready. The wait itself runs as it does without a dispatcher. A
+  /// switch before its hand-over holds the dispatcher: then the lookup does not queue there (see
+  /// <see cref="StartedBeforeSwitch"/>).
   /// </remarks>
   private async Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound, int milliSecondsTimeOut, CancellationToken token)
   {
@@ -1588,10 +1615,20 @@ public partial class EngineCoordinator : IDisposable
 
     // The time-out counts from the end of the start, as the mechanic's own time-out does.
     var started = TimeProvider.GetTimestamp();
+
+    // Fix (#154): a switch that rebuilds this engine from scratch has stopped it, or this generation never started it:
+    // wait for the next generation and ask it, as ForEngineAsync does. Queued behind the switch on the dispatcher, a
+    // lookup from an engine of the next generation would wait for itself.
+    if (await NextGenerationAsync(name, handedOverToo: false, milliSecondsTimeOut, token).ConfigureAwait(false) is
+        { } rebuilding)
+      return await rebuilding.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, started), token)
+        .ConfigureAwait(false);
+
     IEngine engine;
     try
     {
-      await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      if (!StartedBeforeSwitch)
+        await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       started = TimeProvider.GetTimestamp();
       engine = milliSecondsTimeOut == Timeout.Infinite
         ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, token).ConfigureAwait(false)
