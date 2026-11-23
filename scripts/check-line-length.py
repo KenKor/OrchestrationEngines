@@ -134,6 +134,11 @@ def selftest():
     def file(path, hunk, *lines):
         return [f"diff --git a/{path} b/{path}", f"--- a/{path}", f"+++ b/{path}", hunk, *lines]
 
+    def expect(diff_text, expected, what):
+        actual = find_long_lines(diff_text)
+        if actual != expected:
+            sys.exit(f"check-line-length: selftest FAILED for {what}\n  expected {expected}\n  got      {actual}")
+
     diff = "\n".join(
         file("src/A.cs", "@@ -3,0 +4,3 @@",
              "+" + long_line,                         # line 4: 121 columns
@@ -160,15 +165,11 @@ def selftest():
                "+" + "z" * 130)                       # ... so this is new here
         + file("docs/sub/Deep.md", "@@ -0,0 +1 @@",
                "+" + long_line))                      # not directly in docs/
-    expected = [
+    expect(diff, [
         ("src/A.cs", 4, 121), ("tests/Deep/C.cs", 8, 122), ("tests/Deep/C.cs", 9, 123),
         ("tests/Deep/C.cs", 10, 125), ("src/With Space.cs", 2, 121), ("docs/Overview.md", 3, 121),
-        ("src/D.cs", 1, 130)]
-    actual = find_long_lines(diff)
-    if actual != expected:
-        sys.exit(f"check-line-length: selftest FAILED\n  expected {expected}\n  got      {actual}")
-    if find_long_lines("\n".join(file("src/A.cs", "@@ -1 +1 @@", "-a", "+b"))):
-        sys.exit("check-line-length: selftest FAILED: a short line was reported")
+        ("src/D.cs", 1, 130)], "a diff")
+    expect("\n".join(file("src/A.cs", "@@ -1 +1 @@", "-a", "+b")), [], "a short line")
 
     # New files that git does not track yet: the diff that adds them whole.
     untracked = "\n".join([
@@ -178,11 +179,8 @@ def selftest():
         added_file_diff("src/Empty.cs", ""),                               # nothing to add
         added_file_diff("src/sp ace/New.cs", long_line + "\n"),            # a path with a space
         added_file_diff("notes.txt", long_line + "\n")])                   # not a checked file
-    expected = [("src/NoEol.cs", 2, 121), ("src/Blank.cs", 1, 121), ("src/Crlf.cs", 2, 121),
-                ("src/sp ace/New.cs", 1, 121)]
-    actual = find_long_lines(untracked)
-    if actual != expected:
-        sys.exit(f"check-line-length: selftest FAILED for new files\n  expected {expected}\n  got      {actual}")
+    expect(untracked, [("src/NoEol.cs", 2, 121), ("src/Blank.cs", 1, 121), ("src/Crlf.cs", 2, 121),
+                       ("src/sp ace/New.cs", 1, 121)], "new files")
     print("check-line-length: selftest passed")
 
 
