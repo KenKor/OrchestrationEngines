@@ -19,8 +19,11 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <!-- On by default only for net5.0 and later; set here so the netstandard2.0 and net48 builds are checked too. -->
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <!-- A new security advisory on a package stays a warning: it must be seen, but not stop every build at once. -->
-    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+    <!-- A new security advisory on a package (NU1901 to NU1904) stays a warning: it must be seen, but not stop every
+         build at once. So does NU1900, advisory data that could not be fetched (a network failure or bad data at the
+         package source): an outage there must not turn every build red without a code change. NU1905, an audit source
+         that offers no advisory data, stays an error: that is a mistake in our configuration. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
