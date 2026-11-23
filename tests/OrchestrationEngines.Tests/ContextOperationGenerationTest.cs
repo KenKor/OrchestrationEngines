@@ -14,7 +14,8 @@ namespace OrchestrationEngines.Tests;
 /// <summary>
 /// Contains tests for context operations (an invalidation or a refresh) on a coordinator that a generation switch
 /// replaced, which hand off to the newer generation (#86, item 1), or during a switch that rebuilds the engine from
-/// scratch, before it hands over, which wait for the next generation and act there (#123).
+/// scratch (#123) or hands it over to its restart factory (#145), before it hands over, which wait for the next
+/// generation and act there.
 /// </summary>
 public class ContextOperationGenerationTest
 {
@@ -151,35 +152,42 @@ public class ContextOperationGenerationTest
 
   /// <summary>
   /// A generation switch held after its next generation has started, before it hands over: engine A is rebuilt from
-  /// scratch and Ready in the next generation, while engine B, rebuilt too, still loads there.
+  /// scratch (or, with <c>handOverA</c>, handed over and made by its restart factory) and Ready in the next generation,
+  /// while engine B, rebuilt from scratch, still loads there.
   /// </summary>
   private sealed class HeldSwitch
   {
     private readonly List<LoadEngine> _instancesOfA = [];
     private readonly TaskCompletionSource _nextBLoad = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly bool _handOverA;
     private int _instancesOfB;
 
     public EngineCoordinator Coordinator { get; }
 
     public Task<EngineCoordinator> Switch { get; private set; }
 
-    public HeldSwitch()
+    public HeldSwitch(bool handOverA = false)
     {
+      _handOverA = handOverA;
       Coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance,
         useDispatcher: false);
-      Coordinator.RegisterEngine("A", _ =>
-        {
-          var engine = new LoadEngine();
-          lock (_instancesOfA)
-            _instancesOfA.Add(engine);
-          return Task.FromResult<IEngine>(engine);
-        })
+      var a = Coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(NewA()))
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
         .WithoutRestarts();
+      if (handOverA)
+        a.SetRestartFactory((_, _) => Task.FromResult<IEngine>(NewA()));
       Coordinator.RegisterEngine("B", _ => Task.FromResult<IEngine>(
           new LoadEngine(() => Interlocked.Increment(ref _instancesOfB) == 1 ? Task.CompletedTask : _nextBLoad.Task)))
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
         .WithoutRestarts();
+    }
+
+    private LoadEngine NewA()
+    {
+      var engine = new LoadEngine();
+      lock (_instancesOfA)
+        _instancesOfA.Add(engine);
+      return engine;
     }
 
     public LoadEngine PreviousA => InstanceOfA(0);
@@ -199,7 +207,9 @@ public class ContextOperationGenerationTest
         waitUntilReady: true, ct), ct);
       await Wait.UntilAsync(() => NextA?.State == EngineState.Ready, MustComplete,
         "the next generation's A is Ready");
-      PreviousA.State.Should().Be(EngineState.Stopped, "the switch stopped the previous A before it started the next");
+      PreviousA.State.Should().Be(_handOverA ? EngineState.Ready : EngineState.Stopped, _handOverA
+        ? "the previous A runs until the switch hands over"
+        : "the switch stopped the previous A before it started the next");
       Switch.IsCompleted.Should().BeFalse("the switch waits for the next generation's B");
     }
 
@@ -232,6 +242,69 @@ public class ContextOperationGenerationTest
   }
 
   /// <summary>
+  /// Verifies that an invalidation that arrives during a switch, before it hands over, of an engine the switch hands
+  /// over to its restart factory, invalidates the next generation's engine: the previous one, which the hand-over shuts
+  /// down, is not loaded again (#145).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_BeforeHandoverWithRestartFactory_InvalidatesTheNextGeneration()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var held = new HeldSwitch(handOverA: true);
+    await held.StartAndHoldAsync(ct);
+    var previousLoads = held.PreviousA.Loads;
+
+    await held.Coordinator.InvalidateContextForEngineAsync("A", ct).WaitAsync(MustComplete, ct);
+
+    await Wait.UntilAsync(() => held.NextA.Loads == 2, MustComplete, "the next generation's A loads again");
+    held.PreviousA.Loads.Should().Be(previousLoads, "the previous A is not loaded again");
+    var next = await held.ReleaseAsync(ct);
+    held.PreviousA.State.Should().Be(EngineState.Stopped, "the hand-over shut the previous generation down");
+    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a refresh that arrives during a switch, before it hands over, of an engine the switch hands over to
+  /// its restart factory, gives the context to the next generation's engine (#145).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_RefreshEngineContext_BeforeHandoverWithRestartFactory_RefreshesTheNextGeneration()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var held = new HeldSwitch(handOverA: true);
+    await held.StartAndHoldAsync(ct);
+    var context = new NoContext();
+
+    await held.Coordinator.RefreshEngineContextAsync("A", context, ct).WaitAsync(MustComplete, ct);
+
+    held.NextA.Context.Should().BeSameAs(context, "the next generation's A receives the context");
+    held.PreviousA.Context.Should().NotBeSameAs(context);
+    var next = await held.ReleaseAsync(ct);
+    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a task reset that arrives during a switch, before it hands over, of an engine the switch hands over
+  /// to its restart factory, resets the next generation's engine: the previous one does not load again (#145).
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngine_BeforeHandoverWithRestartFactory_ResetsTheNextGeneration()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var held = new HeldSwitch(handOverA: true);
+    await held.StartAndHoldAsync(ct);
+    var previousLoads = held.PreviousA.Loads;
+
+    await held.Coordinator.ResetTasksForEngineAsync("A", ["Load"], resetDependentTasks: false, ct)
+      .WaitAsync(MustComplete, ct);
+
+    await Wait.UntilAsync(() => held.NextA.Loads == 2, MustComplete, "the next generation's A loads again");
+    held.PreviousA.Loads.Should().Be(previousLoads, "the previous A is not loaded again");
+    var next = await held.ReleaseAsync(ct);
+    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
   /// Verifies that a refresh that arrives while a switch rebuilds its engine, before the switch hands over, gives the
   /// context to the next generation's engine.
   /// </summary>
@@ -252,20 +325,29 @@ public class ContextOperationGenerationTest
   }
 
   /// <summary>
-  /// Verifies that a refresh that arrives while a switch rebuilds its engine, and waits for the next generation, is not
-  /// left waiting when the switch fails before it starts that generation: this generation answers, as without the
-  /// switch.
+  /// Verifies that a refresh that arrives while a switch waits for the next generation is not left waiting when the
+  /// switch fails before it starts that generation: this generation answers, as without the switch. The refreshed
+  /// engine is the one the switch rebuilds from scratch, or, with <paramref name="handedOver"/>, one it hands over to
+  /// its restart factory (#145).
   /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_RefreshEngineContext_DuringSwitchThatDoesNotStart_RefreshesThisGeneration()
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task EngineCoordinator_RefreshEngineContext_DuringSwitchThatDoesNotStart_RefreshesThisGeneration(
+    bool handedOver)
   {
     var ct = TestContext.Current.CancellationToken;
     var failure = new InvalidOperationException("The stop failed.");
     var engine = new StopFailingEngine(failure, holdStop: true);
+    var handedOverA = new LoadEngine();
     var coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance,
       useDispatcher: false);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
+    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(handedOverA))
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .SetRestartFactory((_, _) => Task.FromResult<IEngine>(new LoadEngine()))
       .WithoutRestarts();
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var @switch = Task.Run(() => coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
@@ -273,7 +355,7 @@ public class ContextOperationGenerationTest
     await engine.Stopping.Task.WaitAsync(MustComplete, ct);
     var context = new NoContext();
 
-    var refresh = Task.Run(() => coordinator.RefreshEngineContextAsync(Name, context, ct), ct);
+    var refresh = Task.Run(() => coordinator.RefreshEngineContextAsync(handedOver ? "A" : Name, context, ct), ct);
     await Task.Delay(MustStayPending, ct);
     var pendingWhileStopping = !refresh.IsCompleted;
     engine.ReleaseStop.SetResult();
@@ -281,7 +363,8 @@ public class ContextOperationGenerationTest
     pendingWhileStopping.Should().BeTrue("the refresh waits for the switch's next generation");
     (await Record.ExceptionAsync(() => @switch.WaitAsync(MustComplete, ct))).Should().BeSameAs(failure);
     await refresh.WaitAsync(MustComplete, ct);
-    engine.Context.Should().BeSameAs(context, "the switch did not start the next generation: this one answers");
+    (handedOver ? handedOverA.Context : engine.Context).Should()
+      .BeSameAs(context, "the switch did not start the next generation: this one answers");
     (await Record.ExceptionAsync(() => coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct)))
       .Should().BeSameAs(failure, "the shutdown stops the engine again, and its stop fails again");
   }
