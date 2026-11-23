@@ -38,8 +38,9 @@ jobs:
         shell: bash
         run: python scripts/check-line-length.py --base "origin/$BASE_REF"
 
-      # The newest SDK of the 10.0.1xx band, the band global.json allows. Not global-json-file: under latestPatch,
-      # setup-dotnet would install exactly the version global.json names (10.0.100), not the newest patch.
+      # The newest SDK of the 10.0.1xx band, the lowest band global.json allows (latestFeature takes any 10.0 band
+      # from 10.0.100 up), so CI tests the oldest SDK a contributor may build with. Not global-json-file: it would
+      # install exactly the version global.json names (10.0.100), not the newest patch.
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.1xx
