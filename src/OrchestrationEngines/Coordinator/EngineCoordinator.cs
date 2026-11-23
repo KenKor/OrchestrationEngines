@@ -629,16 +629,17 @@ public partial class EngineCoordinator : IDisposable
     // Until it hands over, the switch owns the next coordinator: a failure before then cleans it up, so that a switch
     // that fails (and one retried after it) leaves no coordinator behind, nor a next generation running next to this
     // one (#100). This generation stays current.
+    var pending = new SwitchBeforeHandover(rebuiltFromScratch, handovers.Select(h => h.Name));
     try
     {
       foreach (var runtimeDescriptor in runtimeDescriptors)
         nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
-      await StartNextGenerationAsync(nextCoordinator, mechanic, rebuiltFromScratch, handovers, waitUntilReady, token)
-        .ConfigureAwait(false);
+      await StartNextGenerationAsync(nextCoordinator, mechanic, pending, rebuiltFromScratch, handovers, waitUntilReady,
+        token).ConfigureAwait(false);
     }
     catch (Exception ex)
     {
-      await CleanUpNextGenerationAsync(nextCoordinator, ex.GetType().Name).ConfigureAwait(false);
+      await CleanUpNextGenerationAsync(nextCoordinator, pending, ex.GetType().Name).ConfigureAwait(false);
       throw;
     }
 
@@ -652,7 +653,8 @@ public partial class EngineCoordinator : IDisposable
       // Another switch on this coordinator handed over first (without the dispatcher, switches are not queued): one
       // generation runs in a lineage, so this one is cleaned up, and the switch goes to the current generation.
       nextCoordinator._lineage = new Lineage(nextCoordinator);
-      await CleanUpNextGenerationAsync(nextCoordinator, "another switch handed over first").ConfigureAwait(false);
+      await CleanUpNextGenerationAsync(nextCoordinator, pending, "another switch handed over first")
+        .ConfigureAwait(false);
       return null;
     }
     try
@@ -675,14 +677,13 @@ public partial class EngineCoordinator : IDisposable
   /// from scratch, starts the next coordinator, and waits until it is ready if asked to.
   /// </summary>
   private async Task StartNextGenerationAsync(EngineCoordinator nextCoordinator, MechanicEngine mechanic,
-    List<string> rebuiltFromScratch, List<(string Name, Handover Handover)> handovers, bool waitUntilReady,
-    CancellationToken token)
+    SwitchBeforeHandover pending, List<string> rebuiltFromScratch, List<(string Name, Handover Handover)> handovers,
+    bool waitUntilReady, CancellationToken token)
   {
     // Fix (#145): mark every switch, not only one that rebuilds engines, so that a context operation on an engine
     // handed over to its restart factory also waits for the next generation and goes there (see ForEngineAsync). On
     // this generation it was lost: the next engine is made from the previous one, maybe before the reload ended, and
     // the previous one is shut down at the hand-over.
-    var pending = new SwitchBeforeHandover(rebuiltFromScratch, handovers.Select(h => h.Name));
     Volatile.Write(ref _switchBeforeHandover, pending);
     try
     {
@@ -723,10 +724,12 @@ public partial class EngineCoordinator : IDisposable
   /// Calls for an engine of the switch are no longer sent to the next generation (see
   /// NextGenerationAsync), and those sent to it already give null: the engine stopped, and nothing replaced it.
   /// </remarks>
-  private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, string reason)
+  private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, SwitchBeforeHandover pending,
+    string reason)
   {
-    // The record this switch set: no other generation answers for its engines now.
-    Volatile.Write(ref _switchBeforeHandover, null);
+    // The record this switch set: no other generation answers for its engines now. Only its own: a switch that
+    // started since (without the dispatcher, switches are not queued) keeps its record.
+    Interlocked.CompareExchange(ref _switchBeforeHandover, null, pending);
     nextCoordinator._abandoned = true;
     try
     {
@@ -751,11 +754,15 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   private sealed class SwitchBeforeHandover(IEnumerable<string> rebuilt, IEnumerable<string> handedOver)
   {
-    /// <summary>The engines the switch rebuilds from scratch: lookups of them wait for the next generation.</summary>
-    public HashSet<string> Rebuilt { get; } = new(rebuilt, StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _rebuilt = new(rebuilt, StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _handedOver = new(handedOver, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The engines the switch hands over to their restart factories.</summary>
-    public HashSet<string> HandedOver { get; } = new(handedOver, StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Whether the next generation answers for <paramref name="name"/>: an engine the switch rebuilds from scratch, or,
+    /// with <paramref name="handedOverToo"/>, one it hands over to its restart factory.
+    /// </summary>
+    public bool Answers(string name, bool handedOverToo) =>
+      _rebuilt.Contains(name) || (handedOverToo && _handedOver.Contains(name));
 
     public TaskCompletionSource<EngineCoordinator> Next { get; } =
       new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1169,8 +1176,9 @@ public partial class EngineCoordinator : IDisposable
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation. Fix
     // (ContextOperationGenerationTest): so does a switch that rebuilds this engine from scratch, which stops it before it
     // hands over. A call on this generation would then throw, be lost on the stopped engine, or start it again: wait for
-    // the next generation and ask it, as the catch below does for a call the stop interrupts. If it did not start, this
-    // generation answers.
+    // the next generation and ask it, as the catch below does for a call the stop interrupts. With handedOverToo, also
+    // for an engine the switch hands over (#145): the call would be lost on the previous engine, which the hand-over
+    // shuts down. If the next generation did not start, this generation answers.
     if (await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false) is
         { } nextGeneration)
     {
@@ -1189,7 +1197,8 @@ public partial class EngineCoordinator : IDisposable
     catch (Exception ex) when (ex is OperationCanceledException or EngineTaskNotReadyException { State: EngineTaskState.Cancelled }
       && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _switchBeforeHandover) != null))
     {
-      // A generation switch while waiting stopped this generation's engines: ask the next one, if it has the engine.
+      // A generation switch while waiting (it stopped this generation's engines, or has this engine): ask the next one,
+      // if it has the engine.
       var next = await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false);
       if (next == null)
         throw;
@@ -1249,9 +1258,9 @@ public partial class EngineCoordinator : IDisposable
     if (Successor is { } successor)
       return successor;
     // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
-    // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
-    if (Volatile.Read(ref _switchBeforeHandover) is not { } pending
-        || !(pending.Rebuilt.Contains(name) || (handedOverToo && pending.HandedOver.Contains(name))))
+    // generation started, and before it hands over (Successor); with handedOverToo, also a switch that hands it over
+    // (#145). Wait for the next generation to start, and ask it.
+    if (Volatile.Read(ref _switchBeforeHandover) is not { } pending || !pending.Answers(name, handedOverToo))
       return null;
     if (milliSecondsTimeOut == Timeout.Infinite)
       return await pending.Next.Task.WaitObservedAsync(token).ConfigureAwait(false);
