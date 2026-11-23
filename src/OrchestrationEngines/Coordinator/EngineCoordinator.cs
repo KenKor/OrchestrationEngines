@@ -44,9 +44,10 @@ public partial class EngineCoordinator : IDisposable
   // Invariant: no awaits occur while holding this lock.
   private readonly Lock _sync = new();
 
-  // The engines a running generation switch stopped early, as it rebuilds them from scratch, with the next generation
-  // once it has started (null if it did not start); null when no such switch runs. See NextGenerationAsync.
-  private RebuildingSwitch _rebuildingSwitch;
+  // A running generation switch, from before it starts the next generation until it hands over: its engines, those it
+  // rebuilds from scratch (stopped early) among them, with the next generation once it has started (null if it did not
+  // start); null when no switch runs. See NextGenerationAsync.
+  private SwitchBeforeHandover _switchBeforeHandover;
 
   // The context operations (invalidations and refreshes) in flight, under _sync. While one is in flight, only the last
   // one to end may bring the coordinator back to Running (see EndContextOperation).
@@ -677,32 +678,34 @@ public partial class EngineCoordinator : IDisposable
     List<string> rebuiltFromScratch, List<(string Name, Handover Handover)> handovers, bool waitUntilReady,
     CancellationToken token)
   {
-    // Fix (RebuiltEngineSwitchTest): stop the engines that are rebuilt from scratch first, so that their data is
-    // released before their replacements load it again. Whatever their state, as the shutdown below does: a Faulted
-    // engine's kick-start would otherwise go on recovering it. A lookup that sees one of them stop waits for the next
-    // generation to start and asks it (see GetEngineWhenReadyAsync), as the lookups do once the switch hands over.
-    RebuildingSwitch rebuilding = null;
+    // Fix (#145): mark every switch, not only one that rebuilds engines, so that a context operation on an engine
+    // handed over to its restart factory also waits for the next generation and goes there (see ForEngineAsync). On
+    // this generation it was lost: the next engine is made from the previous one, maybe before the reload ended, and
+    // the previous one is shut down at the hand-over.
+    var pending = new SwitchBeforeHandover(rebuiltFromScratch, handovers.Select(h => h.Name));
+    Volatile.Write(ref _switchBeforeHandover, pending);
     try
     {
+      // Fix (RebuiltEngineSwitchTest): stop the engines that are rebuilt from scratch first, so that their data is
+      // released before their replacements load it again. Whatever their state, as the shutdown below does: a Faulted
+      // engine's kick-start would otherwise go on recovering it. A lookup that sees one of them stop waits for the next
+      // generation to start and asks it (see GetEngineWhenReadyAsync), as the lookups do once the switch hands over.
       if (rebuiltFromScratch.Count > 0)
       {
-        rebuilding = new RebuildingSwitch(rebuiltFromScratch);
-        Volatile.Write(ref _rebuildingSwitch, rebuilding);
         // Dependents first, through the engines handed over too (see MechanicEngine.StopEnginesAsync). A failure counts
         // as stopped and the first is rethrown once all have stopped: the next generation does not start. The engines
         // are looked up by name when they are stopped, so one that a kick-start re-created since the copy above is the
         // one stopped (the one it replaced has ended already).
         await mechanic.StopEnginesAsync(rebuiltFromScratch).ConfigureAwait(false);
       }
-      rebuiltFromScratch = null;
 
       await nextCoordinator.StartAsync().ConfigureAwait(false);
-      rebuilding?.Next.TrySetResult(nextCoordinator);
+      pending.Next.TrySetResult(nextCoordinator);
     }
     finally
     {
-      // The next generation did not start: the waiting lookups give null.
-      rebuilding?.Next.TrySetResult(null);
+      // The next generation did not start: the waiting calls give null, and this generation answers them.
+      pending.Next.TrySetResult(null);
     }
     // Not awaited: it ends when the next generation's engines have started or given up, long after a switch that does not
     // wait until they are ready.
@@ -717,13 +720,13 @@ public partial class EngineCoordinator : IDisposable
   /// it otherwise. A failure of the clean-up is logged, so that it does not change what the switch returns or throws.
   /// </summary>
   /// <remarks>
-  /// Lookups of an engine the switch rebuilds from scratch are no longer sent to the next generation (see
+  /// Calls for an engine of the switch are no longer sent to the next generation (see
   /// NextGenerationAsync), and those sent to it already give null: the engine stopped, and nothing replaced it.
   /// </remarks>
   private async Task CleanUpNextGenerationAsync(EngineCoordinator nextCoordinator, string reason)
   {
-    // The record this switch set, if it rebuilds engines: no generation answers for them now.
-    Volatile.Write(ref _rebuildingSwitch, null);
+    // The record this switch set: no other generation answers for its engines now.
+    Volatile.Write(ref _switchBeforeHandover, null);
     nextCoordinator._abandoned = true;
     try
     {
@@ -742,12 +745,17 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// The engines a generation switch stopped before the next generation started, as it rebuilds them from scratch, and
-  /// that next generation once it has started (null if it did not start).
+  /// A generation switch before it hands over: the engines it rebuilds from scratch (stopped before the next generation
+  /// started), those it hands over to their restart factories, and that next generation once it has started (null if
+  /// it did not start).
   /// </summary>
-  private sealed class RebuildingSwitch(IEnumerable<string> names)
+  private sealed class SwitchBeforeHandover(IEnumerable<string> rebuilt, IEnumerable<string> handedOver)
   {
-    public HashSet<string> Names { get; } = new(names, StringComparer.OrdinalIgnoreCase);
+    /// <summary>The engines the switch rebuilds from scratch: lookups of them wait for the next generation.</summary>
+    public HashSet<string> Rebuilt { get; } = new(rebuilt, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The engines the switch hands over to their restart factories.</summary>
+    public HashSet<string> HandedOver { get; } = new(handedOver, StringComparer.OrdinalIgnoreCase);
 
     public TaskCompletionSource<EngineCoordinator> Next { get; } =
       new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1138,26 +1146,33 @@ public partial class EngineCoordinator : IDisposable
     await ForEngineAsync(engineName,
       generation => generation.EnsureEngineTaskReadyAsync(engineName, taskName, token),
       () => Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token),
-      token).ConfigureAwait(false);
+      token, handedOverToo: false).ConfigureAwait(false);
   }
 
   /// <summary>
   /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
   /// <paramref name="onGeneration"/> on the next generation once this one was replaced, or once a switch that rebuilds
-  /// the engine from scratch has started it, else on this one, started if needed and <paramref name="start"/> is set. A
+  /// the engine from scratch (or, with <paramref name="handedOverToo"/>, hands it over) has started it, else on this
+  /// one, started if needed and <paramref name="start"/> is set. A
   /// generation switch during the call that ends it with a cancellation or a Cancelled task (its engine stopped) is
   /// answered by the next generation, if it has the engine; a call that completes on this generation before the switch
   /// hands over is not repeated there.
   /// </summary>
+  /// <remarks>
+  /// <paramref name="handedOverToo"/> is set for the operations that change the engine (an invalidation, a refresh, a
+  /// task reset), which would be lost on the previous engine (#145); not for a wait, which the previous engine, still
+  /// running, answers.
+  /// </remarks>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
-    CancellationToken token, bool start = true)
+    CancellationToken token, bool start = true, bool handedOverToo = true)
   {
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation. Fix
     // (ContextOperationGenerationTest): so does a switch that rebuilds this engine from scratch, which stops it before it
     // hands over. A call on this generation would then throw, be lost on the stopped engine, or start it again: wait for
     // the next generation and ask it, as the catch below does for a call the stop interrupts. If it did not start, this
     // generation answers.
-    if (await NextGenerationAsync(engineName, Timeout.Infinite, token).ConfigureAwait(false) is { } nextGeneration)
+    if (await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false) is
+        { } nextGeneration)
     {
       await onGeneration(nextGeneration).ConfigureAwait(false);
       return;
@@ -1172,10 +1187,10 @@ public partial class EngineCoordinator : IDisposable
     // Pre-check the switch in the filter, so an exception with no switch behind it is not caught; NextGenerationAsync
     // confirms it.
     catch (Exception ex) when (ex is OperationCanceledException or EngineTaskNotReadyException { State: EngineTaskState.Cancelled }
-      && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _rebuildingSwitch) != null))
+      && !token.IsCancellationRequested && (Successor != null || Volatile.Read(ref _switchBeforeHandover) != null))
     {
       // A generation switch while waiting stopped this generation's engines: ask the next one, if it has the engine.
-      var next = await NextGenerationAsync(engineName, Timeout.Infinite, token).ConfigureAwait(false);
+      var next = await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false);
       if (next == null)
         throw;
       await onGeneration(next).ConfigureAwait(false);
@@ -1195,8 +1210,11 @@ public partial class EngineCoordinator : IDisposable
   /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
   /// <remarks>
   /// A generation switch during the wait is answered by the next generation, which resets its engine, as with
-  /// <see cref="EnsureEngineTaskReadyAsync"/>. The wait for the engine to start lasts until it is Ready or its start
-  /// has failed (see <see cref="MechanicEngine.ResetEngineTasksAsync"/>). A task that hangs during the engine's first
+  /// <see cref="EnsureEngineTaskReadyAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
+  /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
+  /// generation and goes there, as with <see cref="InvalidateContextForEngineAsync(string, CancellationToken)"/>. The
+  /// wait for the engine to start lasts until it is Ready or its start has failed (see
+  /// <see cref="MechanicEngine.ResetEngineTasksAsync"/>). A task that hangs during the engine's first
   /// start can be reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>,
   /// then <see cref="BaseEngine.ResetTasksAsync"/>), or its run bounded with the task's <see cref="EngineTask.Timeout"/>.
   /// </remarks>
@@ -1221,24 +1239,26 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// The generation that answers for <paramref name="name"/> once this one was replaced: the one it handed over to, or
-  /// the next one of a switch that rebuilds the engine (once it has started). Null if there is none, or if that next
-  /// generation has not started within <paramref name="milliSecondsTimeOut"/>.
+  /// the next one of a switch that rebuilds the engine (or, with <paramref name="handedOverToo"/>, hands it over), once
+  /// it has started. Null if there is none, or if that next generation has not started within
+  /// <paramref name="milliSecondsTimeOut"/>.
   /// </summary>
   private async Task<EngineCoordinator> NextGenerationAsync(
-    string name, int milliSecondsTimeOut, CancellationToken token)
+    string name, bool handedOverToo, int milliSecondsTimeOut, CancellationToken token)
   {
     if (Successor is { } successor)
       return successor;
     // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
     // generation started, and before it hands over (Successor). Wait for the next generation to start, and ask it.
-    if (Volatile.Read(ref _rebuildingSwitch) is not { } rebuilding || !rebuilding.Names.Contains(name))
+    if (Volatile.Read(ref _switchBeforeHandover) is not { } pending
+        || !(pending.Rebuilt.Contains(name) || (handedOverToo && pending.HandedOver.Contains(name))))
       return null;
     if (milliSecondsTimeOut == Timeout.Infinite)
-      return await rebuilding.Next.Task.WaitObservedAsync(token).ConfigureAwait(false);
+      return await pending.Next.Task.WaitObservedAsync(token).ConfigureAwait(false);
 
     // A timed lookup waits for it no longer than its time left (#156): stopping the rebuilt engines can take long.
     return await TimeProvider.WithinOrDefaultAsync(TimeSpan.FromMilliseconds(milliSecondsTimeOut), token,
-      wait => rebuilding.Next.Task.WaitObservedAsync(wait)).ConfigureAwait(false);
+      wait => pending.Next.Task.WaitObservedAsync(wait)).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1340,8 +1360,9 @@ public partial class EngineCoordinator : IDisposable
   /// This forces re-initialization of the affected engine and its dependents. It does not start a coordinator that has
   /// not started. On a coordinator that a generation switch has replaced (once it has handed over, see
   /// <see cref="Successor"/>), the newer generation invalidates its engine, as with
-  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch that rebuilds the engine from scratch
-  /// runs, before it hands over, waits until the switch has started the next generation and goes there too.
+  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
+  /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
+  /// generation and goes there too.
   /// </remarks>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
   /// generation, once this coordinator was replaced).</exception>
@@ -1404,8 +1425,9 @@ public partial class EngineCoordinator : IDisposable
   /// has already determined that a full engine restart is not required. It does not start a coordinator that has not
   /// started. On a coordinator that a generation switch has replaced (once it has handed over, see
   /// <see cref="Successor"/>), the context goes to the newer generation's engine, as with
-  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives while a switch that rebuilds the engine from scratch
-  /// runs, before it hands over, waits until the switch has started the next generation and goes there too.
+  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
+  /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
+  /// generation and goes there too.
   /// </remarks>
   /// <exception cref="ArgumentNullException"><paramref name="context"/> is null.</exception>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
@@ -1577,7 +1599,8 @@ public partial class EngineCoordinator : IDisposable
     // NextGenerationAsync). An engine that the switch released is not found there, and gives null.
     if (engine != null)
       return engine;
-    var next = await NextGenerationAsync(name, TimeLeft(milliSecondsTimeOut, started), token).ConfigureAwait(false);
+    var next = await NextGenerationAsync(name, handedOverToo: false, TimeLeft(milliSecondsTimeOut, started), token)
+      .ConfigureAwait(false);
     return next == null
       ? null
       : await next.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, started), token)
