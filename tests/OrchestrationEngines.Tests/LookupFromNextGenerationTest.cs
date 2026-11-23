@@ -16,18 +16,23 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class LookupFromNextGenerationTest
 {
-  /// <summary>An engine whose one load task runs <paramref name="load"/>, or ends at once without it.</summary>
-  private sealed class LoadEngine(Func<CancellationToken, Task> load = null) : BaseEngine(NullLogger.Instance)
-  {
-    protected override void SetUpTasks() => CreateTask("Load", load ?? (_ => Task.CompletedTask));
-  }
+  /// <summary>
+  /// A required descriptor named <paramref name="name"/> whose engine's load task runs <paramref name="load"/>, or ends
+  /// at once without it.
+  /// </summary>
+  private static EngineDescriptor Descriptor(string name, Func<CancellationToken, Task> load = null) =>
+    new EngineDescriptor(name, _ => Task.FromResult<IEngine>(load == null
+        ? SwitchTestEngines.Quick()
+        : new SwitchTestEngines.NetworkEngine(load)), requiredForRunning: true, 1)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
 
   /// <summary>
   /// Verifies that a switch that waits until ready completes when an engine of the next generation, while it loads,
   /// looks up another engine through the coordinator the host holds: with the dispatcher on, that lookup must not
-  /// wait behind the switch on the replaced generation's dispatcher. Engine A is rebuilt from scratch: the lookup gets
-  /// the next generation's A. Or, with <paramref name="handOverA"/>, A is handed over to its restart factory: as any
-  /// lookup before the hand-over, it gets the previous A, which still runs then. With <paramref name="waitForTask"/>,
+  /// wait behind the switch on the replaced generation's dispatcher. It gets the next generation's A, whether A is
+  /// rebuilt from scratch or, with <paramref name="handOverA"/>, handed over to its restart factory. With
+  /// <paramref name="waitForTask"/>,
   /// B waits for A's task through <see cref="EngineCoordinator.EnsureEngineTaskReadyAsync"/> before the lookup.
   /// </summary>
   [Theory]
@@ -43,31 +48,26 @@ public class LookupFromNextGenerationTest
     IEngine foundByNextB = null;
     var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
       useDispatcher: true);
-    var a = coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new LoadEngine()))
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
+    var a = Descriptor("A");
     if (handOverA)
-      a.SetRestartFactory((_, _) => Task.FromResult<IEngine>(new LoadEngine()));
-    coordinator.RegisterEngine("B", _ => Task.FromResult<IEngine>(new LoadEngine(async token =>
-      {
-        if (waitForTask)
-          await coordinator.EnsureEngineTaskReadyAsync("A", "Load", token).ConfigureAwait(false);
-        var found = await coordinator.GetEngineAsync("A", token).ConfigureAwait(false);
-        if (Interlocked.Increment(ref lookups) > 1)
-          Volatile.Write(ref foundByNextB, found);
-      })))
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
+      a.SetRestartFactory((_, _) => Task.FromResult<IEngine>(SwitchTestEngines.Quick()));
+    coordinator.RegisterEngineDescriptor(a);
+    coordinator.RegisterEngineDescriptor(Descriptor("B", async token =>
+    {
+      if (waitForTask)
+        await coordinator.EnsureEngineTaskReadyAsync("A", "Load", token).ConfigureAwait(false);
+      var found = await coordinator.GetEngineAsync("A", token).ConfigureAwait(false);
+      if (Interlocked.Increment(ref lookups) > 1)
+        Volatile.Write(ref foundByNextB, found);
+    }));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var previousA = coordinator.GetEngineIfReady("A");
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
       waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
 
     next.Should().NotBeNull().And.NotBeSameAs(coordinator);
-    var expected = handOverA ? previousA : next.GetEngineIfReady("A");
-    Volatile.Read(ref foundByNextB).Should().NotBeNull().And.BeSameAs(expected,
-      "a lookup before the hand-over gets the engine that runs then");
+    Volatile.Read(ref foundByNextB).Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("A"),
+      "the next generation's B finds the next generation's A");
     await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 
@@ -82,13 +82,9 @@ public class LookupFromNextGenerationTest
     IEngine foundByB = null;
     var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
       useDispatcher: true);
-    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new LoadEngine()))
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
-    coordinator.RegisterEngine("B", _ => Task.FromResult<IEngine>(new LoadEngine(async token =>
-        Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("A", token).ConfigureAwait(false)))))
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
+    coordinator.RegisterEngineDescriptor(Descriptor("A"));
+    coordinator.RegisterEngineDescriptor(Descriptor("B", async token =>
+      Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("A", token).ConfigureAwait(false))));
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
       waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
@@ -111,24 +107,18 @@ public class LookupFromNextGenerationTest
     var releaseC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
       useDispatcher: true);
-    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new LoadEngine()))
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts();
+    coordinator.RegisterEngineDescriptor(Descriptor("A"));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var definitions = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions());
-    definitions.Add(new EngineDescriptor("B", _ => Task.FromResult<IEngine>(new LoadEngine(async token =>
-          Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("C", token).ConfigureAwait(false)))),
-        requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts());
-    definitions.Add(new EngineDescriptor("C", _ => Task.FromResult<IEngine>(new LoadEngine(async token =>
-        {
-          cLoading.TrySetResult();
-          await releaseC.Task.WaitAsync(token).ConfigureAwait(false);
-        })),
-        requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts());
+    var definitions = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions())
+    {
+      Descriptor("B", async token =>
+        Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("C", token).ConfigureAwait(false))),
+      Descriptor("C", async token =>
+      {
+        cLoading.TrySetResult();
+        await releaseC.Task.WaitAsync(token).ConfigureAwait(false);
+      }),
+    };
 
     var @switch = coordinator.RestartWithDefinitionsAsync(definitions, waitUntilReady: true, ct);
     await cLoading.Task.WaitAsync(MustComplete, ct);
@@ -139,6 +129,47 @@ public class LookupFromNextGenerationTest
     var foundByHost = await hostLookup.WaitAsync(MustComplete, ct);
     foundByHost.Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("C"));
     Volatile.Read(ref foundByB).Should().BeSameAs(foundByHost);
+    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a lookup from outside an engine, during a switch that waits until ready, gets what it got when it
+  /// waited for the switch to end: the next generation's engine for one the switch hands over (not the previous one,
+  /// which the hand-over stops), and null for one the switch leaves out.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_HostLookupDuringSwitch_GetsTheNextGenerationsEngineOrNull()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var cLoading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
+      useDispatcher: true);
+    var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(SwitchTestEngines.Quick()));
+    coordinator.RegisterEngineDescriptor(a);
+    coordinator.RegisterEngineDescriptor(Descriptor("Removed"));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var definitions = new List<EngineDescriptor>
+    {
+      a,
+      Descriptor("C", async token =>
+      {
+        cLoading.TrySetResult();
+        await releaseC.Task.WaitAsync(token).ConfigureAwait(false);
+      }),
+    };
+
+    var @switch = coordinator.RestartWithDefinitionsAsync(definitions, waitUntilReady: true, ct);
+    await cLoading.Task.WaitAsync(MustComplete, ct);
+    var lookupA = coordinator.GetEngineAsync("A", false, ct);
+    var lookupRemoved = coordinator.GetEngineAsync("Removed", false, ct);
+    releaseC.SetResult();
+    var next = await @switch.WaitAsync(MustComplete, ct);
+
+    var foundA = await lookupA.WaitAsync(MustComplete, ct);
+    foundA.Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("A"));
+    foundA.State.Should().Be(EngineState.Ready);
+    (await lookupRemoved.WaitAsync(MustComplete, ct)).Should().BeNull();
     await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }

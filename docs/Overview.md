@@ -435,9 +435,10 @@ after about 25 seconds and six attempts. An engine factory or restart factory th
 the same way, with an `InvalidOperationException` that names the engine. A host that needs a failed load to fault for
 good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation switch that
 waits until the next generation is ready keeps the previous generation (and the engine handed over) until the retries
-have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, a context refresh,
-another switch, and the lookups and readiness waits that start the coordinator: `GetEngineAsync`, `EnsureReadyAsync` and
-`EnsureEngineTaskReadyAsync`) wait as well.
+have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, another switch,
+`EnsureReadyAsync`) wait as well. A lookup, a task wait or a context operation for an engine (`GetEngineAsync`,
+`EnsureEngineTaskReadyAsync`, a refresh or invalidation) does not queue behind the switch: it waits for the next
+generation to start and is answered there, so an engine of the next generation can make one from its own tasks.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
@@ -541,7 +542,8 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   cancelled, so no kick-start or recovery goes on in it.
 - All generations of a coordinator share a lineage that knows the current one (`Successor`). A lookup on a replaced
   coordinator, also one that was already waiting, is answered by the current coordinator; an engine that the switch
-  left out gives null.
+  left out gives null. With the dispatcher on, so is a lookup during the switch, once its next generation has started;
+  if the switch fails before it hands over, the replaced coordinator answers.
 - A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One
   generation of a lineage runs at a time: of two switches on one coordinator, only the first to hand over replaces it.
   With the dispatcher on, the second waits for the first and then goes to the next generation (or, when the first
