@@ -105,20 +105,26 @@ def git(*args):
     return result.stdout
 
 
+def added_file_diff(path, text):
+    """A diff that adds the file <path> with the content <text> whole; empty for an empty file."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    if not lines:
+        return ""
+    return "\n".join(
+        [f"diff --git a/{path} b/{path}", "--- /dev/null", f"+++ b/{path}", f"@@ -0,0 +1,{len(lines)} @@"]
+        + ["+" + line for line in lines])
+
+
 def untracked_as_diff():
     """The checked files that git does not track yet (and does not ignore), as a diff that adds them whole."""
-    parts = []
     root = git("rev-parse", "--show-toplevel").strip()
+    parts = []
     for path in git("ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/").split("\0"):
-        if not path or not is_checked(path):
-            continue
-        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as f:
-            lines = f.read().split("\n")
-        if lines and lines[-1] == "":
-            lines.pop()
-        if lines:
-            parts += [f"diff --git a/{path} b/{path}", "--- /dev/null", f"+++ b/{path}", f"@@ -0,0 +1,{len(lines)} @@"]
-            parts += ["+" + line for line in lines]
+        if path and is_checked(path):
+            with open(os.path.join(root, path), encoding="utf-8", errors="replace", newline="") as f:
+                parts.append(added_file_diff(path, f.read()))
     return "\n".join(parts)
 
 
@@ -163,6 +169,20 @@ def selftest():
         sys.exit(f"check-line-length: selftest FAILED\n  expected {expected}\n  got      {actual}")
     if find_long_lines("\n".join(file("src/A.cs", "@@ -1 +1 @@", "-a", "+b"))):
         sys.exit("check-line-length: selftest FAILED: a short line was reported")
+
+    # New files that git does not track yet: the diff that adds them whole.
+    untracked = "\n".join([
+        added_file_diff("src/NoEol.cs", "a\n" + long_line),               # line 2, no final newline
+        added_file_diff("src/Blank.cs", long_line + "\n\n"),               # line 1, ends in a blank line
+        added_file_diff("src/Crlf.cs", "y" * 120 + "\r\n" + long_line + "\r\n"),  # 120 + CR is not over; line 2
+        added_file_diff("src/Empty.cs", ""),                               # nothing to add
+        added_file_diff("src/sp ace/New.cs", long_line + "\n"),            # a path with a space
+        added_file_diff("notes.txt", long_line + "\n")])                   # not a checked file
+    expected = [("src/NoEol.cs", 2, 121), ("src/Blank.cs", 1, 121), ("src/Crlf.cs", 2, 121),
+                ("src/sp ace/New.cs", 1, 121)]
+    actual = find_long_lines(untracked)
+    if actual != expected:
+        sys.exit(f"check-line-length: selftest FAILED for new files\n  expected {expected}\n  got      {actual}")
     print("check-line-length: selftest passed")
 
 
