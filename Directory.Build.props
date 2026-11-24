@@ -17,7 +17,6 @@
   <PropertyGroup>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <!-- On by default only for net5.0 and later; set here so the netstandard2.0 and net48 builds are checked too. -->
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <!-- A new security advisory on a package (NU1901 to NU1904) stays a warning: it must be seen, but not stop every
          build at once. So does NU1900, advisory data that could not be fetched (a network failure or bad data at the

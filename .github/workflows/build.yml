@@ -18,8 +18,7 @@ permissions:
 
 jobs:
   build:
-    # Windows, because the tests also run on .NET Framework 4.8.
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -51,12 +50,6 @@ jobs:
         run: >-
           bash scripts/gate.sh ${BASE_REF:+--base "origin/$BASE_REF"}
           -- --coverage --results-directory "${{ github.workspace }}/TestResults"
-
-      # The tests on .NET Framework 4.8 need Windows, so they stay outside the gate script.
-      - name: Test (net48)
-        run: >-
-          dotnet test --no-build --configuration Release --framework net48
-          --coverage --results-directory "${{ github.workspace }}/TestResults"
 
       - name: Upload test results and coverage
         if: always()

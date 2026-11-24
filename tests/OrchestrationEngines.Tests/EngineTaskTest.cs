@@ -191,8 +191,9 @@ public class EngineTaskTest
         }
         catch (OperationCanceledException)
         {
-          // On .NET Framework this catch runs inline in engineStop.Cancel(), and the wait below would block the test
-          // there for its whole 5 s (#55). A cancellation handler should not block: let the stop return first.
+          // A cancellation handler should not block: code after a cancelled await can run inline in
+          // engineStop.Cancel() (after Task.WaitAsync(token) it does), and the wait below would then block the test
+          // there for its whole 5 s (#55). So let the stop return first.
           await Task.Yield();
           workGate.Wait(MustComplete, CancellationToken.None);
           throw;

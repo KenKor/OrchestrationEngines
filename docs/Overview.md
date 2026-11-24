@@ -397,15 +397,16 @@ set has its token cancelled (a completed task's too, so work it left running sto
 token whose source is disposed still reports cancellation, but its `WaitHandle` throws `ObjectDisposedException`. The
 same holds for a task's token after a reset or a recovery, and for the engine's token after a stop.
 
-Cancellation handlers must not block. On .NET Framework (the `netstandard2.0` build), the code after a cancelled
-`await` in a task's work (its `catch (OperationCanceledException)`, for example) can run inline on the thread that
-cancels the task's token: the one that stops the coordinator, engine or task, or the library's own on a time-out or a
-reset. It then runs inside the library's `Cancel()`, and under a library lock. A handler that blocks there holds up the
-stop (or the time-out's grace), and one that waits for something that needs the coordinator, engine or task being
-stopped can deadlock it. Make `await Task.Yield()` the first statement of such a handler, so `Cancel()` does not wait
-for the rest of it. On a thread with a `SynchronizationContext`, such as a WPF or WinForms UI thread, the rest then
-runs later on that same thread, so do any blocking part in `await Task.Run(...)`. A callback registered with
-`token.Register(...)` runs synchronously on the cancelling thread on every target, so it must not block either.
+Cancellation handlers must not block. The code after a cancelled `await` in a task's work (its
+`catch (OperationCanceledException)`, for example) can run inline on the thread that cancels the task's token: the one
+that stops the coordinator, engine or task, or the library's own on a time-out or a reset. Whether it does depends on
+what was awaited: after `someTask.WaitAsync(token)` it does, after `Task.Delay(..., token)` it does not. It then runs
+inside the library's `Cancel()`, and under a library lock. A handler that blocks there holds up the stop (or the
+time-out's grace), and one that waits for something that needs the coordinator, engine or task being stopped can
+deadlock it. Make `await Task.Yield()` the first statement of such a handler, so `Cancel()` does not wait for the rest
+of it. On a thread with a `SynchronizationContext`, such as a WPF or WinForms UI thread, the rest then runs later on
+that same thread, so do any blocking part in `await Task.Run(...)`. A callback registered with `token.Register(...)`
+always runs synchronously on the cancelling thread, so it must not block either.
 
 ---
 
@@ -435,9 +436,13 @@ after about 25 seconds and six attempts. An engine factory or restart factory th
 the same way, with an `InvalidOperationException` that names the engine. A host that needs a failed load to fault for
 good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation switch that
 waits until the next generation is ready keeps the previous generation (and the engine handed over) until the retries
-have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, a context refresh,
-another switch, and the lookups and readiness waits that start the coordinator: `GetEngineAsync`, `EnsureReadyAsync` and
-`EnsureEngineTaskReadyAsync`) wait as well.
+have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, another switch,
+`EnsureReadyAsync`) wait as well. A lookup, a task wait or a context operation for an engine (`GetEngineAsync`,
+`EnsureEngineTaskReadyAsync`, a refresh or invalidation) does not queue behind the switch: it waits for the next
+generation to start and is answered there, so an engine of the next generation can make one from its own tasks. If
+the switch then fails during its wait until ready, a task wait made during it ends `Cancelled`
+(`EngineTaskNotReadyException`): the failed switch stopped the engine it waited for. One that reaches the next
+generation only after the failure shut it down is answered by the replaced coordinator.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
@@ -548,7 +553,10 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   cancelled, so no kick-start or recovery goes on in it.
 - All generations of a coordinator share a lineage that knows the current one (`Successor`). A lookup on a replaced
   coordinator, also one that was already waiting, is answered by the current coordinator; an engine that the switch
-  left out gives null.
+  left out gives null. With the dispatcher on, so is a lookup during the switch, once its next generation has started;
+  if the switch fails before that, the replaced coordinator answers. If it fails after (during its wait until
+  ready), an engine such a lookup already got is one the failed switch stops; one that reached the next generation,
+  or was still waiting there, when the failure shut it down is answered by the replaced coordinator.
 - A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One
   generation of a lineage runs at a time: of two switches on one coordinator, only the first to hand over replaces it.
   With the dispatcher on, the second waits for the first and then goes to the next generation (or, when the first

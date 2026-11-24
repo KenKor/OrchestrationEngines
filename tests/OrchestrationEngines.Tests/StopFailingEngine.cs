@@ -19,6 +19,10 @@ internal sealed class StopFailingEngine(
 {
   private int _loads;
 
+  /// <summary>An engine whose load never ends and whose stop waits for its <see cref="ReleaseStop"/>.</summary>
+  public static StopFailingEngine HeldStop() =>
+    new(failure: null, token => Task.Delay(Timeout.Infinite, token), holdStop: true);
+
   /// <summary>
   /// The loads that have begun.
   /// </summary>
