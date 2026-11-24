@@ -64,7 +64,7 @@ public abstract class BaseEngineContext : IEngineContext
   /// engine behavior.
   /// </para>
   /// <para>
-  /// This method is central to context invalidation and reuse logic within the
+  /// This method is central to context reuse logic within the
   /// engine coordination and mechanic subsystems.
   /// </para>
   /// </remarks>

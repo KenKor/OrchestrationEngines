@@ -215,16 +215,12 @@ Key properties:
 
 - contexts are **composed**, not mutated
 - dependency engines are exposed via context
-- invalidation replaces the entire context and triggers restart: `InvalidateContextForEngineAsync` resets the
-  engine's context task and every task that depends on it as `ResetTasksAsync` does (dependents first, then started
-  again). On a coordinator that a generation switch has replaced (once it has handed over), it goes to the newer
-  generation, as `RefreshEngineContextAsync` and `ResetTasksForEngineAsync` do; a name that generation does not have
-  throws an `ArgumentException`. A call that arrives during a switch that has the engine, before it hands over, waits
-  until the switch has started the next generation and goes there too: for an engine the switch rebuilds from scratch,
-  and also for one it hands over to its restart factory, whose previous engine the hand-over shuts down. On a
-  coordinator that is shut down otherwise it throws an `InvalidOperationException`. When the new context
-  fails, the engine is given up and ends Faulted ("not started again"), not Ready on the previous context, also when a
-  start for an earlier invalidation was still under way
+- a new context reaches a running engine through `RefreshEngineContextAsync`, which assigns it without a restart; the
+  engine decides in its `ContextChanged` hook what to redo. On a coordinator that a generation switch has replaced
+  (once it has handed over), it goes to the newer generation, as `ResetTasksForEngineAsync` does; a name that generation
+  does not have throws an `ArgumentException`. A call that arrives during a switch that has the engine, before it hands
+  over, waits until the switch has started the next generation and goes there too. A context that needs the engines
+  rebuilt is a generation switch (`RestartWithDefinitionsAsync`)
 
 Important implementations:
 
@@ -483,7 +479,7 @@ It:
 - creates and starts the mechanic
 - tracks aggregate engine readiness
 - exposes application-level lifecycle state
-- handles context invalidation and shutdown
+- handles context refreshes and shutdown
 
 Internally, it maintains an **application-level state machine** that translates engine-level signals into coarse states:
 
@@ -580,7 +576,7 @@ At a high level:
 4. Tasks execute respecting dependencies.
 5. Engines reach **Ready**.
 6. Application enters **Running** state.
-7. Context invalidation or failure causes controlled re-initialization.
+7. A failure causes controlled re-initialization (the restart policy).
 8. A change of descriptors is a generation switch: a next coordinator, which takes over what it can, replaces the
    current one, which is shut down.
 9. Shutdown cancels all work deterministically.

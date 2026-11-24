@@ -75,8 +75,7 @@ namespace OrchestrationEngines;
 /// </item>
 /// <item>
 /// <description>
-/// <b>Context immutability:</b> contexts are replaced, not mutated; invalidation
-/// triggers controlled restart cascades.
+/// <b>Context immutability:</b> contexts are replaced, not mutated.
 /// </description>
 /// </item>
 /// <item>

@@ -22,7 +22,6 @@ title: Coordinator state machine
     Initializing--EngineFailed-->WaitingForEngines;
     Initializing--StartShutdown-->Stopping;
 
-    Running--InvalidateContext-->Initializing;
     Running--RefreshEngine-->Initializing;
     Running--StartShutdown-->Stopping;
     Running--EngineFailed-->WaitingForEngines;

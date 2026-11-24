@@ -26,12 +26,6 @@ public enum EngineCoordinatorTrigger
   EngineFailed,
 
   /// <summary>
-  /// Part of the app becomes invalid
-  /// Meaning: one engine context is invalidated and coordinator returns to initialization flow.
-  /// </summary>
-  InvalidateContext,
-
-  /// <summary>
   /// Engine refresh requested
   /// Meaning: a specific engine should be restarted or reinitialized (mechanic performs the actual action).
   /// </summary>

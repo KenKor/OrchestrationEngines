@@ -142,7 +142,6 @@ public class StateMachineTransitionsTest
       "Initializing ignores RefreshEngine",
       "Initializing ignores Start",
       "Running --EngineFailed--> WaitingForEngines",
-      "Running --InvalidateContext--> Initializing",
       "Running --RefreshEngine--> Initializing",
       "Running --StartShutdown--> Stopping",
       "Running ignores EngineReady",

@@ -29,7 +29,7 @@ namespace OrchestrationEngines.Mechanic;
 ///
 /// <para>
 /// The computed context is cached in <see cref="ContextComputed"/> for diagnostics
-/// and for potential reuse during recovery or invalidation flows.
+/// and for potential reuse during recovery.
 /// </para>
 /// </remarks>
 public class EngineContextTask : EngineTask
@@ -92,7 +92,7 @@ public class EngineContextTask : EngineTask
   /// The most recent context value computed for this engine.
   /// </summary>
   /// <remarks>
-  /// This is primarily for diagnostics and invalidation handling.
+  /// This is primarily for diagnostics.
   /// A reset of this task will clear this value.
   /// </remarks>
   public IEngineContext ContextComputed { get; set; }

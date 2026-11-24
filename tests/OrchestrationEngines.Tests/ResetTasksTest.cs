@@ -822,67 +822,6 @@ public class ResetTasksTest
   }
 
   /// <summary>
-  /// Verifies that after a reset of an engine whose start was given up, a context change of that engine still restarts
-  /// it, also when the change comes from work that the reset started (here, the dependent engine's task): only the
-  /// reset itself clears just the kick-start's record (#58 item 2).
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_ResetTasksForEngineAsync_GivenUpEngine_ALaterContextChangeStillRestartsIt()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var graph = new GraphEngine(T("A"), T("B", "A"))
-    {
-      Work = (name, run, _) => name == "A" && run == 1
-        ? throw new InvalidOperationException("A fails its first run.")
-        : Task.CompletedTask,
-    };
-    EngineCoordinator coordinator = null;
-    var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    Task invalidation = null;
-    // Started from the dependent engine's first run, so from work that the reset started.
-    var dependent = new GraphEngine(T("X"))
-    {
-      Work = (_, run, _) =>
-      {
-        if (run == 1)
-          invalidation = Task.Run(async () =>
-          {
-            await gate.Task.ConfigureAwait(false);
-            await coordinator.InvalidateContextForEngineAsync("Graph", ct).ConfigureAwait(false);
-          }, ct);
-        return Task.CompletedTask;
-      },
-    };
-    var contexts = 0;
-    coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
-    var graphDescriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(graph))
-      .SetContextFactory(_ =>
-      {
-        Interlocked.Increment(ref contexts);
-        return Task.FromResult<IEngineContext>(new NoContext());
-      });
-    graphDescriptor.RestartPolicy = null;
-    var dependentDescriptor = coordinator.RegisterEngine("Dependent", _ => Task.FromResult<IEngine>(dependent))
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .AddDependsOn("Graph");
-    dependentDescriptor.RestartPolicy = null;
-    await coordinator.ResetTasksForEngineAsync("Graph", ["A"], resetDependentTasks: true, ct).WaitAsync(MustComplete, ct);
-    (await coordinator.GetEngineAsync("Dependent", throwErrorIfNotFound: false, ct).WaitAsync(MustComplete, ct))
-      .Should().BeSameAs(dependent);
-    graph.Runs("A").Should().Be(2);
-
-    gate.SetResult(true);
-    await invalidation.WaitAsync(MustComplete, ct);
-    (await coordinator.GetEngineAsync("Graph", throwErrorIfNotFound: false, ct).WaitAsync(MustComplete, ct))
-      .Should().BeSameAs(graph);
-
-    Volatile.Read(ref contexts).Should().Be(2);
-    // Restarted on the new context: A ran again.
-    graph.Runs("A").Should().Be(3);
-    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
   /// Verifies that an engine stopped during the reset (here, as its task's reset begins) reports the stop as a
   /// cancelled kick-start, the signal a caller that follows generation switches recognises (#58 items 5 and 11).
   /// </summary>

@@ -26,7 +26,7 @@ namespace OrchestrationEngines.Mechanic;
 /// <list type="bullet">
 /// <item>clear dependency ordering,</item>
 /// <item>targeted recovery of runtime failures,</item>
-/// <item>clean handling of context invalidation.</item>
+/// <item>a new context without a new engine.</item>
 /// </list>
 /// </para>
 /// </remarks>
@@ -328,7 +328,7 @@ public partial class EngineKickStartTask : EngineTask
     {
         // Reset all engine-level tasks before restarting. That prepares a restart which only this task carries out, when it
         // runs again. A run that is still starting the engine (this reset ended it, but its work goes on) has not recorded
-        // it yet: restart the engine it is starting all the same, or a second invalidation that comes in meanwhile leaves
+        // it yet: restart the engine it is starting all the same, or a second reset that comes in meanwhile leaves
         // the engine loaded with the previous context (#85). If that engine is still Created, the reset prepares nothing;
         // the next run restarts it once the ended run has started it. An engine that no run started needs no restart: the
         // next run starts it.
