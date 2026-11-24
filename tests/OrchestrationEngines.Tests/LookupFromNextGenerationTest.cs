@@ -269,7 +269,7 @@ public class LookupFromNextGenerationTest
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
-    var nextA = new StopFailingEngine(failure: null, token => Task.Delay(Timeout.Infinite, token), holdStop: true);
+    var nextA = StopFailingEngine.HeldStop();
     var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
       useDispatcher: true) { TimeProvider = clock };
     var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(nextA));

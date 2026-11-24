@@ -19,10 +19,6 @@ public class LookupAcrossGenerationsTest
 {
   private static readonly TimeSpan TimeOut = TimeSpan.FromMinutes(10);
 
-  /// <summary>An engine whose load never ends and whose stop waits for its <c>ReleaseStop</c>.</summary>
-  private static StopFailingEngine HeldStop() =>
-    new(failure: null, token => Task.Delay(Timeout.Infinite, token), holdStop: true);
-
   /// <summary>
   /// A started coordinator on <paramref name="clock"/> with the engine <paramref name="descriptor"/>, with the
   /// dispatcher if <paramref name="useDispatcher"/>.
@@ -116,7 +112,7 @@ public class LookupAcrossGenerationsTest
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
-    var first = HeldStop();
+    var first = StopFailingEngine.HeldStop();
     var coordinator = await StartAsync(clock, RebuiltDescriptor(first));
     var (lookup, deadline) = await StartLookupAsync(coordinator, clock, ct);
 
@@ -142,7 +138,7 @@ public class LookupAcrossGenerationsTest
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
-    var first = HeldStop();
+    var first = StopFailingEngine.HeldStop();
     var coordinator = await StartAsync(clock, RebuiltDescriptor(first));
     using var caller = CancellationTokenSource.CreateLinkedTokenSource(ct);
     var (lookup, deadline) = await StartLookupAsync(coordinator, clock, caller.Token);
@@ -174,7 +170,7 @@ public class LookupAcrossGenerationsTest
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
-    var first = HeldStop();
+    var first = StopFailingEngine.HeldStop();
     var coordinator = await StartAsync(clock, RebuiltDescriptor(first), useDispatcher: true);
     await Wait.UntilAsync(() => coordinator.Engines.ContainsKey(Name), MustComplete, "the engine must exist");
     var switching = coordinator.RestartWithDefinitionsAsync(
