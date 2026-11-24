@@ -25,11 +25,32 @@ jobs:
           # Full history and tags, for versioning from git tags (see docs/Releasing.md).
           fetch-depth: 0
 
-      # The newest SDK of the 10.0.1xx band, the band global.json allows. Not global-json-file: under latestPatch,
-      # setup-dotnet would install exactly the version global.json names (10.0.100), not the newest patch.
+      # The newest SDK of the 10.0.1xx band, the lowest band global.json allows (latestFeature takes any 10.0 band
+      # from 10.0.100 up), so CI tests the oldest SDK a contributor may build with. Not global-json-file: it would
+      # install exactly the version global.json names (10.0.100), not the newest patch.
       - uses: actions/setup-dotnet@v6
+        id: setup
         with:
           dotnet-version: 10.0.1xx
+
+      # The runner image has newer 10.0 bands too, and latestFeature would build with the newest. Pin this job's
+      # global.json to the SDK installed above, then fail if the build would use another one.
+      - name: Pin the SDK
+        shell: bash
+        env:
+          SDK: ${{ steps.setup.outputs.dotnet-version }}
+        run: |
+          python3 - "$SDK" <<'PY'
+          import json, sys
+          with open("global.json") as f:
+              config = json.load(f)
+          config["sdk"].update(version=sys.argv[1], rollForward="disable")
+          with open("global.json", "w") as f:
+              json.dump(config, f, indent=2)
+          PY
+          version=$(dotnet --version)
+          echo "$version"
+          [[ $version =~ ^10\.0\.1[0-9]{2}$ ]] || { echo "CI must build with a 10.0.1xx SDK, got $version"; exit 1; }
 
       # NuGet packages, keyed on every file that sets a package or a feed. A version change misses the key and
       # restores the newest cache for the OS; Restore fetches only what is missing, and the whole folder, old versions
