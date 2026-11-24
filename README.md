@@ -3,8 +3,9 @@
 A dependency-aware engine orchestration library for .NET. It starts, monitors and restarts a set of interdependent runtime engines in a controlled order.
 
 The library is published as a NuGet package. It targets `net10.0`.
-A callback registered on a task's cancellation token must not block: it runs on the thread that stops the task, under
-a library lock (see [Overview](docs/Overview.md), on stopping).
+Cancellation handlers in an engine's work must not block: they can run inline on the thread that stops it, under a
+library lock, so start one with `await Task.Yield()` and do blocking work in `await Task.Run(...)` (see
+[Overview](docs/Overview.md), on stopping).
 
 ## Repository layout
 
@@ -22,7 +23,7 @@ Before a push, run the gate, the same checks the build on GitHub runs (bash; on 
 scripts/gate.sh
 ```
 
-It checks the length of the lines the change adds, restores, builds (Release) and runs the tests on `net10.0`; it
+It checks the length of the lines the change adds, restores, builds (Release) and runs the tests; it
 stops at the first step that fails. `--base <branch>` compares with another branch than `origin/main`, and arguments
 after `--` go to `dotnet test`.
 
@@ -43,7 +44,7 @@ Packing is blocked until the repository URL is set (`RepositoryUrl` in `Director
 
 ```bash
 dotnet test --coverage --results-directory "$PWD/TestResults"
-scripts/gate.sh -- --coverage --results-directory "$PWD/TestResults"   # the same, net10.0 only, after the checks
+scripts/gate.sh -- --coverage --results-directory "$PWD/TestResults"   # the same, after the checks
 ```
 
 The results directory must be an absolute path: the .NET 10.0.1xx SDK resolves a relative one against the test app's

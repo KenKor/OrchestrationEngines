@@ -197,7 +197,7 @@ public abstract partial class BaseEngine : IEngine
 
   /// <summary>
   /// The <see cref="EngineNameSource"/> of this engine's type, kept here so later reads need no lookup in
-  /// <see cref="s_engineNameSources"/>.
+  /// <see cref="s_engineNameSources"/>: the name is read for every log line.
   /// </summary>
   private EngineNameSource _engineNameSource;
 

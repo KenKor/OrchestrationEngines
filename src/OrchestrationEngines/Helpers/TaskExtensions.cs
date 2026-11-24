@@ -46,7 +46,7 @@ internal static class TaskExtensions
     this TimeProvider clock, TimeSpan timeOut, CancellationToken token, Func<CancellationToken, Task<T>> run)
     where T : class
   {
-    using var timeout = clock.CreateCancellationTokenSource(timeOut);
+    using var timeout = new CancellationTokenSource(timeOut, clock);
     using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
     try
     {

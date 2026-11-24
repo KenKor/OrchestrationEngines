@@ -1054,7 +1054,8 @@ public partial class MechanicEngine : BaseEngine
   /// <summary>
   /// A task that ends once <paramref name="task"/> has ended (however it ended), going on from the thread pool, not
   /// inline in whatever ended <paramref name="task"/>: in a long chain of stops that end at once, waits that go on inline
-  /// run one inside the other. Already ended when <paramref name="task"/> has.
+  /// run one inside the other, and whatever ended the first returns only once the whole chain has run. Already ended
+  /// when <paramref name="task"/> has.
   /// </summary>
   private static Task FromThreadPool(Task task) =>
     task.IsCompleted

@@ -397,11 +397,16 @@ set has its token cancelled (a completed task's too, so work it left running sto
 token whose source is disposed still reports cancellation, but its `WaitHandle` throws `ObjectDisposedException`. The
 same holds for a task's token after a reset or a recovery, and for the engine's token after a stop.
 
-Cancellation callbacks must not block. A callback registered with `token.Register(...)` on a task's token runs
-synchronously on the thread that cancels it: the one that stops the coordinator, engine or task, or the library's own
-on a time-out or a reset. It runs inside the library's `Cancel()`, under a library lock. A callback that blocks there
-holds up the stop (or the time-out's grace), and one that waits for something that needs the coordinator, engine or
-task being stopped can deadlock it.
+Cancellation handlers must not block. The code after a cancelled `await` in a task's work (its
+`catch (OperationCanceledException)`, for example) can run inline on the thread that cancels the task's token: the one
+that stops the coordinator, engine or task, or the library's own on a time-out or a reset. Whether it does depends on
+what was awaited: after `someTask.WaitAsync(token)` it does, after `Task.Delay(..., token)` it does not. It then runs
+inside the library's `Cancel()`, and under a library lock. A handler that blocks there holds up the stop (or the
+time-out's grace), and one that waits for something that needs the coordinator, engine or task being stopped can
+deadlock it. Make `await Task.Yield()` the first statement of such a handler, so `Cancel()` does not wait for the rest
+of it. On a thread with a `SynchronizationContext`, such as a WPF or WinForms UI thread, the rest then runs later on
+that same thread, so do any blocking part in `await Task.Run(...)`. A callback registered with `token.Register(...)`
+always runs synchronously on the cancelling thread, so it must not block either.
 
 ---
 
