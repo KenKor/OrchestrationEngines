@@ -438,6 +438,19 @@ have ended. Other coordinator calls do not queue behind the switch. A lookup or 
 also for one it hands over, waits for the next generation to start and is answered there. One that reaches the next
 generation only after a failed switch shut it down is answered by the coordinator it was asked of.
 
+Every other lookup made through the host's coordinator during a switch sees the previous generation until the switch
+hands over. This matters for an engine of the next generation that, from its own load, looks up another engine through
+the host's coordinator; it should not do that during a switch. What it gets:
+
+- for an engine the switch hands over (one with a restart factory): the previous generation's engine, which the
+  hand-over then stops. With `waitUntilReady: false` the lookup races the hand-over, and gets either that engine or the
+  next generation's;
+- for an engine the switch adds: null with `waitUntilReady: true`, as the previous generation does not know it (an
+  exception with `throwErrorIfNotFound`); with `waitUntilReady: false` the added engine;
+- on a coordinator that was never started: with `waitUntilReady: true` the lookup starts the previous generation after
+  all (its engine factories run a second time) and usually returns its engine, which the hand-over stops; this is a
+  race. With `waitUntilReady: false` it gets the next generation's engine.
+
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
 the work: " and its message as the reason. So an engine whose creation or context task throws one is not created again.
@@ -544,6 +557,8 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One
   generation of a lineage runs at a time: of two switches on one coordinator, only the first to hand over replaces it.
   They run side by side, and the one that comes second cleans up its next coordinator and switches the current one.
+  Overlapping `RestartWithDefinitionsAsync` calls on one coordinator are not queued: each builds a whole generation, and
+  one wins. A host that can overlap them should serialise the calls itself.
 - With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
   usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
   state.

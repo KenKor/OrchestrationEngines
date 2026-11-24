@@ -78,41 +78,8 @@ public class CoordinatorStartAndWaitTest
     new(nameof(CoordinatorStartAndWaitTest), NullLogger.Instance);
 
   /// <summary>
-  /// Verifies that waiting until all engines are ready does not hold up other calls: a bounded lookup made meanwhile is
-  /// answered (with null, the engine is still loading) instead of waiting until the load is done.
-  /// </summary>
-  [Fact]
-  public async Task EnsureReadyAsync_DoesNotHoldOtherCalls_WhileEnginesLoad()
-  {
-    var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    GatedEngine slow = null;
-    var coordinator = CreateCoordinator();
-    coordinator.RegisterEngine("Slow", _ => Task.FromResult<IEngine>(slow = new GatedEngine(gate.Task)));
-
-    try
-    {
-      var ready = coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken);
-      await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the slow engine must start loading");
-
-      var probe = coordinator.GetEngineAsync("Slow", 50, TestContext.Current.CancellationToken);
-      (await probe.WaitAsync(MustComplete, TestContext.Current.CancellationToken)).Should().BeNull();
-      ready.IsCompleted.Should().BeFalse();
-
-      gate.SetResult(true);
-      await ready.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-      coordinator.GetEngineIfReady("Slow").Should().BeSameAs(slow);
-    }
-    finally
-    {
-      gate.TrySetResult(true);
-      await coordinator.ShutdownAsync(TestContext.Current.CancellationToken);
-      coordinator.Dispose();
-    }
-  }
-
-  /// <summary>
   /// Verifies that a lookup that gives up after its time-out returns null without stopping the engine: it completes
-  /// its load, and a later lookup gets it.
+  /// its load, and a later lookup gets it. The wait until all engines are ready, made before it, is still waiting.
   /// </summary>
   [Fact]
   public async Task GetEngineAsync_WithTimeOut_ReturnsNullWhileLoading_AndTheEngineKeepsLoading()
@@ -128,6 +95,7 @@ public class CoordinatorStartAndWaitTest
       await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the slow engine must start loading");
 
       (await coordinator.GetEngineAsync("Slow", true, 100, TestContext.Current.CancellationToken)).Should().BeNull();
+      ready.IsCompleted.Should().BeFalse();
 
       gate.SetResult(true);
       var later = await coordinator.GetEngineAsync("Slow", true, (int)MustComplete.TotalMilliseconds, TestContext.Current.CancellationToken);

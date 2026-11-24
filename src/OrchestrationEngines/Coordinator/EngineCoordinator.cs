@@ -916,7 +916,10 @@ public partial class EngineCoordinator : IDisposable
   /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
   /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
   /// reports it as unknown (<see cref="ArgumentException"/>). A call that reaches the next generation of a switch
-  /// only after the switch failed and shut that generation down is answered by this generation.
+  /// only after the switch failed and shut that generation down is answered by this generation. Until a switch hands
+  /// over, a wait for an engine it does not rebuild from scratch is answered by the previous generation, as a lookup
+  /// is (see <see cref="GetEngineAsync(string, bool, CancellationToken)"/>): an engine of the next generation should
+  /// not wait for another engine's task through this coordinator from its own tasks.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
@@ -1077,22 +1080,17 @@ public partial class EngineCoordinator : IDisposable
   /// <para>
   /// An engine that fails to stop counts as stopped, so the engines it depends on still stop. The coordinator still
   /// ends <see cref="EngineCoordinatorState.Stopped"/>, and this rethrows the first failure once every engine has been
-  /// stopped. A later call does not stop this coordinator's engines again.
+  /// stopped. A later call does not stop this coordinator's engines again. An engine whose stop ends cancelled (an
+  /// <see cref="OperationCanceledException"/>) is not a failure: it is logged as a warning and not rethrown.
   /// </para>
   /// </remarks>
+  /// <param name="token">
+  /// Does not cancel the shutdown, which always runs to its end. It is only passed on to the shutdown of the current
+  /// generation (on a coordinator replaced by a generation switch), which does not use it either.
+  /// </param>
   public async Task ShutdownAsync(CancellationToken token = default)
   {
-    try
-    {
-      await ShutdownAsyncInt().ConfigureAwait(false);
-    }
-    catch (OperationCanceledException) when (!token.IsCancellationRequested && _lifetimeCts.IsCancellationRequested)
-    {
-      // A cancellation the caller did not ask for, on a coordinator that is shutting down: run the shutdown again.
-      // ShutdownAsyncInt is safe to run next to a shutdown in progress: it cancels and changes state under the lock,
-      // and returns once the coordinator is stopping.
-      await ShutdownAsyncInt().ConfigureAwait(false);
-    }
+    await ShutdownAsyncInt().ConfigureAwait(false);
 
     // Fix (GenerationSwitchEdgeCaseTest): a host that shut down the coordinator it started with left the current
     // generation running. The switch itself shuts the replaced generation down with ShutdownAsyncInt, not with this.
@@ -1332,8 +1330,33 @@ public partial class EngineCoordinator : IDisposable
   /// </param>
   /// <param name="token">Cancels the caller's wait; the engine goes on starting.</param>
   /// <remarks>
+  /// <para>
   /// On a coordinator replaced by a generation switch, the current generation answers: an engine that the switch left
   /// out gives null.
+  /// </para>
+  /// <para>
+  /// During a generation switch, until it hands over, this coordinator still answers with the previous generation,
+  /// except for an engine the switch rebuilds from scratch: that lookup waits for the next generation to start and is
+  /// answered there. So an engine of the next generation that, from its own tasks, looks up another engine through
+  /// this coordinator (the one the host holds) can get an engine of the previous generation, and should not do so:
+  /// <list type="bullet">
+  /// <item><description>
+  /// An engine the switch hands over (it has a restart factory): the previous generation's engine, which the
+  /// hand-over then stops. In a switch that does not wait until ready the lookup races the hand-over, and gets either
+  /// that engine or the next generation's.
+  /// </description></item>
+  /// <item><description>
+  /// An engine the switch adds: in a switch that waits until ready, the previous generation does not know it (null,
+  /// or an exception from a lookup that throws for an unknown name). In one that does not wait, the lookup gets the
+  /// added engine.
+  /// </description></item>
+  /// <item><description>
+  /// A switch on a coordinator that was never started: in a switch that waits until ready, the lookup starts the
+  /// previous generation after all (its engine factories run), and usually gets its engine, which the hand-over
+  /// stops. One that does not wait gives the next generation's engine.
+  /// </description></item>
+  /// </list>
+  /// </para>
   /// </remarks>
   public Task<IEngine> GetEngineAsync(string name, bool throwErrorIfNotFound = true, CancellationToken token = default)
     => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, Timeout.Infinite, token);
@@ -1379,8 +1402,8 @@ public partial class EngineCoordinator : IDisposable
   private async Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound, int milliSecondsTimeOut, CancellationToken token)
   {
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
-    if (Successor is { } replaced)
-      return await replaced.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
+    if (Successor is { } successor)
+      return await successor.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
 
     // The time-out counts from the end of the start, as the mechanic's own time-out does.
     var started = TimeProvider.GetTimestamp();
