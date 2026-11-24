@@ -1584,8 +1584,8 @@ public partial class EngineCoordinator : IDisposable
   /// out gives null. With the dispatcher on, so does the next generation during a switch, once it has started, instead
   /// of the lookup waiting for the switch to end; an engine of the next generation can therefore make one from its own
   /// tasks. If the switch fails before its next generation has started, this generation answers; if it fails after,
-  /// an engine already found there is one that the failure stops (#154); a lookup that reaches it only after the
-  /// failure shut it down is answered by this generation.
+  /// an engine already found there is one that the failure stops (#154); a lookup that reached it, or was still
+  /// waiting there, when the failure shut it down is answered by this generation.
   /// </remarks>
   public Task<IEngine> GetEngineAsync(string name, bool throwErrorIfNotFound = true, CancellationToken token = default)
     => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, Timeout.Infinite, token);
@@ -1658,8 +1658,8 @@ public partial class EngineCoordinator : IDisposable
       {
         var found = await answering.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, switchWait),
           token).ConfigureAwait(false);
-        // A failed switch abandoned that generation and shut it down before the lookup got there (null): this
-        // generation, current again, answers it, as it answers a call made after the failure (see
+        // A failed switch abandoned that generation and shut it down before the lookup got there, or while it waited
+        // there (null): this generation, current again, answers it, as it answers a call made after the failure (see
         // AnsweredOnNextGenerationAsync).
         if (found != null || !answering._abandoned)
           return found;
