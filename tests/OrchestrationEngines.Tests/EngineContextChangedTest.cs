@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,20 +12,6 @@ namespace OrchestrationEngines.Tests;
 /// </summary>
 public class EngineContextChangedTest
 {
-  /// <summary>
-  /// A context that carries a value; two contexts with the same value are equal.
-  /// </summary>
-  private sealed class ValueContext(string value) : BaseEngineContext
-  {
-    public string Value { get; } = value;
-
-    public override bool Equals(IEngineContext other) => other is ValueContext o && o.Value == Value;
-
-    public override bool Equals(object obj) => obj is IEngineContext ctx && Equals(ctx);
-
-    public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
-  }
-
   /// <summary>
   /// An engine that records the contexts its ContextChanged hook was called with.
   /// </summary>

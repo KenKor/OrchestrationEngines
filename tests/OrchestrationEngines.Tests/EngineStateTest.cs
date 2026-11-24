@@ -47,18 +47,6 @@ public class EngineStateTest
   }
 
   /// <summary>
-  /// A context equal only to itself, so that assigning it is a change.
-  /// </summary>
-  private sealed class FreshContext : IEngineContext
-  {
-    public IEngineContext Inner => null;
-
-    public IEngine GetUnderlyingEngine(string name) => null;
-
-    public bool Equals(IEngineContext other) => ReferenceEquals(this, other);
-  }
-
-  /// <summary>
   /// An engine with one load that records the coordinator's state (read through <paramref name="coordinatorState"/>)
   /// when its context changes after the start.
   /// </summary>
@@ -184,7 +172,7 @@ public class EngineStateTest
     await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
       MustComplete, "the coordinator must be running");
-    var freshContext = new FreshContext();
+    var freshContext = new ValueContext("fresh");
 
     await coordinator.RefreshEngineContextAsync(Name, freshContext, TestContext.Current.CancellationToken);
 
