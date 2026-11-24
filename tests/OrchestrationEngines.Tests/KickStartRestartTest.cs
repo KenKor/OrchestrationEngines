@@ -194,6 +194,26 @@ public class KickStartRestartTest
   }
 
   /// <summary>
+  /// Verifies that the coordinator is Running again once a reset has brought an engine whose kick-start failed back to
+  /// Ready (#127): its state follows the engine, not the record of the failed start.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_AfterFailedKickStart_CoordinatorIsRunningAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new NetworkEngine((load, _) => load == 1 ? throw new TestTaskException() : Task.CompletedTask);
+    var coordinator = CreateCoordinator(engine);
+    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeNull();
+    coordinator.State.Should().Be(EngineCoordinatorState.WaitingForEngines);
+
+    await coordinator.ResetTasksForEngineAsync(Name, ["Load"], resetDependentTasks: true, ct)
+      .WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Running);
+  }
+
+  /// <summary>
   /// Verifies that a lookup that arrives while the kick-start waits to retry a failed engine waits for the retry and
   /// gets the engine once it is Ready, instead of null (on a server, a failed query) a moment before it recovers.
   /// </summary>

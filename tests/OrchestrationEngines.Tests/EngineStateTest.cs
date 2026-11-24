@@ -140,8 +140,8 @@ public class EngineStateTest
   }
 
   /// <summary>
-  /// Verifies that refreshing the context of an engine in a running coordinator passes through Initializing (the
-  /// RefreshEngine trigger) and returns to Running, since a refresh does not change the mechanic's state.
+  /// Verifies that refreshing the context of an engine in a running coordinator passes through Initializing (a
+  /// context operation in flight) and returns to Running, since a refresh leaves the engine Ready.
   /// </summary>
   [Fact]
   public async Task EngineCoordinator_RefreshEngineContextAsync_RunningCoordinator_ReturnsToRunning()
@@ -161,8 +161,8 @@ public class EngineStateTest
     engine.Context.Should().BeSameAs(freshContext);
     coordinator.State.Should().Be(EngineCoordinatorState.Running);
     var transitions = logger.Collector.GetSnapshot().Select(r => r.Message).ToArray();
-    transitions.Should().Contain(m => m.Contains("Running --RefreshEngine--> Initializing"));
-    transitions.Should().Contain(m => m.Contains("Initializing --EngineReady--> Running"));
+    transitions.Should().Contain(m => m.Contains("Coordinator transition Running --> Initializing"));
+    transitions.Should().Contain(m => m.Contains("Coordinator transition Initializing --> Running"));
   }
 
   /// <summary>

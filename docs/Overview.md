@@ -472,16 +472,23 @@ It:
 - exposes application-level lifecycle state
 - handles context invalidation and shutdown
 
-Internally, it maintains an **application-level state machine** that translates engine-level signals into coarse states:
+Its application-level state is not stored but computed on every read, from its own start and shutdown and from the
+required engines, as an engine's state is computed from its tasks:
 
-- `Created`
-- `WaitingForEngines`
-- `Initializing`
-- `Running`
-- `Stopping`
-- `Stopped`
+- `Created`: not started yet
+- `WaitingForEngines`: started, and no required engine has begun to start yet; or a required engine is `Faulted` or
+  `Stopped` and is not being started again (also next to one that is still starting)
+- `Initializing`: a required engine is starting (or its restart policy is starting it again), or a context operation
+  (an invalidation or a refresh) is in flight
+- `Running`: every required engine is `Ready`
+- `Stopping`: the shutdown has started
+- `Stopped`: the shutdown has completed
 
-The coordinator is intentionally conservative: once shutdown starts, it does not accept new operational triggers.
+So the state follows the engines: a required engine that fails takes the coordinator to `WaitingForEngines`, and one
+that is brought back to `Ready`, for example by `ResetTasksForEngineAsync` after a failed start, brings it back to
+`Running`. [EngineStateMachine.md](EngineStateMachine.md) has the rules in order.
+
+The coordinator is intentionally conservative: once shutdown starts, its state no longer follows the engines.
 
 Shutdown stops the engines dependents first: an engine is stopped only once every engine that depends on it (its
 descriptor's `DependsOn`) has been stopped, that is, their `StopAsync` has returned. Engines that do not depend on each
@@ -615,7 +622,7 @@ It is **not** intended as a lightweight task scheduler or job runner.
 ## Status
 
 The framework is structurally complete and documented in code. Its behavior is pinned by the tests in
-`tests/OrchestrationEngines.Tests`, including a snapshot of every state machine transition
+`tests/OrchestrationEngines.Tests`, including a snapshot of every transition of the task state machine
 (`StateMachineTransitionsTest`).
 
 Known open issues:

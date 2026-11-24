@@ -212,7 +212,7 @@ public class SwitchFailureCleanUpTest
     var shutdownThreadId = 0;
     var logger = new OnMessageLogger(
       (_, message, _) => message.Contains($"'{nameof(SwitchFailureCleanUpTest)}>': Coordinator transition")
-        && message.Contains("StartShutdown"),
+        && message.Contains("--> Stopping"),
       () => Volatile.Write(ref shutdownThreadId, Environment.CurrentManagedThreadId));
     var next = Hanging();
     var nextGenerations = new List<EngineCoordinator>();
