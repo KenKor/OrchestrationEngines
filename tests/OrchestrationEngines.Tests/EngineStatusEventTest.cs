@@ -55,7 +55,7 @@ public class EngineStatusEventTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(EngineStatusEventTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(EngineStatusEventTest), NullLogger.Instance);
 
   private static void Register(EngineCoordinator coordinator, string name, BaseEngine engine, StatusLog log, string dependsOn = null)
   {

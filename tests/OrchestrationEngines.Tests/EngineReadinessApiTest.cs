@@ -229,7 +229,7 @@ public class EngineReadinessApiTest
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
-    var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), logger);
     var descriptor = coordinator.RegisterEngine("E", _ => Task.FromResult<IEngine>(new FailsOnceEngine()));
     if (mayRestart)
       descriptor.SetRestartPolicy(NoWait(3));
@@ -268,7 +268,7 @@ public class EngineReadinessApiTest
   public async Task EngineCoordinator_FactoryReturnsNull_FailsTheCreationClearly()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), NullLogger.Instance);
     coordinator.RegisterEngine("Null", _ => Task.FromResult<IEngine>(null)).WithoutRestarts();
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);

@@ -85,8 +85,8 @@ public abstract partial class BaseEngine : IEngine
   /// <para>
   /// A snapshot that is never changed once published: a start builds the next set in a dictionary of its own and swaps
   /// it in at once, and a task added later copies the set. Readers on other threads (the states endpoint, state
-  /// recomputes, queries, a monitor) may read or enumerate it while a kick-start retry rebuilds it; a dictionary changed
-  /// in place made them fail with "collection was modified".
+  /// recomputes, queries) may read or enumerate it while a kick-start retry rebuilds it; a dictionary changed in place
+  /// made them fail with "collection was modified".
   /// </para>
   /// </remarks>
   protected IReadOnlyDictionary<string, EngineTask> _tasks => Volatile.Read(ref _taskSet);

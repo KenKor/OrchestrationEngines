@@ -150,13 +150,12 @@ public class ContextFanOutTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(ContextFanOutTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(ContextFanOutTest), NullLogger.Instance);
 
   /// <summary>
   /// A coordinator that lets a test see the kick-start task of an engine, to wait until a run of it has ended.
   /// </summary>
-  private sealed class InspectableCoordinator() : EngineCoordinator(nameof(ContextFanOutTest), NullLogger.Instance,
-    useDispatcher: false)
+  private sealed class InspectableCoordinator() : EngineCoordinator(nameof(ContextFanOutTest), NullLogger.Instance)
   {
     public EngineTask KickStartOf(string name) => Mechanic.Tasks[EngineKickStartTask.KickStartName(name)];
   }

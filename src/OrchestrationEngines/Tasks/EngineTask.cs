@@ -50,9 +50,9 @@ public partial class EngineTask
 
   /// <summary>
   /// Guards the lazy creation of <see cref="_machine"/> and its replacement on a reset. The first touch of a pristine task is genuinely
-  /// concurrent — an unlocked <c>State</c> read (TriggerStartAsync's snapshot, the engine's ComputeState,
-  /// the monitor loop) can race a dependency's CompleteDependency callback firing into the same task from
-  /// a pool thread. See <see cref="StateMachine"/>.
+  /// concurrent — an unlocked <c>State</c> read (TriggerStartAsync's snapshot, the engine's ComputeState)
+  /// can race a dependency's CompleteDependency callback firing into the same task from a pool thread. See
+  /// <see cref="StateMachine"/>.
   /// </summary>
   private readonly object _machineInitLock = new();
 
@@ -1311,8 +1311,7 @@ public partial class EngineTask
   /// </summary>
   /// <remarks>
   /// Unlike a reset, the task does not go back to Created, so nothing can start it again: a reset task of a set that is
-  /// about to be replaced could be started by a waiter or a monitor, and its waiters would then wait for a set that is
-  /// thrown away.
+  /// about to be replaced could be started by a waiter, and its waiters would then wait for a set that is thrown away.
   /// </remarks>
   internal Task EndAsync() => CancelAsync("Cancelled because the engine starts again with new tasks.");
 

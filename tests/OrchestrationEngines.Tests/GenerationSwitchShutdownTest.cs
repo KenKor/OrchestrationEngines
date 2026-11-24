@@ -37,7 +37,7 @@ public class GenerationSwitchShutdownTest
   private static NetworkEngine Quick() => new((_, _) => Task.CompletedTask);
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(GenerationSwitchShutdownTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(GenerationSwitchShutdownTest), NullLogger.Instance);
 
   /// <summary>
   /// A descriptor whose first engine comes from <paramref name="first"/> and every later one (a generation switch, which
@@ -97,7 +97,7 @@ public class GenerationSwitchShutdownTest
     var engineLogged = 0;
     var logger = new OnMessageLogger("generation this switch replaced", () => Interlocked.Increment(ref logged),
       new OnMessageLogger($"Engine {Name} failed to stop", () => Interlocked.Increment(ref engineLogged)));
-    var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger);
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
@@ -121,7 +121,7 @@ public class GenerationSwitchShutdownTest
     var ct = TestContext.Current.CancellationToken;
     var replaced = new StopFailingEngine(new InvalidOperationException("The stop failed."));
     var logger = new OnMessageLogger("failed", () => throw new InvalidOperationException("The logging provider failed."));
-    var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(GenerationSwitchShutdownTest), logger);
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 

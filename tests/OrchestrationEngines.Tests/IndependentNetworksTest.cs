@@ -24,7 +24,7 @@ public class IndependentNetworksTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(IndependentNetworksTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(IndependentNetworksTest), NullLogger.Instance);
 
   private static void Register(EngineCoordinator coordinator, string name, IEngine engine) =>
     coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)

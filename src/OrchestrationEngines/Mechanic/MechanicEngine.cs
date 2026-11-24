@@ -1116,20 +1116,6 @@ public partial class MechanicEngine : BaseEngine
     return ResetTasksAsync(new[] { taskName }, resetDependentTasks: true);
   }
 
-  /// <summary>
-  /// Performs one monitoring tick:
-  /// - ensures all tasks that are eligible to start are started,
-  /// - returns whether there is any unfinished mechanic task.
-  /// </summary>
-  internal async Task<bool> MonitorTickAsync()
-  {
-    // Ensure tasks that have been reset back to Created are re-started.
-    await TriggerStartAsync().ConfigureAwait(false);
-
-    // Monitoring should be active as long as at least one task is not finished.
-    return _tasks.Values.Any(t => !t.IsCompleted);
-  }
-
   // ---------------------------------------------------------------------
   // Logging methods
   // ---------------------------------------------------------------------

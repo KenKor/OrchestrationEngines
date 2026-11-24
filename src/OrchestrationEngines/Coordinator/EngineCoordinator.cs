@@ -9,7 +9,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Helpers;
 using OrchestrationEngines.Mechanic;
-using OrchestrationEngines.Restarter;
 using OrchestrationEngines.Tasks;
 using Stateless;
 
@@ -86,22 +85,6 @@ public partial class EngineCoordinator : IDisposable
 
   // Logger for coordinator-level (application-level) logging.
   private readonly ILogger _applicationLogger;
-
-  // Monitor wake-up signal. Released whenever new work may exist; it holds one wake-up at most (see PulseMonitor).
-  private readonly SemaphoreSlim _monitorPulse = new SemaphoreSlim(0, 1);
-
-  // 1 from the release of a wake-up until the monitor loop takes it: only the caller that sets it releases.
-  private int _monitorPulsePending;
-
-  // The wake-ups released that the monitor loop has not taken yet: 0 or 1 (tests).
-  internal int PendingMonitorPulses => Volatile.Read(ref _monitorPulsePending);
-
-  // Dispatcher to take in commands, that we'll then execute on a monitoring thread (that will not be aborted).
-  private readonly MechanicDispatcher _mechanicDispatcher;
-  private readonly bool _useDispatcher;
-
-  // Monitoring task that will (re)fire on tasks that are Created or Reset.
-  private EngineTask _monitorTask;
 
   // The one start of the mechanic (set up and fire its tasks). Claimed under _sync by the first StartAsync caller;
   // every other caller awaits it, so no caller fires or enumerates the mechanic's tasks while they are being created.
@@ -187,16 +170,10 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="logger">
   /// Logger used for application-level logging.
   /// </param>
-  /// <param name="useDispatcher">
-  /// Optional boolean that specifies if a dispatcher should be used.
-  /// This is very much recommended if the Coordinator can be killed,
-  /// e.g. if we are on .NET48/.NET481 where threads can be Aborted,
-  /// or if we want to keep a self maintaining Coordinator.
-  /// </param>
   /// <param name="applicationToken">
   /// Optional external cancellation token to which the coordinator is linked.
   /// </param>
-  public EngineCoordinator(string coordinatorName, ILogger logger, bool useDispatcher = true, CancellationToken applicationToken = default)
+  public EngineCoordinator(string coordinatorName, ILogger logger, CancellationToken applicationToken = default)
   {
     // Link coordinator cancellation to application cancellation. An application token that is cancelled already
     // cancels the source here, as a linked source would start cancelled.
@@ -206,11 +183,6 @@ public partial class EngineCoordinator : IDisposable
     _lineage = new Lineage(this);
     _coordinatorName = coordinatorName;
     _applicationLogger = logger ?? NullLogger.Instance;
-    _useDispatcher = useDispatcher;
-
-    // Create a dispatcher, e.g. if we are on .NET48/.NET481 where threads can be Aborted.
-    if (useDispatcher)
-      _mechanicDispatcher = new MechanicDispatcher(MechanicDispatcher.DefaultThreadName, _applicationLogger, _lifetimeCts.Token);
   }
 
   /// <summary>
@@ -510,13 +482,13 @@ public partial class EngineCoordinator : IDisposable
   /// <para>
   /// A switch that fails before the new coordinator takes over (a failed stop of the engines rebuilt from scratch, a
   /// failed start of the new coordinator, or a ready-wait that fails or is cancelled) cleans the new coordinator up: it
-  /// is shut down if it was started, its engines and dispatcher stopping, and disposed otherwise. The switch then throws
+  /// is shut down if it was started, its engines stopping, and disposed otherwise. The switch then throws
   /// its own failure; a failure of the clean-up is logged as a warning. This coordinator stays current, and its engines
   /// keep running, except those rebuilt from scratch that were stopped already.
   /// </para>
   /// <para>
   /// A switch asked of a coordinator that another switch replaced, or one that another switch on this coordinator
-  /// beat to the hand-over (without the dispatcher, switches are not queued), switches the current generation of the
+  /// beat to the hand-over (switches are not queued), switches the current generation of the
   /// lineage instead (see <see cref="Successor"/>). The coordinator returned can then be more than one generation past
   /// this one.
   /// </para>
@@ -529,23 +501,22 @@ public partial class EngineCoordinator : IDisposable
     var candidateByName = EngineDefinitionDiff.ToDictionaryByName(candidateList, nameof(candidateDescriptors));
 
     // Fix (GenerationSwitchEdgeCaseTest): a replaced coordinator built a generation from its own stopped engines next
-    // to the one running, or, with the dispatcher on, threw a cancellation. It goes to the current generation now.
+    // to the one running. It goes to the current generation now.
     EngineCoordinator next = null;
     if (Successor == null)
     {
       try
       {
-        next = await DispatchAsync(
-            () => RestartWithDefinitionsAsyncInt(candidateList, candidateByName, waitUntilReady, token), token)
+        next = await RestartWithDefinitionsAsyncInt(candidateList, candidateByName, waitUntilReady, token)
           .ConfigureAwait(false);
       }
       catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
       {
-        // Queued behind a switch that replaced this coordinator: its shutdown cancelled the items still queued.
+        // Another switch replaced this coordinator meanwhile: its shutdown cancelled this switch.
       }
     }
 
-    // Replaced, queued behind the switch that replaced it, or its switch lost the hand-over (null): the current
+    // Replaced, cancelled by the switch that replaced it, or its switch lost the hand-over (null): the current
     // generation switches.
     return next ?? await Current.RestartWithDefinitionsAsync(candidateList, waitUntilReady, token)
       .ConfigureAwait(false);
@@ -615,7 +586,7 @@ public partial class EngineCoordinator : IDisposable
     }
 
     var nextCoordinator = new EngineCoordinator(
-      _coordinatorName + ">", _applicationLogger, _useDispatcher, _applicationToken)
+      _coordinatorName + ">", _applicationLogger, _applicationToken)
     {
       TimeProvider = TimeProvider,
     };
@@ -650,8 +621,8 @@ public partial class EngineCoordinator : IDisposable
     nextCoordinator._lineage = _lineage;
     if (!_lineage.TryHandOver(this, nextCoordinator))
     {
-      // Another switch on this coordinator handed over first (without the dispatcher, switches are not queued): one
-      // generation runs in a lineage, so this one is cleaned up, and the switch goes to the current generation.
+      // Another switch on this coordinator handed over first (switches are not queued): one generation runs in a
+      // lineage, so this one is cleaned up, and the switch goes to the current generation.
       nextCoordinator._lineage = new Lineage(nextCoordinator);
       await CleanUpNextGenerationAsync(nextCoordinator, pending, "another switch handed over first")
         .ConfigureAwait(false);
@@ -717,7 +688,7 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// Cleans up the next coordinator of a generation switch that failed before it handed over, or that another switch
-  /// beat to the hand-over: shuts it down if the switch started it (its engines and its dispatcher stop), and disposes
+  /// beat to the hand-over: shuts it down if the switch started it (its engines stop), and disposes
   /// it otherwise. A failure of the clean-up is logged, so that it does not change what the switch returns or throws.
   /// </summary>
   /// <remarks>
@@ -728,14 +699,13 @@ public partial class EngineCoordinator : IDisposable
     string reason)
   {
     // The record this switch set: no other generation answers for its engines now. Only its own: a switch that
-    // started since (without the dispatcher, switches are not queued) keeps its record.
+    // started since (switches are not queued) keeps its record.
     Interlocked.CompareExchange(ref _switchBeforeHandover, null, pending);
     nextCoordinator._abandoned = true;
     try
     {
       // Started: StartAsync left Created, also when it failed after that.
-      // Through its dispatcher, as a host's shutdown is (#107): its mechanic is stopped on the thread its monitor ticks
-      // run on. The next coordinator has not been handed over, so this shuts down no other generation.
+      // The next coordinator has not been handed over, so this shuts down no other generation.
       if (nextCoordinator.State != EngineCoordinatorState.Created)
         await nextCoordinator.ShutdownAsync().ConfigureAwait(false);
       else
@@ -870,189 +840,6 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Executes a coordinator operation either on the mechanic dispatcher thread (if enabled)
-  /// or directly on the calling thread.
-  /// </summary>
-  /// <param name="action">The operation to execute.</param>
-  /// <param name="token">
-  /// A cancellation token controlling the caller's wait for this operation. If a dispatcher
-  /// is used, the token is passed through to the queued work item.
-  /// </param>
-  /// <returns>A task that completes when the operation completes.</returns>
-  /// <remarks>
-  /// <para>
-  /// This method also pulses the monitor so that the monitoring loop can re-check task state
-  /// promptly when new work is scheduled.
-  /// </para>
-  /// </remarks>
-  protected Task DispatchAsync(Func<Task> action, CancellationToken token = default)
-  {
-    // Fix (MonitorPulse_ComesAfterTheWorkIsHandedOver): the pulse came before the work was queued, so the tick it
-    // started could run before that work, and with one wake-up held for all calls no later tick was due for it.
-    try
-    {
-      if (_mechanicDispatcher == null)
-        return action();
-      return _mechanicDispatcher.InvokeAsync(action, token);
-    }
-    finally
-    {
-      PulseMonitor();
-    }
-  }
-
-  /// <summary>
-  /// Executes a coordinator operation either on the mechanic dispatcher thread (if enabled)
-  /// or directly on the calling thread, returning a result.
-  /// </summary>
-  /// <typeparam name="T">The operation result type.</typeparam>
-  /// <param name="action">The operation to execute.</param>
-  /// <param name="token">
-  /// A cancellation token controlling the caller's wait for this operation. If a dispatcher
-  /// is used, the token is passed through to the queued work item.
-  /// </param>
-  /// <returns>A task that completes with the operation result.</returns>
-  /// <remarks>
-  /// <para>
-  /// This method also pulses the monitor so that the monitoring loop can re-check task state
-  /// promptly when new work is scheduled.
-  /// </para>
-  /// </remarks>
-  protected Task<T> DispatchAsync<T>(Func<Task<T>> action, CancellationToken token = default)
-  {
-    // Pulses once the work is handed over, as the non-generic overload does.
-    try
-    {
-      if (_mechanicDispatcher == null)
-        return action();
-      return _mechanicDispatcher.InvokeAsync<T>(action, token);
-    }
-    finally
-    {
-      PulseMonitor();
-    }
-  }
-
-  /// <summary>
-  /// Wakes the monitoring loop to re-check mechanic task state.
-  /// </summary>
-  /// <remarks>
-  /// <para>
-  /// This is a best-effort signal. The monitor uses <see cref="SemaphoreSlim"/> as a wake-up mechanism;
-  /// releasing after disposal or after cancellation is benign, so exceptions are intentionally ignored.
-  /// </para>
-  /// <para>
-  /// The signal holds one wake-up at most: one tick of the parked monitor sees all the work the calls before it
-  /// scheduled, so calls made while the monitor polls leave one tick for later, not one each. Callers pulse after
-  /// their work is queued, and the loop clears <see cref="_monitorPulsePending"/> before it queues its tick, so a
-  /// caller that finds a wake-up pending has its work queued before that tick.
-  /// </para>
-  /// </remarks>
-  private void PulseMonitor()
-  {
-    // Fix (MonitorPulse_ManyCalls_LeaveOneWakeUp): every call released the semaphore, so calls made while the
-    // monitor polled each left one more tick for later. Only the caller that sets the flag releases, so no caller
-    // releases a full semaphore.
-    if (Interlocked.CompareExchange(ref _monitorPulsePending, 1, 0) != 0) return;
-    // Best-effort: do not throw if released after disposal or cancellation.
-    try { _monitorPulse.Release(); } catch { /* ignore */ }
-  }
-
-  /// <summary>
-  /// Ensures the monitoring task is created and started.
-  /// </summary>
-  /// <remarks>
-  /// <para>
-  /// Monitoring is implemented as an <see cref="EngineTask"/> to reuse the existing recovery mechanism.
-  /// The recovery policy is set to <see cref="RestartPolicy.Unlimited"/> so monitoring is resilient to
-  /// transient failures.
-  /// </para>
-  /// <para>
-  /// The monitoring task is started in a fire-and-forget manner; internal recovery handles restarts.
-  /// </para>
-  /// </remarks>
-  private void EnsureMonitorStarted()
-  {
-    if (_monitorTask != null) return;
-
-    // Monitoring is implemented as an EngineTask so that we can reuse the existing recovery mechanism.
-    _monitorTask = new EngineTask(
-            name: "MechanicMonitoring",
-            workAsync: MonitorLoopAsync,
-            engineToken: _lifetimeCts.Token,
-            logger: _applicationLogger,
-            requiredForRunning: false)
-        .SetRecovery(RestartPolicy.Unlimited);
-
-    // Fire-and-forget start. If the monitor fails, EngineTask recovery will re-run it.
-    _ = _monitorTask.FireAsync(EngineTaskTrigger.Start);
-  }
-
-  /// <summary>
-  /// Background monitoring loop that periodically ticks the mechanic and re-triggers start for any
-  /// tasks that are in a (re)startable state (e.g., Created/Reset).
-  /// </summary>
-  /// <param name="token">Cancellation token that ends the monitoring loop.</param>
-  /// <remarks>
-  /// <para>
-  /// The loop has two modes:
-  /// <list type="bullet">
-  /// <item>
-  /// Active polling: while the mechanic reports pending work, the loop ticks and sleeps for a short interval.
-  /// </item>
-  /// <item>
-  /// Parked: once there is no pending work, the loop waits on <see cref="_monitorPulse"/> until
-  /// an external call (e.g., GetEngineAsync / EnsureReadyAsync / InvalidateContext...) signals that work may exist.
-  /// </item>
-  /// </list>
-  /// </para>
-  /// <para>
-  /// Mechanic operations are executed via the dispatcher to ensure all mechanic state mutation occurs
-  /// on the dedicated mechanic thread.
-  /// </para>
-  /// </remarks>
-  private async Task MonitorLoopAsync(CancellationToken token)
-  {
-    if (_mechanicDispatcher == null) return;
-    // Ensure the dispatcher is up before monitoring begins.
-    _mechanicDispatcher.Start();
-
-    // Poll while there is unfinished work, otherwise park until pulsed.
-    var pollInterval = TimeSpan.FromMilliseconds(200);
-
-    while (!token.IsCancellationRequested)
-    {
-      bool hasPending = false;
-      try
-      {
-        hasPending = await _mechanicDispatcher
-            .InvokeAsync(() => Mechanic.MonitorTickAsync(), token)
-            .ConfigureAwait(false);
-      }
-      catch (TaskCanceledException)
-      {
-        // Application is shutting down.
-        return;
-      }
-      catch (OperationCanceledException) when (token.IsCancellationRequested)
-      {
-        return;
-      }
-
-      if (hasPending)
-      {
-        await Task.Delay(pollInterval, token).ConfigureAwait(false);
-        continue;
-      }
-
-      // No pending tasks: wait until someone requests an engine / readiness / invalidation.
-      await _monitorPulse.WaitAsync(token).ConfigureAwait(false);
-      // Taken: the next call releases a new wake-up. Cleared before the tick is queued (see PulseMonitor).
-      Volatile.Write(ref _monitorPulsePending, 0);
-    }
-  }
-
-  /// <summary>
   /// Starts engine orchestration.
   /// </summary>
   /// <remarks>
@@ -1070,8 +857,6 @@ public partial class EngineCoordinator : IDisposable
   /// </remarks>
   public async Task StartAsync()
   {
-    EnsureMonitorStarted();
-
     // Claim the first start atomically. Checking State and then starting outside the lock let two concurrent first
     // callers both run Mechanic.StartAsync(), setting up the mechanic's task dictionary twice at the same time.
     TaskCompletionSource startClaimed = null;
@@ -1106,11 +891,6 @@ public partial class EngineCoordinator : IDisposable
     }
 
     await mechanicStart.ConfigureAwait(false);
-
-    // A _monitorTask is created on first StartAsync() and started fire-and-forget.
-    // The monitor loop:
-    // - ticks while there is pending work (poll interval 200ms)
-    // - otherwise blocks on _monitorPulse (a SemaphoreSlim)
     await mechanic.TriggerStartAsync().ConfigureAwait(false);
   }
 
@@ -1119,12 +899,11 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   /// <param name="token">Cancels the caller's wait; the engines go on starting.</param>
   /// <remarks>
-  /// This implicitly starts the coordinator if it has not been started yet. Only the start runs on the dispatcher:
-  /// waiting there would hold the dispatcher, and every call queued behind it, until all engines are Ready.
+  /// This implicitly starts the coordinator if it has not been started yet.
   /// </remarks>
   public async Task EnsureReadyAsync(CancellationToken token = default)
   {
-    await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+    await StartAsync().ConfigureAwait(false);
     await Mechanic.EnsureReadyAsync().WaitObservedAsync(token).ConfigureAwait(false);
   }
 
@@ -1136,12 +915,11 @@ public partial class EngineCoordinator : IDisposable
   /// It first waits for the engine to start (its kick-start, which ends once the engine is Ready or has failed), since
   /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
   /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
-  /// reports it as unknown (<see cref="ArgumentException"/>). With the dispatcher on, a call during a switch does not
-  /// wait for the switch to end: the next generation answers once it has started, so an engine of that generation can
-  /// make the call from its own tasks. If the switch fails after that (during its wait until ready), such a call
-  /// ends with an <see cref="EngineTaskNotReadyException"/> in state Cancelled: the failed switch stopped the engine
-  /// it waited for (#154). One that reaches the next generation only after the failure shut it down is answered by
-  /// this generation.
+  /// reports it as unknown (<see cref="ArgumentException"/>). A call that reaches the next generation of a switch
+  /// only after the switch failed and shut that generation down is answered by this generation. Until a switch hands
+  /// over, a wait for an engine it does not rebuild from scratch is answered by the previous generation, as a lookup
+  /// is (see <see cref="GetEngineAsync(string, bool, CancellationToken)"/>): an engine of the next generation should
+  /// not wait for another engine's task through this coordinator from its own tasks.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
@@ -1173,8 +951,7 @@ public partial class EngineCoordinator : IDisposable
   /// <remarks>
   /// <paramref name="handedOverToo"/> is set for the operations that change the engine (an invalidation, a refresh, a
   /// task reset), which would be lost on the previous engine (#145); not for a wait, which the previous engine, still
-  /// running, answers. With the dispatcher on, the next generation answers every call during a switch (see
-  /// AnsweredByNextGeneration).
+  /// running, answers.
   /// </remarks>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
     CancellationToken token, bool start = true, bool handedOverToo = true)
@@ -1193,7 +970,7 @@ public partial class EngineCoordinator : IDisposable
     try
     {
       if (start)
-        await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+        await StartAsync().ConfigureAwait(false);
       await onMechanic().ConfigureAwait(false);
     }
     // Pre-check the switch in the filter, so an exception with no switch behind it is not caught; NextGenerationAsync
@@ -1269,28 +1046,9 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Whether the next generation of <paramref name="pending"/> answers for the engine <paramref name="name"/> once it
-  /// has started.
-  /// </summary>
-  /// <remarks>
-  /// Fix (RebuiltEngineSwitchTest): an engine the switch rebuilds from scratch, which it stopped before the next
-  /// generation started. With <paramref name="handedOverToo"/>, also one it hands over (#145). Fix (#154): with the
-  /// dispatcher, every engine. A call there used to queue behind the switch, which holds the dispatcher until it
-  /// ends, and the next generation answered it. An engine of the next generation that made the call waited for itself.
-  /// </remarks>
-  private bool AnsweredByNextGeneration(SwitchBeforeHandover pending, string name, bool handedOverToo) =>
-    QueuesBehindSwitch(pending) || pending.Answers(name, handedOverToo);
-
-  /// <summary>
-  /// Whether a call dispatched now would queue behind the switch <paramref name="pending"/>: with the dispatcher, a
-  /// switch holds it until it ends (#154).
-  /// </summary>
-  private bool QueuesBehindSwitch(SwitchBeforeHandover pending) => _mechanicDispatcher != null && pending != null;
-
-  /// <summary>
   /// The generation that answers for <paramref name="name"/> once this one was replaced: the one it handed over to, or
-  /// the next one of a switch that answers for it (see <see cref="AnsweredByNextGeneration"/>), once it has started.
-  /// Null if there is none, if that switch did not start it, or if it has not started within
+  /// the next one of a switch that rebuilds the engine (or, with <paramref name="handedOverToo"/>, hands it over), once
+  /// it has started. Null if there is none, if that switch did not start it, or if it has not started within
   /// <paramref name="milliSecondsTimeOut"/>.
   /// </summary>
   private async Task<EngineCoordinator> NextGenerationAsync(
@@ -1298,10 +1056,10 @@ public partial class EngineCoordinator : IDisposable
   {
     if (Successor is { } successor)
       return successor;
-    // A switch before it hands over (Successor) that answers for this engine: wait for the next generation to start,
-    // and ask it.
-    if (Volatile.Read(ref _switchBeforeHandover) is not { } pending
-        || !AnsweredByNextGeneration(pending, name, handedOverToo))
+    // Fix (RebuiltEngineSwitchTest): a switch that rebuilds this engine from scratch stopped it before the next
+    // generation started, and before it hands over (Successor); with handedOverToo, also a switch that hands it over
+    // (#145). Wait for the next generation to start, and ask it.
+    if (Volatile.Read(ref _switchBeforeHandover) is not { } pending || !pending.Answers(name, handedOverToo))
       return null;
     if (milliSecondsTimeOut == Timeout.Infinite)
       return await pending.Next.Task.WaitObservedAsync(token).ConfigureAwait(false);
@@ -1322,24 +1080,17 @@ public partial class EngineCoordinator : IDisposable
   /// <para>
   /// An engine that fails to stop counts as stopped, so the engines it depends on still stop. The coordinator still
   /// ends <see cref="EngineCoordinatorState.Stopped"/>, and this rethrows the first failure once every engine has been
-  /// stopped. A later call does not stop this coordinator's engines again.
+  /// stopped. A later call does not stop this coordinator's engines again. An engine whose stop ends cancelled (an
+  /// <see cref="OperationCanceledException"/>) is not a failure: it is logged as a warning and not rethrown.
   /// </para>
   /// </remarks>
+  /// <param name="token">
+  /// Does not cancel the shutdown, which always runs to its end. It is only passed on to the shutdown of the current
+  /// generation (on a coordinator replaced by a generation switch), which does not use it either.
+  /// </param>
   public async Task ShutdownAsync(CancellationToken token = default)
   {
-    try
-    {
-      await DispatchAsync(ShutdownAsyncInt, token).ConfigureAwait(false);
-    }
-    catch (OperationCanceledException) when (!token.IsCancellationRequested && _lifetimeCts.IsCancellationRequested)
-    {
-      // Fix (GenerationSwitchEdgeCaseTest): a second shutdown with the dispatcher on waited forever for the stopped
-      // dispatcher. The dispatcher no longer runs, so shut down here, as without a dispatcher. ShutdownAsyncInt is
-      // safe to run next to a shutdown in progress: it cancels and changes state under the lock, and returns once the
-      // coordinator is stopping. Checking the state instead of the token was not enough: a shutdown running at the same
-      // time cancels the token just before it changes the state.
-      await ShutdownAsyncInt().ConfigureAwait(false);
-    }
+    await ShutdownAsyncInt().ConfigureAwait(false);
 
     // Fix (GenerationSwitchEdgeCaseTest): a host that shut down the coordinator it started with left the current
     // generation running. The switch itself shuts the replaced generation down with ShutdownAsyncInt, not with this.
@@ -1348,7 +1099,7 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Internal implementation of <see cref="ShutdownAsync"/> executed on the dispatcher thread.
+  /// Internal implementation of <see cref="ShutdownAsync"/>.
   /// </summary>
   /// <remarks>
   /// <para>
@@ -1405,7 +1156,7 @@ public partial class EngineCoordinator : IDisposable
   /// Invalidates the context for a specific engine.
   /// </summary>
   /// <param name="name">Name of the engine whose context is invalidated.</param>
-  /// <param name="token">Cancellation token controlling the dispatched invalidation request.</param>
+  /// <param name="token">Cancels the caller's wait for the next generation of a switch.</param>
   /// <remarks>
   /// This forces re-initialization of the affected engine and its dependents. It does not start a coordinator that has
   /// not started. On a coordinator that a generation switch has replaced (once it has handed over, see
@@ -1417,13 +1168,12 @@ public partial class EngineCoordinator : IDisposable
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
   /// generation, once this coordinator was replaced).</exception>
   /// <exception cref="InvalidOperationException">The coordinator is shut down, so the engines would not start
-  /// again, and it runs without a dispatcher (<c>useDispatcher: false</c>).</exception>
-  /// <exception cref="OperationCanceledException">The coordinator is shut down and runs with a dispatcher (the
-  /// default): its queue no longer takes work. Or <paramref name="token"/> was cancelled.</exception>
+  /// again.</exception>
+  /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled.</exception>
   public Task InvalidateContextForEngineAsync(string name, CancellationToken token = default)
     => ForEngineAsync(name,
       generation => generation.InvalidateContextForEngineAsync(name, token),
-      () => DispatchAsync(() => InvalidateContextForEngineAsyncInt(name), token),
+      () => InvalidateContextForEngineAsyncInt(name),
       token, start: false);
 
   /// <summary>
@@ -1465,7 +1215,7 @@ public partial class EngineCoordinator : IDisposable
   /// have been captured at the time of the *original* registration and can be stale by the time a
   /// caller decides a refresh (rather than a full restart) is appropriate.
   /// </param>
-  /// <param name="token">Cancellation token controlling the dispatched request.</param>
+  /// <param name="token">Cancels the caller's wait for the next generation of a switch.</param>
   /// <remarks>
   /// Unlike <see cref="InvalidateContextForEngineAsync(string, CancellationToken)"/>, this does NOT
   /// reset the engine's kick-start task or any of its internal tasks — it only assigns the supplied
@@ -1485,7 +1235,7 @@ public partial class EngineCoordinator : IDisposable
   public Task RefreshEngineContextAsync(string name, IEngineContext context, CancellationToken token = default)
     => ForEngineAsync(name,
       generation => generation.RefreshEngineContextAsync(name, context, token),
-      () => DispatchAsync(() => RefreshEngineContextAsyncInt(name, context), token),
+      () => RefreshEngineContextAsyncInt(name, context),
       token, start: false);
 
   /// <summary>
@@ -1528,7 +1278,7 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   /// <remarks>
   /// The coordinator follows the mechanic, but not while operations are in flight: the mechanic's Ready event is not
-  /// passed on then (see Mechanic_EngineStatusChanged). Without the dispatcher, an operation that ends first, or an
+  /// passed on then (see Mechanic_EngineStatusChanged). An operation that ends first, or an
   /// engine that reloads after one, could otherwise find the required tasks completed while another operation is about
   /// to reset them, and the coordinator would stay Running through that reload. So the last one brings the coordinator
   /// back here: after an operation that left the required tasks completed (no status change follows), and after a Ready
@@ -1538,7 +1288,7 @@ public partial class EngineCoordinator : IDisposable
   {
     lock (_sync)
     {
-      // Fix (OptionalEngineTest): overlapping operations without the dispatcher; the last one decides.
+      // Fix (OptionalEngineTest): overlapping operations; the last one decides.
       if (--_contextOperationsInFlight > 0)
         return;
       // Fix (OptionalEngineTest): required engines only, as in Mechanic_EngineStatusChanged.
@@ -1580,12 +1330,34 @@ public partial class EngineCoordinator : IDisposable
   /// </param>
   /// <param name="token">Cancels the caller's wait; the engine goes on starting.</param>
   /// <remarks>
+  /// <para>
   /// On a coordinator replaced by a generation switch, the current generation answers: an engine that the switch left
-  /// out gives null. With the dispatcher on, so does the next generation during a switch, once it has started, instead
-  /// of the lookup waiting for the switch to end; an engine of the next generation can therefore make one from its own
-  /// tasks. If the switch fails before its next generation has started, this generation answers; if it fails after,
-  /// an engine already found there is one that the failure stops (#154); a lookup that reached it, or was still
-  /// waiting there, when the failure shut it down is answered by this generation.
+  /// out gives null.
+  /// </para>
+  /// <para>
+  /// During a generation switch, until it hands over, this coordinator still answers with the previous generation,
+  /// except for an engine the switch rebuilds from scratch: that lookup waits for the next generation to start and is
+  /// answered there. So an engine of the next generation that, from its own tasks, looks up another engine through
+  /// this coordinator (the one the host holds) can get an engine of the previous generation, and should not do so:
+  /// <list type="bullet">
+  /// <item><description>
+  /// An engine the switch hands over (it has a restart factory): the previous generation's engine, which the
+  /// hand-over then stops. In a switch that does not wait until ready the lookup races the hand-over, and gets either
+  /// that engine or the next generation's.
+  /// </description></item>
+  /// <item><description>
+  /// An engine the switch adds: in a switch that waits until ready, the previous generation does not know it (null,
+  /// or an exception from a lookup that throws for an unknown name). In one that does not wait, the lookup races the
+  /// hand-over, and gets either null (or the exception) or the added engine.
+  /// </description></item>
+  /// <item><description>
+  /// A switch on a coordinator that was never started: in a switch that waits until ready, the lookup starts the
+  /// previous generation after all (its engine factories run), and usually gets its engine, which the hand-over
+  /// stops. In one that does not wait, the lookup races the hand-over in the same way, and can get the next
+  /// generation's engine.
+  /// </description></item>
+  /// </list>
+  /// </para>
   /// </remarks>
   public Task<IEngine> GetEngineAsync(string name, bool throwErrorIfNotFound = true, CancellationToken token = default)
     => GetEngineWhenReadyAsync(name, throwErrorIfNotFound, Timeout.Infinite, token);
@@ -1628,56 +1400,18 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="milliSecondsTimeOut">Maximum wait time in milliseconds, or <see cref="Timeout.Infinite"/>.</param>
   /// <param name="token">Cancellation token controlling the wait.</param>
   /// <returns>The engine once Ready; otherwise null.</returns>
-  /// <remarks>
-  /// Only the start runs on the dispatcher: waiting there would hold the dispatcher, and every call queued behind it
-  /// (other lookups, a shutdown), until the engine is Ready. The wait itself runs as it does without a dispatcher.
-  /// </remarks>
   private async Task<IEngine> GetEngineWhenReadyAsync(string name, bool throwErrorIfNotFound, int milliSecondsTimeOut, CancellationToken token)
   {
-    // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation. Fix
-    // (#154): with the dispatcher, so does a switch before it hands over, once its next generation has started (see
-    // AnsweredByNextGeneration).
-    var pending = Volatile.Read(ref _switchBeforeHandover);
-    var startOnDispatcher = true;
-    if (Successor != null || QueuesBehindSwitch(pending))
-    {
-      var switchWait = TimeProvider.GetTimestamp();
-      var answering = await NextGenerationAsync(name, handedOverToo: false, milliSecondsTimeOut, token)
-        .ConfigureAwait(false);
-      if (answering == null)
-      {
-        // The time-out passed before the switch started its next generation: null. If it started it just after,
-        // that generation answers, with an engine that is Ready already; if it did not, this generation does. So
-        // does it once the switch has failed and cleaned up its next generation (the record is gone), or the
-        // generation it handed over to.
-        if (!pending.Next.Task.IsCompleted)
-          return null;
-        answering = Successor
-          ?? (ReferenceEquals(Volatile.Read(ref _switchBeforeHandover), pending) ? pending.Next.Task.Result : null);
-      }
-      if (answering != null)
-      {
-        var found = await answering.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, switchWait),
-          token).ConfigureAwait(false);
-        // A failed switch abandoned that generation and shut it down before the lookup got there, or while it waited
-        // there (null): this generation, current again, answers it, as it answers a call made after the failure (see
-        // AnsweredOnNextGenerationAsync).
-        if (found != null || !answering._abandoned)
-          return found;
-        // Not through the dispatcher if this generation has started: the failed switch holds it until its clean-up
-        // has stopped that generation's engines, which no time-out bounds (#154).
-        startOnDispatcher = Volatile.Read(ref _mechanicStart) is not { Status: TaskStatus.RanToCompletion };
-      }
-      milliSecondsTimeOut = TimeLeft(milliSecondsTimeOut, switchWait);
-    }
+    // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation.
+    if (Successor is { } successor)
+      return await successor.GetEngineWhenReadyAsync(name, false, milliSecondsTimeOut, token).ConfigureAwait(false);
 
     // The time-out counts from the end of the start, as the mechanic's own time-out does.
     var started = TimeProvider.GetTimestamp();
     IEngine engine;
     try
     {
-      if (startOnDispatcher)
-        await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      await StartAsync().ConfigureAwait(false);
       started = TimeProvider.GetTimestamp();
       engine = milliSecondsTimeOut == Timeout.Infinite
         ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, token).ConfigureAwait(false)
@@ -1685,7 +1419,7 @@ public partial class EngineCoordinator : IDisposable
     }
     catch (OperationCanceledException) when ((Successor != null || _abandoned) && !token.IsCancellationRequested)
     {
-      // The switch shut this generation down (its dispatcher or mechanic was cancelled) while the call was queued or
+      // The switch shut this generation down (its mechanic was cancelled) while the call was
       // waiting, after handing over or, for a next generation it abandoned, after failing; the caller did not cancel.
       engine = null;
     }
@@ -1720,18 +1454,16 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   /// <remarks>
   /// <para>
-  /// This releases monitor and cancellation resources and disposes the dispatcher if present.
+  /// This releases the cancellation resources.
   /// Callers should ensure shutdown has been initiated if they require an orderly stop.
   /// </para>
   /// </remarks>
   public void Dispose()
   {
     _disposed = true;
-    _monitorPulse.Dispose();
     // The registration first: an application token cancelled after this must not cancel a disposed source.
     _applicationRegistration.Dispose();
     _lifetimeCts.Dispose();
-    _mechanicDispatcher?.Dispose();
   }
 
   // ---------------------------------------------------------------------

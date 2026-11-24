@@ -125,7 +125,7 @@ public class EngineDescriptorRecoveryTest
   public async Task EngineCoordinator_RestartWithDefinitionsAsync_NextGenerationTasksGetEnforcersOfTheirOwn()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(EngineDescriptorRecoveryTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EngineDescriptorRecoveryTest), NullLogger.Instance);
     coordinator.RegisterEngine("Network", Factory, requiredForRunning: true).SetRestartPolicy(RestartPolicy.Critical);
 
     var next = await coordinator

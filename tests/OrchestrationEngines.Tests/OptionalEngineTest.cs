@@ -53,7 +53,7 @@ public class OptionalEngineTest
   }
 
   private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
-    new(nameof(OptionalEngineTest), logger ?? NullLogger.Instance, useDispatcher: false);
+    new(nameof(OptionalEngineTest), logger ?? NullLogger.Instance);
 
   private static void Register(EngineCoordinator coordinator, string name, IEngine engine, bool required)
   {
@@ -204,12 +204,12 @@ public class OptionalEngineTest
   }
 
   /// <summary>
-  /// Verifies that without the dispatcher an invalidation of an optional engine that ends while an invalidation of a
+  /// Verifies that an invalidation of an optional engine that ends while an invalidation of a
   /// required engine is in flight does not bring the coordinator back to Running: it stays Initializing until the
   /// required engine has loaded again.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_InvalidateContext_OverlappingWithoutDispatcher_NotRunningWhileRequiredReloads()
+  public async Task EngineCoordinator_InvalidateContext_Overlapping_NotRunningWhileRequiredReloads()
   {
     var ct = TestContext.Current.CancellationToken;
     var optionalAtReset = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

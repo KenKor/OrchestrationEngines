@@ -72,7 +72,7 @@ public class KickStartRestartTest
 
   private static EngineCoordinator CreateCoordinator(IEngine engine)
   {
-    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartPolicy(NoWait(maxRestarts: 5));
@@ -202,7 +202,7 @@ public class KickStartRestartTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = new NetworkEngine((load, _) => load == 1 ? throw new InvalidOperationException("The database was not reachable.") : Task.CompletedTask);
-    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartPolicy(new RestartPolicy
@@ -290,7 +290,7 @@ public class KickStartRestartTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = new WatchedEngine(load => load == 1 ? throw new InvalidOperationException("The load failed.") : Task.CompletedTask);
-    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartPolicy(NoWait(maxRestarts: 5));

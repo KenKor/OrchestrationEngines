@@ -352,7 +352,7 @@ public class EnsureTaskReadyTest
   private static EngineCoordinator CoordinatorWith(Func<CancellationToken, Task<IEngine>> create,
     Func<CancellationToken, Task<IEngineContext>> contextFactory = null, Action<EngineDescriptor> configure = null)
   {
-    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance);
     var descriptor = coordinator.RegisterEngine("Mixed", create, requiredForRunning: false)
       .SetContextFactory(contextFactory ?? (_ => Task.FromResult<IEngineContext>(new NoContext())))
       .WithoutRestarts();
@@ -582,7 +582,7 @@ public class EnsureTaskReadyTest
   {
     var ct = TestContext.Current.CancellationToken;
     var engine = new FailsOnceEngine();
-    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EnsureTaskReadyTest), NullLogger.Instance);
     coordinator.RegisterEngine("Retried", _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartPolicy(new RestartPolicy

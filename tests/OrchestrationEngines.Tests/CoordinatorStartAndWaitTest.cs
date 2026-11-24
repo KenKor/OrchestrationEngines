@@ -3,22 +3,19 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
-using OrchestrationEngines.Mechanic;
 using OrchestrationEngines.Restarter;
 using Xunit;
 
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// Contains tests for how the coordinator starts, waits for and disposes engines with the dispatcher on: a wait must
-/// not hold the dispatcher, so that other calls are not queued behind an engine that takes long to load, and a dispose
-/// without a shutdown ends the dispatcher's thread cleanly.
+/// Contains tests for how the coordinator starts and waits for engines: a wait must not hold up other calls behind an
+/// engine that takes long to load.
 /// </summary>
-public class DispatcherLifecycleTest
+public class CoordinatorStartAndWaitTest
 {
   /// <summary>
   /// Time given to a call that must complete.
@@ -77,52 +74,19 @@ public class DispatcherLifecycleTest
     }
   }
 
-  private static EngineCoordinator CreateCoordinator(bool useDispatcher) =>
-    new("DispatcherLifecycleTest", NullLogger.Instance, useDispatcher);
-
-  /// <summary>
-  /// Verifies that waiting until all engines are ready does not hold the dispatcher: a bounded lookup made meanwhile is
-  /// answered (with null, the engine is still loading) instead of queueing until the load is done.
-  /// </summary>
-  [Fact]
-  public async Task EnsureReadyAsync_DoesNotHoldTheDispatcher_WhileEnginesLoad()
-  {
-    var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-    GatedEngine slow = null;
-    var coordinator = CreateCoordinator(useDispatcher: true);
-    coordinator.RegisterEngine("Slow", _ => Task.FromResult<IEngine>(slow = new GatedEngine(gate.Task)));
-
-    try
-    {
-      var ready = coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken);
-      await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the slow engine must start loading");
-
-      var probe = coordinator.GetEngineAsync("Slow", 50, TestContext.Current.CancellationToken);
-      (await probe.WaitAsync(MustComplete, TestContext.Current.CancellationToken)).Should().BeNull();
-      ready.IsCompleted.Should().BeFalse();
-
-      gate.SetResult(true);
-      await ready.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-      coordinator.GetEngineIfReady("Slow").Should().BeSameAs(slow);
-    }
-    finally
-    {
-      gate.TrySetResult(true);
-      await coordinator.ShutdownAsync(TestContext.Current.CancellationToken);
-      coordinator.Dispose();
-    }
-  }
+  private static EngineCoordinator CreateCoordinator() =>
+    new(nameof(CoordinatorStartAndWaitTest), NullLogger.Instance);
 
   /// <summary>
   /// Verifies that a lookup that gives up after its time-out returns null without stopping the engine: it completes
-  /// its load, and a later lookup gets it.
+  /// its load, and a later lookup gets it. The wait until all engines are ready, made before it, is still waiting.
   /// </summary>
   [Fact]
   public async Task GetEngineAsync_WithTimeOut_ReturnsNullWhileLoading_AndTheEngineKeepsLoading()
   {
     var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     GatedEngine slow = null;
-    var coordinator = CreateCoordinator(useDispatcher: true);
+    var coordinator = CreateCoordinator();
     coordinator.RegisterEngine("Slow", _ => Task.FromResult<IEngine>(slow = new GatedEngine(gate.Task)));
 
     try
@@ -131,6 +95,7 @@ public class DispatcherLifecycleTest
       await Wait.UntilAsync(() => slow != null && slow.WorkStarted, MustComplete, "the slow engine must start loading");
 
       (await coordinator.GetEngineAsync("Slow", true, 100, TestContext.Current.CancellationToken)).Should().BeNull();
+      ready.IsCompleted.Should().BeFalse();
 
       gate.SetResult(true);
       var later = await coordinator.GetEngineAsync("Slow", true, (int)MustComplete.TotalMilliseconds, TestContext.Current.CancellationToken);
@@ -151,7 +116,7 @@ public class DispatcherLifecycleTest
   [Fact]
   public async Task GetEngineAsync_WithTimeOut_ThrowsForAnUnknownEngine_WhenAsked()
   {
-    var coordinator = CreateCoordinator(useDispatcher: true);
+    var coordinator = CreateCoordinator();
     coordinator.RegisterEngine("Known", _ => Task.FromResult<IEngine>(new GatedEngine(Task.CompletedTask)));
 
     try
@@ -176,7 +141,7 @@ public class DispatcherLifecycleTest
   {
     var attempts = 0;
     Task ready = Task.CompletedTask;
-    var coordinator = CreateCoordinator(useDispatcher: true);
+    var coordinator = CreateCoordinator();
     coordinator.RegisterEngine("Failing", _ =>
         Task.FromResult<IEngine>(new FailingEngine(() => Interlocked.Increment(ref attempts))))
       .SetRestartPolicy(new RestartPolicy
@@ -220,7 +185,7 @@ public class DispatcherLifecycleTest
     var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     GatedEngine underlying = null;
     GatedEngine dependent = null;
-    var coordinator = CreateCoordinator(useDispatcher: false);
+    var coordinator = CreateCoordinator();
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(underlying = new GatedEngine(gate.Task)));
     coordinator.RegisterEngine("B", _ => Task.FromResult<IEngine>(dependent = new GatedEngine(Task.CompletedTask)))
       .AddDependsOn("A");
@@ -277,37 +242,5 @@ public class DispatcherLifecycleTest
     context.UnderlyingEngine("network").Should().BeSameAs(underlying);
     context.UnderlyingEngine("NETWORK").Should().BeSameAs(underlying);
     context.AddUnderlyingEngine("NETWORK", underlying).Should().BeFalse();
-  }
-
-  /// <summary>
-  /// A coordinator with a dispatcher that tells which thread its dispatcher runs on.
-  /// </summary>
-  private sealed class ThreadRevealingCoordinator(ILogger logger)
-    : EngineCoordinator(nameof(DispatcherLifecycleTest), logger, useDispatcher: true)
-  {
-    public Task<Thread> DispatcherThreadAsync(CancellationToken token) =>
-      DispatchAsync(() => Task.FromResult(Thread.CurrentThread), token);
-  }
-
-  /// <summary>
-  /// Verifies that a coordinator with a dispatcher, disposed without a shutdown, ends the dispatcher's thread without
-  /// the dispatcher logging an error, although the coordinator disposes the engine token's source first.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_DisposeWithoutShutdown_EndsDispatcherThreadWithoutError()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var errors = 0;
-    var logger = new OnMessageLogger(nameof(MechanicDispatcher), () => Interlocked.Increment(ref errors));
-    var coordinator = new ThreadRevealingCoordinator(logger);
-    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new GraphEngine(("Load", []))));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var dispatcherThread = await coordinator.DispatcherThreadAsync(ct).WaitAsync(MustComplete, ct);
-
-    coordinator.Dispose();
-
-    dispatcherThread.Join(MustComplete).Should()
-      .BeTrue("the dispatcher's thread ends once the coordinator is disposed");
-    Volatile.Read(ref errors).Should().Be(0, "a disposed coordinator's dispatcher is not a crashed one");
   }
 }

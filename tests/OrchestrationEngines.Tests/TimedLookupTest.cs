@@ -113,7 +113,7 @@ public class TimedLookupTest
   public async Task EngineCoordinator_CancelledLookup_ReleasesItsInnerWait()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(TimedLookupTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(TimedLookupTest), NullLogger.Instance);
     coordinator.RegisterEngine(Name, NeverCreated);
     await coordinator.StartAsync().WaitAsync(MustComplete, ct);
     using var caller = new CancellationTokenSource();

@@ -73,11 +73,11 @@ public class ContextOperationGenerationTest
   /// the engine <see cref="Name"/>.
   /// </summary>
   private static async Task<(EngineCoordinator Replaced, EngineCoordinator Next)> SwitchedAsync(
-    bool useDispatcher, CancellationToken ct, params string[] names)
+    CancellationToken ct, params string[] names)
   {
     var calls = 0;
     int nextNumber() => Interlocked.Increment(ref calls);
-    var coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance);
     foreach (var name in names)
       coordinator.RegisterEngineDescriptor(Descriptor(name, nextNumber));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
@@ -93,14 +93,11 @@ public class ContextOperationGenerationTest
   /// Verifies that invalidating a context on a replaced coordinator invalidates it on the newer generation: its engine
   /// gets a context from a new factory call.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task EngineCoordinator_InvalidateContext_ReplacedCoordinator_InvalidatesOnTheNextGeneration(
-    bool useDispatcher)
+  [Fact]
+  public async Task EngineCoordinator_InvalidateContext_ReplacedCoordinator_InvalidatesOnTheNextGeneration()
   {
     var ct = TestContext.Current.CancellationToken;
-    var (replaced, next) = await SwitchedAsync(useDispatcher, ct, Name);
+    var (replaced, next) = await SwitchedAsync(ct, Name);
     var engine = next.Engines[Name];
     var before = ((NumberedContext)Own(engine)).Number;
 
@@ -114,14 +111,11 @@ public class ContextOperationGenerationTest
   /// <summary>
   /// Verifies that refreshing a context on a replaced coordinator pushes it into the newer generation's engine.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task EngineCoordinator_RefreshEngineContext_ReplacedCoordinator_PushesIntoTheNextGeneration(
-    bool useDispatcher)
+  [Fact]
+  public async Task EngineCoordinator_RefreshEngineContext_ReplacedCoordinator_PushesIntoTheNextGeneration()
   {
     var ct = TestContext.Current.CancellationToken;
-    var (replaced, next) = await SwitchedAsync(useDispatcher, ct, Name);
+    var (replaced, next) = await SwitchedAsync(ct, Name);
     var fresh = new NumberedContext(-1);
 
     await replaced.RefreshEngineContextAsync(Name, fresh, ct).WaitAsync(MustComplete, ct);
@@ -134,14 +128,11 @@ public class ContextOperationGenerationTest
   /// Verifies that a context operation on a replaced coordinator, for an engine the newer generation does not have,
   /// fails as for an unknown name.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task EngineCoordinator_ContextOperations_ReplacedCoordinatorEngineDropped_ThrowArgumentException(
-    bool useDispatcher)
+  [Fact]
+  public async Task EngineCoordinator_ContextOperations_ReplacedCoordinatorEngineDropped_ThrowArgumentException()
   {
     var ct = TestContext.Current.CancellationToken;
-    var (replaced, _) = await SwitchedAsync(useDispatcher, ct, Name, "Dropped");
+    var (replaced, _) = await SwitchedAsync(ct, Name, "Dropped");
 
     var invalidate = () => replaced.InvalidateContextForEngineAsync("Dropped", ct).WaitAsync(MustComplete, ct);
     var refresh = () => replaced.RefreshEngineContextAsync("Dropped", new NoContext(), ct).WaitAsync(MustComplete, ct);
@@ -169,8 +160,7 @@ public class ContextOperationGenerationTest
     public HeldSwitch(bool handOverA = false)
     {
       _handOverA = handOverA;
-      Coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance,
-        useDispatcher: false);
+      Coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance);
       var a = Coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(NewA()))
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
         .WithoutRestarts();
@@ -340,8 +330,7 @@ public class ContextOperationGenerationTest
     var failure = new InvalidOperationException("The stop failed.");
     var engine = new StopFailingEngine(failure, holdStop: true);
     var handedOverA = new LoadEngine();
-    var coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance,
-      useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ContextOperationGenerationTest), NullLogger.Instance);
     coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .WithoutRestarts();

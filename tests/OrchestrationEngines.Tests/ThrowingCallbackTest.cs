@@ -296,7 +296,7 @@ public class ThrowingCallbackTest
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
-    var coordinator = new EngineCoordinator(nameof(ThrowingCallbackTest), logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ThrowingCallbackTest), logger);
     coordinator.RegisterEngineDescriptor(
       new EngineDescriptor("E", _ => Task.FromResult<IEngine>(new PlainEngine(logger)), requiredForRunning: true, 1)
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
