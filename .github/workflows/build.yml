@@ -48,8 +48,9 @@ jobs:
           with open("global.json", "w") as f:
               json.dump(config, f, indent=2)
           PY
-          dotnet --version
-          dotnet --version | grep -qE '^10\.0\.1[0-9]{2}$' || { echo "CI must build with a 10.0.1xx SDK"; exit 1; }
+          version=$(dotnet --version)
+          echo "$version"
+          [[ $version =~ ^10\.0\.1[0-9]{2}$ ]] || { echo "CI must build with a 10.0.1xx SDK, got $version"; exit 1; }
 
       # NuGet packages, keyed on every file that sets a package or a feed. A version change misses the key and
       # restores the newest cache for the OS; Restore fetches only what is missing, and the whole folder, old versions
