@@ -101,11 +101,6 @@ public partial class MechanicEngine : BaseEngine
   // ---------------------------------------------------------------------
 
   /// <summary>
-  /// Raised when an engine is registered (see <see cref="RegisterEngine"/>), on the registering thread.
-  /// </summary>
-  internal event Action<IEngine> EngineRegistered;
-
-  /// <summary>
   /// Registers a newly created engine instance.
   /// </summary>
   /// <param name="name">The name.</param>
@@ -124,7 +119,6 @@ public partial class MechanicEngine : BaseEngine
   public void RegisterEngine(string name, IEngine engine)
   {
     _engines[name] = engine;
-    EngineRegistered?.Invoke(engine);
     // Added before the flag is read, with a full fence (see StopAsync), so no engine is missed.
     if (Interlocked.CompareExchange(ref _stopping, 0, 0) == 0)
       return;
@@ -316,6 +310,27 @@ public partial class MechanicEngine : BaseEngine
   private bool KickStartRetryPending(string kickStartTaskName, IEngine engine) =>
     _tasks.TryGetValue(kickStartTaskName, out var kickStart) && !kickStart.IsCompleted
     && !IsStopped(engine);
+
+  /// <summary>
+  /// The state of an engine as a wait for it sees it (see <see cref="GetEngineWhenReadyAsync(string, bool)"/>): its
+  /// own state, which its kick-start completes where the engine cannot tell. A Faulted or Stopped engine counts as
+  /// Starting while its kick-start is retrying it. An engine that has not started (not created, or still Created) is
+  /// Faulted once its kick-start has given up, and Starting once it exists or its kick-start has started.
+  /// </summary>
+  /// <param name="name">The engine name.</param>
+  internal EngineState StartStateOf(string name)
+  {
+    _engines.TryGetValue(name, out var engine);
+    var state = engine?.State ?? EngineState.Created;
+    var kickStartName = EngineKickStartTask.KickStartName(name);
+    if (state is EngineState.Starting or EngineState.Ready || !_tasks.TryGetValue(kickStartName, out var kickStart))
+      return state;
+    if (state != EngineState.Created)
+      return KickStartRetryPending(kickStartName, engine) ? EngineState.Starting : state;
+    if (HasGivenUp(kickStartName))
+      return EngineState.Faulted;
+    return engine != null || kickStart.State.IsStarted() ? EngineState.Starting : EngineState.Created;
+  }
 
   /// <summary>Returns whether the engine was stopped on purpose; an engine that is null was not.</summary>
   private static bool IsStopped(IEngine engine) => engine is BaseEngine { IsCancellationRequested: true };

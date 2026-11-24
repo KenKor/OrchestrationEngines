@@ -486,26 +486,10 @@ It:
 - handles context invalidation and shutdown
 
 Its application-level state is not stored but computed on every read, from its own start and shutdown and from the
-required engines, as an engine's state is computed from its tasks:
-
-- `Created`: not started yet
-- `WaitingForEngines`: started, and no required engine has begun to start yet; or a required engine is `Faulted` or
-  `Stopped` and is not being started again (also next to one that is still starting)
-- `Initializing`: a required engine is starting (or its restart policy is starting it again), or a context operation
-  (an invalidation or a refresh) is in flight
-- `Running`: every required engine is `Ready`
-- `Stopping`: the shutdown has started
-- `Stopped`: the shutdown has completed
-
-So the state follows the engines: a required engine that fails takes the coordinator to `WaitingForEngines`, and one
-that is brought back to `Ready`, for example by `ResetTasksForEngineAsync` after a failed start, brings it back to
-`Running`. [EngineStateMachine.md](EngineStateMachine.md) has the rules in order.
-
-`Running` is therefore not a state the coordinator keeps once reached. A required engine that faults or stops later
-(a task that fails for good after the start, a restart that is given up) takes the coordinator from `Running` to
-`WaitingForEngines`, until that engine is `Ready` again. Before the state was computed, the coordinator stayed
-`Running` in that case. A host that reads `State` to decide whether the application is operational gets the engines'
-answer; one that only needs to know that the start has completed once should record that itself.
+required engines, as an engine's state is computed from its tasks. It follows the engines: a required engine that
+fails takes the coordinator to `WaitingForEngines`, also after it was `Running`, and one brought back to `Ready` (for
+example by `ResetTasksForEngineAsync`) brings it back to `Running`. A host that only needs to know that the start has
+completed once should record that itself. [EngineStateMachine.md](EngineStateMachine.md) has the rules in order.
 
 The coordinator is intentionally conservative: once shutdown starts, its state no longer follows the engines.
 

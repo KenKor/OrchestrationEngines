@@ -1,11 +1,10 @@
-using System.Linq;
+using System;
 using System.Threading.Tasks;
 using AwesomeAssertions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
+using OrchestrationEngines.Restarter;
 using Xunit;
 
 namespace OrchestrationEngines.Tests;
@@ -18,7 +17,8 @@ public class CoordinatorComputedStateTest
 {
   /// <summary>
   /// An engine without tasks: Ready once started, after which the test sets its state. Its stop waits for
-  /// <see cref="HoldStop"/>.
+  /// <see cref="HoldStop"/>. Not <see cref="StopFailingEngine"/>: <see cref="Stopping"/> is signalled before the base
+  /// stop, so a test sees the engine still Ready while the coordinator is Stopping.
   /// </summary>
   private sealed class PlainEngine() : BaseEngine(NullLogger.Instance)
   {
@@ -38,13 +38,9 @@ public class CoordinatorComputedStateTest
     }
   }
 
-  private static EngineCoordinator CreateCoordinator(params (string Name, IEngine Engine, bool Required)[] engines) =>
-    CreateCoordinator(NullLogger.Instance, engines);
-
-  private static EngineCoordinator CreateCoordinator(ILogger logger,
-    params (string Name, IEngine Engine, bool Required)[] engines)
+  private static EngineCoordinator CreateCoordinator(params (string Name, IEngine Engine, bool Required)[] engines)
   {
-    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), logger);
+    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), NullLogger.Instance);
     foreach (var (name, engine, required) in engines)
       coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: required)
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
@@ -110,24 +106,75 @@ public class CoordinatorComputedStateTest
   }
 
   /// <summary>
-  /// Verifies that a required engine that faults after the start, and is Ready again later, is logged as transitions
-  /// of the coordinator when that happens, without a read of the state.
+  /// Verifies that a required engine that failed, while its kick-start waits to retry it, counts as starting: the
+  /// coordinator is Initializing, as a lookup waits for the retry.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_State_RequiredEngineFaultsLater_TransitionIsLoggedWithoutARead()
+  public async Task EngineCoordinator_State_RequiredEngineFailedAndRetryPending_IsInitializing()
   {
     var ct = TestContext.Current.CancellationToken;
-    var logger = new FakeLogger();
-    var engine = new PlainEngine();
-    var coordinator = CreateCoordinator(logger, ("A", engine, true));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var engine = new FailingEngine();
+    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), NullLogger.Instance);
+    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .SetRestartPolicy(new RestartPolicy
+      {
+        MaxRestartsInWindow = 5,
+        Window = TimeSpan.FromMinutes(10),
+        InitialBackoff = TimeSpan.FromMinutes(5),
+        MaxBackoff = TimeSpan.FromMinutes(5),
+      });
+    _ = coordinator.StartAsync();
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the first load must fail");
 
-    engine.State = EngineState.Faulted;
-    engine.State = EngineState.Ready;
+    coordinator.State.Should().Be(EngineCoordinatorState.Initializing);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
 
-    logger.Collector.GetSnapshot().Select(r => r.Message).Where(m => m.Contains("Coordinator transition"))
-      .Should().ContainInOrder(
-        $"'{nameof(CoordinatorComputedStateTest)}': Coordinator transition Running --> WaitingForEngines",
-        $"'{nameof(CoordinatorComputedStateTest)}': Coordinator transition WaitingForEngines --> Running");
+  /// <summary>
+  /// Verifies that a required engine whose creation failed for good, so that it never exists, counts as Faulted: the
+  /// coordinator is WaitingForEngines.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_State_RequiredEngineNotCreated_IsWaitingForEngines()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), NullLogger.Instance);
+    coordinator.RegisterEngine("A", _ => throw new InvalidOperationException("The engine could not be created."),
+        requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .WithoutRestarts();
+    await coordinator.StartAsync();
+
+    (await coordinator.GetEngineAsync("A", throwErrorIfNotFound: false, ct).WaitAsync(MustComplete, ct))
+      .Should().BeNull();
+    coordinator.State.Should().Be(EngineCoordinatorState.WaitingForEngines);
+  }
+
+  /// <summary>
+  /// Verifies that a coordinator without required engines whose start failed is not Running: no engine counts, but
+  /// the failed start does.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_State_NoRequiredEngineAndStartFailed_IsWaitingForEngines()
+  {
+    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), NullLogger.Instance);
+    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(new PlainEngine()), requiredForRunning: false)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .AddDependsOn("Missing");
+
+    var start = await Record.ExceptionAsync(() => coordinator.StartAsync());
+
+    start.Should().NotBeNull();
+    coordinator.State.Should().Be(EngineCoordinatorState.WaitingForEngines);
+  }
+
+  /// <summary>
+  /// An engine whose load fails.
+  /// </summary>
+  private sealed class FailingEngine() : BaseEngine(NullLogger.Instance)
+  {
+    protected override void SetUpTasks() =>
+      CreateTask("Load", _ => throw new InvalidOperationException("The database was not reachable."));
   }
 }

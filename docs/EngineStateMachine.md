@@ -9,9 +9,10 @@ tasks. So it cannot differ from what it describes. The first row that applies gi
 | `Stopped` | The shutdown has completed. |
 | `Stopping` | The shutdown has started. |
 | `Created` | The coordinator has not been started. |
+| `WaitingForEngines` | The start failed (the mechanic could not set up its tasks). |
 | `WaitingForEngines` | A required engine is `Faulted` or `Stopped`, and is not being started again. |
 | `Initializing` | A context operation (an invalidation or a refresh) is in flight. |
-| `Running` | Every required engine is `Ready`. |
+| `Running` | Every required engine is `Ready` (with none required: once the start has completed). |
 | `Initializing` | A required engine has begun to start. |
 | `WaitingForEngines` | Started, but no required engine has begun to start yet. |
 
@@ -23,7 +24,10 @@ tasks. So it cannot differ from what it describes. The first row that applies gi
   kick-start in the mechanic stands in: the engine counts as `Faulted` once the kick-start has given up (the engine
   could not be created, its context failed, or an engine it depends on failed), and as starting once it exists or its
   kick-start has been fired.
-- An engine registered as not required for running does not count.
+- An engine registered as not required for running does not count. A coordinator with no required engine is
+  `Initializing` until its start has completed, then `Running`.
+- These are the rules by which a lookup (`GetEngineAsync`) decides whether to wait for an engine; the mechanic applies
+  them to both.
 
 ## Running is not kept
 
@@ -33,11 +37,7 @@ coordinator is `Running` (a task that fails for good later, a restart that is gi
 coordinator stayed `Running` in that case: a host that took `Running` to mean "the start has completed once" must
 record that itself now.
 
-## Logging
-
-A read of `State` has no side effect. A change of the state is logged (debug,
-`Coordinator transition <old> --> <new>`) where it can happen: at the start, at the shutdown, around a context
-operation, and when the state of the mechanic or of one of its engines changes.
+A read of `State` has no side effect, and a change of it is not logged: the tasks log their own transitions (debug).
 
 A generation switch (`RestartWithDefinitionsAsync`) shuts the replaced coordinator down, so a replaced coordinator ends
 in `Stopped`; lookups on it are answered by the current coordinator of its lineage (`Successor`). A shutdown reaches
