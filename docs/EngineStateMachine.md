@@ -25,9 +25,19 @@ tasks. So it cannot differ from what it describes. The first row that applies gi
   kick-start has been fired.
 - An engine registered as not required for running does not count.
 
-A change of the state is logged (debug, `Coordinator transition <old> --> <new>`) when it is seen: on a read of
-`State`, or on one of the events that can cause it (the start, the shutdown, a context operation, a change of the
-mechanic's state).
+## Running is not kept
+
+The rules hold after the start has completed too. A required engine that becomes `Faulted` or `Stopped` while the
+coordinator is `Running` (a task that fails for good later, a restart that is given up) takes the coordinator to
+`WaitingForEngines`, and it is `Running` again once that engine is `Ready` again. When the state was stored, the
+coordinator stayed `Running` in that case: a host that took `Running` to mean "the start has completed once" must
+record that itself now.
+
+## Logging
+
+A read of `State` has no side effect. A change of the state is logged (debug,
+`Coordinator transition <old> --> <new>`) where it can happen: at the start, at the shutdown, around a context
+operation, and when the state of the mechanic or of one of its engines changes.
 
 A generation switch (`RestartWithDefinitionsAsync`) shuts the replaced coordinator down, so a replaced coordinator ends
 in `Stopped`; lookups on it are answered by the current coordinator of its lineage (`Successor`). A shutdown reaches

@@ -33,7 +33,7 @@ the state of each engine. In more detail:
 flowchart TB
     Host(["Host application"])
 
-    Coordinator["<b>EngineCoordinator</b><br/>application state machine<br/>optional dispatcher, monitor loop<br/>lineage for generation switches"]
+    Coordinator["<b>EngineCoordinator</b><br/>computed state<br/>optional dispatcher, monitor loop<br/>switch lineage"]
 
     MechanicNode["<b>MechanicEngine</b><br/>builds three lifecycle tasks<br/>per registered engine"]
 
@@ -492,6 +492,12 @@ required engines, as an engine's state is computed from its tasks:
 So the state follows the engines: a required engine that fails takes the coordinator to `WaitingForEngines`, and one
 that is brought back to `Ready`, for example by `ResetTasksForEngineAsync` after a failed start, brings it back to
 `Running`. [EngineStateMachine.md](EngineStateMachine.md) has the rules in order.
+
+`Running` is therefore not a state the coordinator keeps once reached. A required engine that faults or stops later
+(a task that fails for good after the start, a restart that is given up) takes the coordinator from `Running` to
+`WaitingForEngines`, until that engine is `Ready` again. Before the state was computed, the coordinator stayed
+`Running` in that case. A host that reads `State` to decide whether the application is operational gets the engines'
+answer; one that only needs to know that the start has completed once should record that itself.
 
 The coordinator is intentionally conservative: once shutdown starts, its state no longer follows the engines.
 

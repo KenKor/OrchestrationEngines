@@ -1,6 +1,9 @@
+using System.Linq;
 using System.Threading.Tasks;
 using AwesomeAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using Xunit;
@@ -14,19 +17,34 @@ namespace OrchestrationEngines.Tests;
 public class CoordinatorComputedStateTest
 {
   /// <summary>
-  /// An engine without tasks: Ready once started, after which the test sets its state.
+  /// An engine without tasks: Ready once started, after which the test sets its state. Its stop waits for
+  /// <see cref="HoldStop"/>.
   /// </summary>
   private sealed class PlainEngine() : BaseEngine(NullLogger.Instance)
   {
+    public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task HoldStop { get; set; } = Task.CompletedTask;
+
     protected override void SetUpTasks()
     {
     }
+
+    public override async Task StopAsync()
+    {
+      Stopping.TrySetResult();
+      await HoldStop;
+      await base.StopAsync();
+    }
   }
 
-  private static EngineCoordinator CreateCoordinator(params (string Name, IEngine Engine, bool Required)[] engines)
+  private static EngineCoordinator CreateCoordinator(params (string Name, IEngine Engine, bool Required)[] engines) =>
+    CreateCoordinator(NullLogger.Instance, engines);
+
+  private static EngineCoordinator CreateCoordinator(ILogger logger,
+    params (string Name, IEngine Engine, bool Required)[] engines)
   {
-    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), NullLogger.Instance,
-      useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), logger, useDispatcher: false);
     foreach (var (name, engine, required) in engines)
       coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: required)
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
@@ -64,14 +82,15 @@ public class CoordinatorComputedStateTest
   }
 
   /// <summary>
-  /// Verifies that the state follows the coordinator's own start and shutdown: Created before the start, and Stopped
-  /// after the shutdown, whatever the engines say.
+  /// Verifies that the state follows the coordinator's own start and shutdown: Created before the start, Stopping
+  /// while the shutdown stops the engines, and Stopped after it, whatever the engines say.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_State_BeforeStartAndAfterShutdown_FollowsTheCoordinator()
+  public async Task EngineCoordinator_State_BeforeStartAndDuringAndAfterShutdown_FollowsTheCoordinator()
   {
     var ct = TestContext.Current.CancellationToken;
-    var engine = new PlainEngine();
+    var releaseStop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var engine = new PlainEngine { HoldStop = releaseStop.Task };
     var coordinator = CreateCoordinator(("A", engine, true));
 
     coordinator.State.Should().Be(EngineCoordinatorState.Created);
@@ -79,8 +98,36 @@ public class CoordinatorComputedStateTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     coordinator.State.Should().Be(EngineCoordinatorState.Running);
 
-    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+    var shutdown = coordinator.ShutdownAsync(ct);
+    await engine.Stopping.Task.WaitAsync(MustComplete, ct);
+    engine.State.Should().Be(EngineState.Ready);
+    coordinator.State.Should().Be(EngineCoordinatorState.Stopping);
+
+    releaseStop.SetResult();
+    await shutdown.WaitAsync(MustComplete, ct);
     engine.State = EngineState.Ready;
     coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
+  }
+
+  /// <summary>
+  /// Verifies that a required engine that faults after the start, and is Ready again later, is logged as transitions
+  /// of the coordinator when that happens, without a read of the state.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_State_RequiredEngineFaultsLater_TransitionIsLoggedWithoutARead()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var logger = new FakeLogger();
+    var engine = new PlainEngine();
+    var coordinator = CreateCoordinator(logger, ("A", engine, true));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+
+    engine.State = EngineState.Faulted;
+    engine.State = EngineState.Ready;
+
+    logger.Collector.GetSnapshot().Select(r => r.Message).Where(m => m.Contains("Coordinator transition"))
+      .Should().ContainInOrder(
+        $"'{nameof(CoordinatorComputedStateTest)}': Coordinator transition Running --> WaitingForEngines",
+        $"'{nameof(CoordinatorComputedStateTest)}': Coordinator transition WaitingForEngines --> Running");
   }
 }

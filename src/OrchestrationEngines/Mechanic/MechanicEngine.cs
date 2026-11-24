@@ -101,6 +101,11 @@ public partial class MechanicEngine : BaseEngine
   // ---------------------------------------------------------------------
 
   /// <summary>
+  /// Raised when an engine is registered (see <see cref="RegisterEngine"/>), on the registering thread.
+  /// </summary>
+  internal event Action<IEngine> EngineRegistered;
+
+  /// <summary>
   /// Registers a newly created engine instance.
   /// </summary>
   /// <param name="name">The name.</param>
@@ -119,6 +124,7 @@ public partial class MechanicEngine : BaseEngine
   public void RegisterEngine(string name, IEngine engine)
   {
     _engines[name] = engine;
+    EngineRegistered?.Invoke(engine);
     // Added before the flag is read, with a full fence (see StopAsync), so no engine is missed.
     if (Interlocked.CompareExchange(ref _stopping, 0, 0) == 0)
       return;

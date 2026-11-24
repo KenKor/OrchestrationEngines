@@ -40,7 +40,7 @@ public partial class EngineCoordinator : IDisposable
   private volatile bool _shutdownStarted;
   private volatile bool _shutdownCompleted;
 
-  // The state last seen, for the transition log line (see State).
+  // The state last logged, for the transition log line (see LogStateChange).
   private int _lastState = (int)EngineCoordinatorState.Created;
 
   // Synchronization object for short, synchronous critical sections.
@@ -108,7 +108,7 @@ public partial class EngineCoordinator : IDisposable
 
   // The one start of the mechanic (set up and fire its tasks). Claimed under _sync by the first StartAsync caller;
   // every other caller awaits it, so no caller fires or enumerates the mechanic's tasks while they are being created.
-  private volatile Task _mechanicStart;
+  private Task _mechanicStart;
 
   /// <summary>
   /// Indicates whether cancellation has been requested for the coordinator.
@@ -128,20 +128,24 @@ public partial class EngineCoordinator : IDisposable
   /// and Stopped from the shutdown. In between it follows the engines registered as required for running:
   /// WaitingForEngines if one is Faulted or Stopped (and is not being started again); else Initializing while a
   /// context operation is in flight; else Running if all are Ready; else Initializing once one has begun to start,
-  /// and WaitingForEngines before that. A change is logged when it is seen: on a read, or on one of the events that
-  /// can cause it.
+  /// and WaitingForEngines before that. A read has no side effect: a change is logged where it can happen (see
+  /// <see cref="LogStateChange"/>).
   /// </remarks>
-  public EngineCoordinatorState State
+  public EngineCoordinatorState State => ComputeState();
+
+  /// <summary>
+  /// Logs the state if it differs from the one logged last. Called where the state can change: the start, the
+  /// shutdown, a context operation, and a state change of the mechanic or of one of its engines.
+  /// </summary>
+  private void LogStateChange()
   {
-    get
-    {
-      var state = ComputeState();
-      var previous = (EngineCoordinatorState)Interlocked.Exchange(ref _lastState, (int)state);
-      if (previous != state)
-        BestEffort.Log(() => LogTransition(_coordinatorName, previous, state));
-      return state;
-    }
+    var state = ComputeState();
+    var previous = (EngineCoordinatorState)Interlocked.Exchange(ref _lastState, (int)state);
+    if (previous != state)
+      BestEffort.Log(() => LogTransition(_coordinatorName, previous, state));
   }
+
+  private void OnEngineStatusChanged(object sender, EngineStatusEventArgs e) => LogStateChange();
 
   private EngineCoordinatorState ComputeState()
   {
@@ -149,7 +153,7 @@ public partial class EngineCoordinator : IDisposable
       return EngineCoordinatorState.Stopped;
     if (_shutdownStarted)
       return EngineCoordinatorState.Stopping;
-    if (_mechanicStart == null)
+    if (Volatile.Read(ref _mechanicStart) == null)
       return EngineCoordinatorState.Created;
 
     // The descriptors do not change once the start is claimed (see TryRegisterEngineDescriptor).
@@ -307,8 +311,10 @@ public partial class EngineCoordinator : IDisposable
   {
     var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token) { TimeProvider = TimeProvider };
 
-    // The mechanic's changes are when the coordinator's state may change: read it, so a change is logged.
-    mechanic.EngineStatusChanged += (_, _) => _ = State;
+    // The coordinator's state follows the engines and their kick-starts (the mechanic's tasks): log it when they
+    // change.
+    mechanic.EngineStatusChanged += OnEngineStatusChanged;
+    mechanic.EngineRegistered += engine => engine.EngineStatusChanged += OnEngineStatusChanged;
 
     // Attach engine descriptors before starting.
     mechanic.Context = _context;
@@ -1030,7 +1036,7 @@ public partial class EngineCoordinator : IDisposable
       }
       mechanicStart = _mechanicStart;
     }
-    _ = State;
+    LogStateChange();
 
     if (startClaimed != null)
     {
@@ -1315,7 +1321,7 @@ public partial class EngineCoordinator : IDisposable
       if (_shutdownStarted) return;
       _shutdownStarted = true;
     }
-    _ = State;
+    LogStateChange();
 
     ExceptionDispatchInfo stopFailure = null;
     try
@@ -1330,7 +1336,10 @@ public partial class EngineCoordinator : IDisposable
 
     // A failed stop still ends the shutdown: nothing else would move the coordinator on from Stopping.
     _shutdownCompleted = true;
-    _ = State;
+    LogStateChange();
+    // An engine can outlive this coordinator (a generation switch hands it over): it must not keep it alive.
+    foreach (var engine in _mechanic?.Engines.Values ?? [])
+      engine.EngineStatusChanged -= OnEngineStatusChanged;
     stopFailure?.Throw();
   }
 
@@ -1444,7 +1453,7 @@ public partial class EngineCoordinator : IDisposable
   {
     lock (_sync)
       _contextOperationsInFlight++;
-    _ = State;
+    LogStateChange();
   }
 
   /// <summary>
@@ -1454,7 +1463,7 @@ public partial class EngineCoordinator : IDisposable
   {
     lock (_sync)
       _contextOperationsInFlight--;
-    _ = State;
+    LogStateChange();
   }
 
   /// <summary>
