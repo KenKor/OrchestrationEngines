@@ -37,7 +37,7 @@ coordinator is `Running` (a task that fails for good later, a restart that is gi
 coordinator stayed `Running` in that case: a host that took `Running` to mean "the start has completed once" must
 record that itself now.
 
-A read of `State` has no side effect, and a change of it is not logged: the tasks log their own transitions (debug).
+A read of `State` has no side effect, and a change of it is not logged: the tasks log their own transitions (trace).
 
 A generation switch (`RestartWithDefinitionsAsync`) shuts the replaced coordinator down, so a replaced coordinator ends
 in `Stopped`; lookups on it are answered by the current coordinator of its lineage (`Successor`). A shutdown reaches
