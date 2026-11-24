@@ -48,7 +48,7 @@ public class DataPatchTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(DataPatchTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(DataPatchTest), NullLogger.Instance);
 
   private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine, string builtOn = null,
     ContextLog contexts = null)

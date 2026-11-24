@@ -44,7 +44,7 @@ public class CoordinatorComputedStateTest
   private static EngineCoordinator CreateCoordinator(ILogger logger,
     params (string Name, IEngine Engine, bool Required)[] engines)
   {
-    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), logger);
     foreach (var (name, engine, required) in engines)
       coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: required)
         .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));

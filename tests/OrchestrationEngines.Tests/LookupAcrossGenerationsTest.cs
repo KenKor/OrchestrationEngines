@@ -20,14 +20,12 @@ public class LookupAcrossGenerationsTest
   private static readonly TimeSpan TimeOut = TimeSpan.FromMinutes(10);
 
   /// <summary>
-  /// A started coordinator on <paramref name="clock"/> with the engine <paramref name="descriptor"/>, with the
-  /// dispatcher if <paramref name="useDispatcher"/>.
+  /// A started coordinator on <paramref name="clock"/> with the engine <paramref name="descriptor"/>.
   /// </summary>
-  private static async Task<EngineCoordinator> StartAsync(ManualTimeProvider clock, EngineDescriptor descriptor,
-    bool useDispatcher = false)
+  private static async Task<EngineCoordinator> StartAsync(ManualTimeProvider clock, EngineDescriptor descriptor)
   {
     var coordinator = new EngineCoordinator(
-      nameof(LookupAcrossGenerationsTest), NullLogger.Instance, useDispatcher)
+      nameof(LookupAcrossGenerationsTest), NullLogger.Instance)
     {
       TimeProvider = clock,
     };
@@ -162,16 +160,16 @@ public class LookupAcrossGenerationsTest
   }
 
   /// <summary>
-  /// Verifies that with the dispatcher on, a timed lookup that starts during a rebuilding switch, while the switch
+  /// Verifies that a timed lookup that starts during a rebuilding switch, while the switch
   /// still stops the previous engine, ends at its deadline: the time it waited for the next generation counts (#154).
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_TimedLookupStartedDuringSwitchWithDispatcher_EndsAtItsDeadline()
+  public async Task EngineCoordinator_TimedLookupStartedDuringSwitch_EndsAtItsDeadline()
   {
     var ct = TestContext.Current.CancellationToken;
     var clock = new ManualTimeProvider();
     var first = StopFailingEngine.HeldStop();
-    var coordinator = await StartAsync(clock, RebuiltDescriptor(first), useDispatcher: true);
+    var coordinator = await StartAsync(clock, RebuiltDescriptor(first));
     await Wait.UntilAsync(() => coordinator.Engines.ContainsKey(Name), MustComplete, "the engine must exist");
     var switching = coordinator.RestartWithDefinitionsAsync(
       coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);

@@ -44,11 +44,11 @@ public class EngineGenerationSwitchTest
   }
 
   /// <summary>
-  /// Starts a coordinator (no dispatcher, as on .NET) with engine A and engine B depending on A, and waits until ready.
+  /// Starts a coordinator with engine A and engine B depending on A, and waits until ready.
   /// </summary>
   private static async Task<EngineCoordinator> StartedCoordinatorAsync(RestartLog log)
   {
-    var coordinator = new EngineCoordinator("EngineGenerationSwitchTest", NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator("EngineGenerationSwitchTest", NullLogger.Instance);
     coordinator.RegisterEngineDescriptor(Descriptor("A", log));
     coordinator.RegisterEngineDescriptor(Descriptor("B", log, dependsOn: "A"));
     await coordinator.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);

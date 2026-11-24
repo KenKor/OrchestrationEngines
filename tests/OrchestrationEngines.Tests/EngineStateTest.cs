@@ -148,7 +148,7 @@ public class EngineStateTest
   {
     var logger = new FakeLogger();
     var engine = new QuickEngine();
-    var coordinator = new EngineCoordinator(nameof(EngineStateTest), logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EngineStateTest), logger);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
     await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
@@ -173,7 +173,7 @@ public class EngineStateTest
   public async Task EngineCoordinator_RefreshEngineContextAsync_UnknownEngine_ThrowsAndStaysRunning()
   {
     var engine = new QuickEngine();
-    var coordinator = new EngineCoordinator(nameof(EngineStateTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EngineStateTest), NullLogger.Instance);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
     await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);

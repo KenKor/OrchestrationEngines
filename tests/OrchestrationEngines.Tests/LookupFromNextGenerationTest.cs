@@ -1,20 +1,20 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
-using OrchestrationEngines.Tasks;
 using Xunit;
 
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// Contains tests for a lookup through the coordinator the host holds, made from inside an engine of the next
-/// generation while a switch that waits until ready runs (#154).
+/// Contains tests for a lookup through the coordinator the host holds, made while a switch runs: from inside an engine
+/// of the next generation, or from outside an engine. Until the switch hands over, the previous generation answers,
+/// except for an engine the switch rebuilds from scratch.
 /// </summary>
 public class LookupFromNextGenerationTest
 {
@@ -31,29 +31,21 @@ public class LookupFromNextGenerationTest
 
   /// <summary>
   /// Verifies that a switch that waits until ready completes when an engine of the next generation, while it loads,
-  /// looks up another engine through the coordinator the host holds: with the dispatcher on, that lookup must not
-  /// wait behind the switch on the replaced generation's dispatcher. It gets the next generation's A, whether A is
-  /// rebuilt from scratch or, with <paramref name="handOverA"/>, handed over to its restart factory. With
-  /// <paramref name="waitForTask"/>,
+  /// looks up another engine through the coordinator the host holds. It gets the next generation's A, which the switch
+  /// rebuilds from scratch. With <paramref name="waitForTask"/>,
   /// B waits for A's task through <see cref="EngineCoordinator.EnsureEngineTaskReadyAsync"/> before the lookup.
   /// </summary>
   [Theory]
-  [InlineData(false, false)]
-  [InlineData(true, false)]
-  [InlineData(false, true)]
-  [InlineData(true, true)]
-  public async Task EngineCoordinator_SwitchWaitingUntilReady_LookupFromNextGenerationEngine_Completes(bool handOverA,
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task EngineCoordinator_SwitchWaitingUntilReady_LookupFromNextGenerationEngine_Completes(
     bool waitForTask)
   {
     var ct = TestContext.Current.CancellationToken;
     var lookups = 0;
     IEngine foundByNextB = null;
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true);
-    var a = Descriptor("A");
-    if (handOverA)
-      a.SetRestartFactory((_, _) => Task.FromResult<IEngine>(SwitchTestEngines.Quick()));
-    coordinator.RegisterEngineDescriptor(a);
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance);
+    coordinator.RegisterEngineDescriptor(Descriptor("A"));
     coordinator.RegisterEngineDescriptor(Descriptor("B", async token =>
     {
       if (waitForTask)
@@ -74,126 +66,97 @@ public class LookupFromNextGenerationTest
   }
 
   /// <summary>
-  /// Verifies that a switch on a coordinator that was never started completes when an engine of the next generation
-  /// looks up another engine through that coordinator: the lookup does not wait on the generation that never started.
+  /// Verifies what an engine of the next generation gets when, while it loads, it looks up through the coordinator the
+  /// host holds an engine the switch hands over (A has a restart factory): the previous generation's A, which the
+  /// hand-over then stops. The switch waits until ready; in one that does not, the lookup races the hand-over, and
+  /// gets either that engine or the next generation's.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_SwitchOnUnstartedCoordinator_LookupFromNextGenerationEngine_Completes()
+  public async Task
+    EngineCoordinator_SwitchWaitingUntilReady_LookupOfHandedOverEngineFromNextGenerationEngine_GetsThePreviousOne()
   {
     var ct = TestContext.Current.CancellationToken;
-    IEngine foundByB = null;
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true);
-    coordinator.RegisterEngineDescriptor(Descriptor("A"));
+    var lookups = 0;
+    IEngine foundByNextB = null;
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance);
+    var a = Descriptor("A");
+    a.SetRestartFactory((_, _) => Task.FromResult<IEngine>(SwitchTestEngines.Quick()));
+    coordinator.RegisterEngineDescriptor(a);
     coordinator.RegisterEngineDescriptor(Descriptor("B", async token =>
-      Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("A", token).ConfigureAwait(false))));
+    {
+      var found = await coordinator.GetEngineAsync("A", token).ConfigureAwait(false);
+      if (Interlocked.Increment(ref lookups) > 1)
+        Volatile.Write(ref foundByNextB, found);
+    }));
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var previousA = coordinator.GetEngineIfReady("A");
 
     var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
       waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
 
-    Volatile.Read(ref foundByB).Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("A"));
+    Volatile.Read(ref foundByNextB).Should().BeSameAs(previousA, "the previous generation answers until the hand-over")
+      .And.NotBeSameAs(next.GetEngineIfReady("A"));
+    await Wait.UntilAsync(() => previousA.State == EngineState.Stopped, MustComplete,
+      "the hand-over stops the engine the lookup got");
     await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 
   /// <summary>
-  /// Verifies that a switch that adds engine C completes when its engine B, new too, looks up C through the
-  /// coordinator the host holds, and that a lookup of C from outside an engine during the switch gets the next
-  /// generation's C, as it did when it waited for the switch to end.
+  /// Verifies what an engine of the next generation gets when, while it loads, it looks up through the coordinator the
+  /// host holds an engine the switch adds (C), in a switch that waits until ready: null, as the previous generation
+  /// answers until the hand-over and does not know C; a lookup that throws for an unknown engine throws. The switch
+  /// still completes.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_SwitchAddingEngines_LookupOfAddedEngine_AnsweredByTheNextGeneration()
+  public async Task EngineCoordinator_SwitchWaitingUntilReady_LookupOfAddedEngineFromNextGenerationEngine_GetsNull()
   {
     var ct = TestContext.Current.CancellationToken;
+    var looked = 0;
     IEngine foundByB = null;
-    var cLoading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var releaseC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true);
+    Exception thrownInB = null;
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance);
     coordinator.RegisterEngineDescriptor(Descriptor("A"));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var definitions = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions())
     {
       Descriptor("B", async token =>
-        Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("C", token).ConfigureAwait(false))),
-      Descriptor("C", async token =>
       {
-        cLoading.TrySetResult();
-        await releaseC.Task.WaitAsync(token).ConfigureAwait(false);
+        Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("C", token).ConfigureAwait(false));
+        try
+        {
+          await coordinator.GetEngineAsync("C", throwErrorIfNotFound: true, token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+          Volatile.Write(ref thrownInB, ex);
+        }
+        Interlocked.Increment(ref looked);
       }),
+      Descriptor("C"),
     };
 
-    var @switch = coordinator.RestartWithDefinitionsAsync(definitions, waitUntilReady: true, ct);
-    await cLoading.Task.WaitAsync(MustComplete, ct);
-    var hostLookup = coordinator.GetEngineAsync("C", ct);
-    releaseC.SetResult();
-    var next = await @switch.WaitAsync(MustComplete, ct);
+    var next = await coordinator.RestartWithDefinitionsAsync(definitions, waitUntilReady: true, ct)
+      .WaitAsync(MustComplete, ct);
 
-    var foundByHost = await hostLookup.WaitAsync(MustComplete, ct);
-    foundByHost.Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("C"));
-    Volatile.Read(ref foundByB).Should().BeSameAs(foundByHost);
-    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
-  /// Verifies that a lookup from outside an engine, during a switch that waits until ready, gets what it got when it
-  /// waited for the switch to end: the next generation's engine for one the switch hands over (not the previous one,
-  /// which the hand-over stops), and null for one the switch leaves out.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_HostLookupDuringSwitch_GetsTheNextGenerationsEngineOrNull()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var cLoading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var releaseC = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true);
-    var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(SwitchTestEngines.Quick()));
-    coordinator.RegisterEngineDescriptor(a);
-    coordinator.RegisterEngineDescriptor(Descriptor("Removed"));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var definitions = new List<EngineDescriptor>
-    {
-      a,
-      Descriptor("C", async token =>
-      {
-        cLoading.TrySetResult();
-        await releaseC.Task.WaitAsync(token).ConfigureAwait(false);
-      }),
-    };
-
-    var @switch = coordinator.RestartWithDefinitionsAsync(definitions, waitUntilReady: true, ct);
-    await cLoading.Task.WaitAsync(MustComplete, ct);
-    var lookupA = coordinator.GetEngineAsync("A", false, ct);
-    var lookupRemoved = coordinator.GetEngineAsync("Removed", false, ct);
-    releaseC.SetResult();
-    var next = await @switch.WaitAsync(MustComplete, ct);
-
-    var foundA = await lookupA.WaitAsync(MustComplete, ct);
-    foundA.Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("A"));
-    foundA.State.Should().Be(EngineState.Ready);
-    (await lookupRemoved.WaitAsync(MustComplete, ct)).Should().BeNull();
+    Volatile.Read(ref looked).Should().Be(1);
+    Volatile.Read(ref foundByB).Should().BeNull("the previous generation does not know C");
+    Volatile.Read(ref thrownInB).Should().BeOfType<EvaluateException>();
+    next.GetEngineIfReady("C").Should().NotBeNull();
     await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 
   /// <summary>
   /// Verifies what a lookup from outside an engine gets when it lands during a switch that then fails while it waits
-  /// until ready: the next generation's engine, which the failed switch stops. The owner chose this on 2026-11-24
-  /// (#154, option (a)) over a deadlock for an engine of the next generation, which the lookup cannot tell apart
-  /// from the host. A lookup after the failure gets this generation's engine: the previous A if the switch hands it
-  /// over, null if it rebuilds A from scratch (stopped before the next generation started).
+  /// until ready, for an engine the switch rebuilds from scratch: the next generation's engine, which the failed
+  /// switch stops. A lookup after the failure gets null: the switch stopped A before the next generation started.
   /// </summary>
-  [Theory]
-  [InlineData(true)]
-  [InlineData(false)]
-  public async Task EngineCoordinator_HostLookupDuringSwitchThatFails_GetsAnEngineTheFailureStops(bool handOverA)
+  [Fact]
+  public async Task EngineCoordinator_HostLookupDuringSwitchThatFails_GetsAnEngineTheFailureStops()
   {
     var ct = TestContext.Current.CancellationToken;
     var cLoading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true);
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance);
     var a = Descriptor("A");
-    if (handOverA)
-      a.SetRestartFactory((_, _) => Task.FromResult<IEngine>(SwitchTestEngines.Quick()));
     coordinator.RegisterEngineDescriptor(a);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var previousA = coordinator.GetEngineIfReady("A");
@@ -218,82 +181,7 @@ public class LookupFromNextGenerationTest
     await Wait.UntilAsync(() => foundDuringSwitch.State == EngineState.Stopped, MustComplete,
       "the failed switch stops the next generation's engines");
     var foundAfter = await coordinator.GetEngineAsync("A", false, ct).WaitAsync(MustComplete, ct);
-    if (handOverA)
-      foundAfter.Should().BeSameAs(previousA).And.Match<IEngine>(e => e.State == EngineState.Ready);
-    else
-      foundAfter.Should().BeNull("the switch stopped the rebuilt A before its next generation started");
-    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
-  /// Verifies what a task wait from outside an engine gets when it is made during a switch that then fails while it
-  /// waits until ready: the next generation answers it, and the failed switch stops that generation's engine, so the
-  /// wait ends Cancelled (#154, the owner's option (a)). A wait made after the failure succeeds on this generation.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_TaskWaitDuringSwitchThatFails_EndsCancelled()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var nextALoading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true);
-    var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(
-      new SwitchTestEngines.NetworkEngine(async token =>
-      {
-        nextALoading.TrySetResult();
-        await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
-      })));
-    coordinator.RegisterEngineDescriptor(a);
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var switchCancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-    var @switch = coordinator.RestartWithDefinitionsAsync([a], waitUntilReady: true, switchCancel.Token);
-    await nextALoading.Task.WaitAsync(MustComplete, ct);
-    var waitDuringSwitch = coordinator.EnsureEngineTaskReadyAsync("A", "Load", ct);
-    switchCancel.Cancel();
-    await @switch.Invoking(s => s.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>();
-
-    (await waitDuringSwitch.Invoking(w => w.WaitAsync(MustComplete, ct)).Should()
-        .ThrowAsync<EngineTaskNotReadyException>()).Which.State.Should().Be(EngineTaskState.Cancelled);
-    await coordinator.EnsureEngineTaskReadyAsync("A", "Load", ct).WaitAsync(MustComplete, ct);
-    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
-  /// Verifies that a timed lookup from outside an engine, waiting on the next generation when a switch fails, is
-  /// answered by this generation while the failed switch still stops that generation's engines: it does not queue
-  /// behind that clean-up, which no time-out bounds (#154). It gets the previous A, which the switch hands over.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_TimedLookupDuringSwitchThatFails_DoesNotWaitForTheCleanUp()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var clock = new ManualTimeProvider();
-    var nextA = StopFailingEngine.HeldStop();
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
-      useDispatcher: true) { TimeProvider = clock };
-    var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(nextA));
-    coordinator.RegisterEngineDescriptor(a);
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var previousA = coordinator.GetEngineIfReady("A");
-    using var switchCancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-    var @switch = coordinator.RestartWithDefinitionsAsync([a], waitUntilReady: true, switchCancel.Token);
-    await Wait.UntilAsync(() => nextA.Loads > 0, MustComplete, "the next A must be loading");
-    var timersBefore = clock.TimersCreated;
-    var deadline = clock.GetUtcNow() + TimeSpan.FromMinutes(10);
-    var lookup = coordinator.GetEngineAsync("A", (int)TimeSpan.FromMinutes(10).TotalMilliseconds, ct);
-    // The next generation has started, so the lookup waits there, on its mechanic, until its deadline.
-    await Wait.UntilAsync(() => clock.DueTimesSince(timersBefore).Contains(deadline), MustComplete,
-      "the lookup must be waiting on the next generation");
-    switchCancel.Cancel();
-    await nextA.Stopping.Task.WaitAsync(MustComplete, ct);
-
-    (await lookup.WaitAsync(MustComplete, ct)).Should().BeSameAs(previousA,
-      "this generation answers while the failed switch still stops the next A");
-    @switch.IsCompleted.Should().BeFalse("the next A's stop is held");
-    nextA.ReleaseStop.SetResult();
-    await @switch.Invoking(s => s.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>();
+    foundAfter.Should().BeNull("the switch stopped the rebuilt A before its next generation started");
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }

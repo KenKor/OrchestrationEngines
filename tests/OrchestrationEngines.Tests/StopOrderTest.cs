@@ -94,7 +94,7 @@ public class StopOrderTest
     Enumerable.Range(0, length).Reverse().Select(i => $"E{i}");
 
   private static EngineCoordinator CreateCoordinator(ILogger logger = null) =>
-    new(nameof(StopOrderTest), logger ?? NullLogger.Instance, useDispatcher: false);
+    new(nameof(StopOrderTest), logger ?? NullLogger.Instance);
 
   private static EngineDescriptor Register(EngineCoordinator coordinator, RecordingEngine engine, string name) =>
     coordinator.RegisterEngine(name, _ => Task.FromResult<IEngine>(engine))

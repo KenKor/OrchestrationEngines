@@ -604,7 +604,7 @@ public class ResetTasksTest
   /// </summary>
   private static EngineCoordinator CoordinatorRecording(ConcurrentQueue<GraphEngine> engines)
   {
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     coordinator.RegisterEngine("Graph", _ =>
       {
         var engine = Chain();
@@ -617,7 +617,7 @@ public class ResetTasksTest
 
   private static EngineCoordinator CoordinatorWith(IEngine engine)
   {
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     coordinator.RegisterEngine("Graph", _ => Task.FromResult(engine))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
     return coordinator;
@@ -699,7 +699,7 @@ public class ResetTasksTest
   public async Task EngineCoordinator_ResetTasksForEngineAsync_EngineNeverStarted_Throws()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     var descriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(Chain()))
       .SetContextFactory(_ => throw new InvalidOperationException("No context."));
     // The context must fail for good, not be retried.
@@ -723,7 +723,7 @@ public class ResetTasksTest
   public async Task EngineCoordinator_ResetTasksForEngineAsync_EngineNotCreated_ThrowsNotCreatedWithTheCause()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     var descriptor = coordinator.RegisterEngine("Graph", _ => throw new NoEngineException())
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
     descriptor.RestartPolicy = null;
@@ -759,7 +759,7 @@ public class ResetTasksTest
         : Task.CompletedTask,
     };
     var dependent = Chain();
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     var graphDescriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(graph))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
     graphDescriptor.RestartPolicy = withPolicy
@@ -798,7 +798,7 @@ public class ResetTasksTest
         ? throw new InvalidOperationException("A fails.")
         : Task.CompletedTask,
     };
-    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     var graphDescriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(graph))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
     graphDescriptor.RestartPolicy = null;
@@ -854,7 +854,7 @@ public class ResetTasksTest
       },
     };
     var contexts = 0;
-    coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance, useDispatcher: false);
+    coordinator = new EngineCoordinator(nameof(ResetTasksTest), NullLogger.Instance);
     var graphDescriptor = coordinator.RegisterEngine("Graph", _ => Task.FromResult<IEngine>(graph))
       .SetContextFactory(_ =>
       {

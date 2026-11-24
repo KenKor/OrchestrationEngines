@@ -58,12 +58,12 @@ public class EngineReloadTest
   }
 
   /// <summary>
-  /// Starts a coordinator (no dispatcher, as on .NET) with one <see cref="TwoStepEngine"/> and waits until it is Ready.
+  /// Starts a coordinator with one <see cref="TwoStepEngine"/> and waits until it is Ready.
   /// </summary>
   private static async Task<(EngineCoordinator coordinator, TwoStepEngine engine)> StartedAsync()
   {
     var engine = new TwoStepEngine();
-    var coordinator = new EngineCoordinator(nameof(EngineReloadTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(EngineReloadTest), NullLogger.Instance);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
     await coordinator.EnsureReadyAsync().WaitAsync(MustComplete, TestContext.Current.CancellationToken);

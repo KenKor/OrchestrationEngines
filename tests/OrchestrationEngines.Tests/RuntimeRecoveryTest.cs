@@ -59,7 +59,7 @@ public class RuntimeRecoveryTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(RuntimeRecoveryTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(RuntimeRecoveryTest), NullLogger.Instance);
 
   private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine) =>
     coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)

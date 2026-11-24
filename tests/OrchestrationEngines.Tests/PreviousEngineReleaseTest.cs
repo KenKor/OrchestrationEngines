@@ -54,7 +54,7 @@ public class PreviousEngineReleaseTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(PreviousEngineReleaseTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(PreviousEngineReleaseTest), NullLogger.Instance);
 
   /// <summary>
   /// A descriptor whose first engine loads, and whose engine in a switch comes from <paramref name="next"/>, offered the
