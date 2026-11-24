@@ -12,7 +12,7 @@ using Xunit;
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// Contains tests for context operations (an invalidation or a refresh) on a coordinator that a generation switch
+/// Contains tests for context refreshes on a coordinator that a generation switch
 /// replaced, which hand off to the newer generation (#86, item 1), or during a switch that rebuilds the engine from
 /// scratch (#123) or hands it over to its restart factory (#145), before it hands over, which wait for the next
 /// generation and act there.
@@ -90,25 +90,6 @@ public class ContextOperationGenerationTest
   }
 
   /// <summary>
-  /// Verifies that invalidating a context on a replaced coordinator invalidates it on the newer generation: its engine
-  /// gets a context from a new factory call.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_ReplacedCoordinator_InvalidatesOnTheNextGeneration()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var (replaced, next) = await SwitchedAsync(ct, Name);
-    var engine = next.Engines[Name];
-    var before = ((NumberedContext)Own(engine)).Number;
-
-    await replaced.InvalidateContextForEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
-    await next.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-
-    ((NumberedContext)Own(next.Engines[Name])).Number.Should().BeGreaterThan(before, "the context was made again");
-    next.State.Should().Be(EngineCoordinatorState.Running);
-  }
-
-  /// <summary>
   /// Verifies that refreshing a context on a replaced coordinator pushes it into the newer generation's engine.
   /// </summary>
   [Fact]
@@ -134,10 +115,8 @@ public class ContextOperationGenerationTest
     var ct = TestContext.Current.CancellationToken;
     var (replaced, _) = await SwitchedAsync(ct, Name, "Dropped");
 
-    var invalidate = () => replaced.InvalidateContextForEngineAsync("Dropped", ct).WaitAsync(MustComplete, ct);
     var refresh = () => replaced.RefreshEngineContextAsync("Dropped", new NoContext(), ct).WaitAsync(MustComplete, ct);
 
-    await invalidate.Should().ThrowAsync<ArgumentException>();
     await refresh.Should().ThrowAsync<ArgumentException>();
   }
 
@@ -208,49 +187,6 @@ public class ContextOperationGenerationTest
       _nextBLoad.SetResult();
       return await Switch.WaitAsync(MustComplete, ct);
     }
-  }
-
-  /// <summary>
-  /// Verifies that an invalidation that arrives while a switch rebuilds its engine, before the switch hands over, does
-  /// not throw: it invalidates the next generation's engine, and the previous one stays stopped.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_DuringSwitchBeforeHandover_InvalidatesTheNextGeneration()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var held = new HeldSwitch();
-    await held.StartAndHoldAsync(ct);
-    var previousLoads = held.PreviousA.Loads;
-
-    await held.Coordinator.InvalidateContextForEngineAsync("A", ct).WaitAsync(MustComplete, ct);
-
-    await Wait.UntilAsync(() => held.NextA.Loads == 2, MustComplete, "the next generation's A loads again");
-    held.PreviousA.Loads.Should().Be(previousLoads, "the previous A is not started again");
-    held.PreviousA.State.Should().Be(EngineState.Stopped);
-    var next = await held.ReleaseAsync(ct);
-    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
-  /// Verifies that an invalidation that arrives during a switch, before it hands over, of an engine the switch hands
-  /// over to its restart factory, invalidates the next generation's engine: the previous one, which the hand-over shuts
-  /// down, is not loaded again (#145).
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_BeforeHandoverWithRestartFactory_InvalidatesTheNextGeneration()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var held = new HeldSwitch(handOverA: true);
-    await held.StartAndHoldAsync(ct);
-    var previousLoads = held.PreviousA.Loads;
-
-    await held.Coordinator.InvalidateContextForEngineAsync("A", ct).WaitAsync(MustComplete, ct);
-
-    await Wait.UntilAsync(() => held.NextA.Loads == 2, MustComplete, "the next generation's A loads again");
-    held.PreviousA.Loads.Should().Be(previousLoads, "the previous A is not loaded again");
-    var next = await held.ReleaseAsync(ct);
-    held.PreviousA.State.Should().Be(EngineState.Stopped, "the hand-over shut the previous generation down");
-    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 
   /// <summary>

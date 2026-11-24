@@ -6,7 +6,7 @@ namespace OrchestrationEngines.Coordinator;
 /// <remarks>
 /// The state is computed, not stored: Created until the start, Stopping and Stopped from the shutdown, and in between
 /// it follows the engines registered as required for running. So it can go back: from Running to Initializing while
-/// a context operation is in flight, and to WaitingForEngines when a required engine faults or stops.
+/// a context refresh is in flight, and to WaitingForEngines when a required engine faults or stops.
 /// </remarks>
 public enum EngineCoordinatorState
 {
@@ -22,7 +22,7 @@ public enum EngineCoordinatorState
     WaitingForEngines,
 
     /// <summary>
-    /// A required engine is being created or started and not all of them are Ready yet, or a context operation is in
+    /// A required engine is being created or started and not all of them are Ready yet, or a context refresh is in
     /// flight.
     /// </summary>
     Initializing,

@@ -81,29 +81,6 @@ public class NameCaseTest
   }
 
   /// <summary>
-  /// Verifies that invalidating an engine's context by a name in another case reloads that engine.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContextForEngineAsync_AnotherCase_ReloadsTheEngine()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var coordinator = CreateCoordinator();
-    var contexts = 0;
-    coordinator.RegisterEngine("AsBuilt", _ => Task.FromResult<IEngine>(new LoadEngine()))
-      .SetContextFactory(_ =>
-      {
-        Interlocked.Increment(ref contexts);
-        return Task.FromResult<IEngineContext>(new NoContext());
-      });
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-
-    await coordinator.InvalidateContextForEngineAsync("ASBUILT", ct).WaitAsync(MustComplete, ct);
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-
-    Volatile.Read(ref contexts).Should().Be(2);
-  }
-
-  /// <summary>
   /// Verifies that an engine's tasks are found by a name in another case, also a task added after the set-up.
   /// </summary>
   [Fact]

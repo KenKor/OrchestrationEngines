@@ -652,7 +652,7 @@ public partial class MechanicEngine : BaseEngine
   }
 
   // ---------------------------------------------------------------------
-  // Shutdown and invalidation
+  // Shutdown
   // ---------------------------------------------------------------------
 
   /// <summary>
@@ -1112,31 +1112,6 @@ public partial class MechanicEngine : BaseEngine
     BestEffort.Log(() => LogEngineFinishedStopping(Logger, name));
   }
 
-  /// <summary>
-  /// Invalidates the context for an engine and all dependent engines.
-  /// </summary>
-  /// <param name="engineName">The engine name.</param>
-  /// <remarks>
-  /// <para>
-  /// This resets the engine's context task and every task that depends on it (the kick-starts reset their engines), so
-  /// that the context is computed again and the engines restarted in dependency order. It goes through
-  /// <see cref="BaseEngine.ResetTasksAsync"/>: dependents first, then started again, and the mechanic's state recomputed.
-  /// </para>
-  /// </remarks>
-  /// <exception cref="ArgumentException">The mechanic has no engine named <paramref name="engineName"/>.</exception>
-  /// <exception cref="InvalidOperationException">The mechanic is stopped, so its tasks would not run again.</exception>
-  public Task InvalidateContextForEngineAsync(string engineName)
-  {
-    // The context task is the one that computes the engine's context. Checked here, though ResetTasksAsync checks too,
-    // so an unknown engine is reported by its own name (and the parameter's), not as a task of the mechanic.
-    var taskName = EngineContextTask.ContextName(engineName);
-    if (!_tasks.ContainsKey(taskName))
-      throw new ArgumentException($"Cannot get task for engine '{engineName}'", nameof(engineName));
-
-    LogWaitingForResetOfEngines(Logger, engineName);
-    return ResetTasksAsync(new[] { taskName }, resetDependentTasks: true);
-  }
-
   // ---------------------------------------------------------------------
   // Logging methods
   // ---------------------------------------------------------------------
@@ -1163,7 +1138,4 @@ public partial class MechanicEngine : BaseEngine
   [LoggerMessage(Level = LogLevel.Information,
     Message = "Engine {EngineName} was created after the stop began; stopping it.")]
   private static partial void LogEngineCreatedAfterStop(ILogger logger, string engineName);
-
-  [LoggerMessage(Level = LogLevel.Debug, Message = "Waiting on reset of all engines depending on and incl. {EngineName}.")]
-  private static partial void LogWaitingForResetOfEngines(ILogger logger, string engineName);
 }

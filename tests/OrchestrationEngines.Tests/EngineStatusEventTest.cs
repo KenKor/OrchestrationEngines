@@ -84,30 +84,6 @@ public class EngineStatusEventTest
   }
 
   /// <summary>
-  /// Verifies that invalidating an engine's context makes it and its dependent announce the reload (Created for the
-  /// reset, then Starting and Ready), while an independent engine announces nothing.
-  /// </summary>
-  [Fact]
-  public async Task BaseEngine_EngineStatusChanged_OnInvalidate_DependentsReportAgainOthersStaySilent()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var log = new StatusLog();
-    var coordinator = CreateCoordinator();
-    Register(coordinator, "Session", new LoadEngine(), log);
-    Register(coordinator, "Kernel", new LoadEngine(), log, dependsOn: "Session");
-    Register(coordinator, "Map", new LoadEngine(), log);
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    log.Clear();
-
-    await coordinator.InvalidateContextForEngineAsync("Session", ct).WaitAsync(MustComplete, ct);
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-
-    log.For("Session").Should().Equal(EngineState.Created, EngineState.Starting, EngineState.Ready);
-    log.For("Kernel").Should().Equal(EngineState.Created, EngineState.Starting, EngineState.Ready);
-    log.For("Map").Should().BeEmpty();
-  }
-
-  /// <summary>
   /// Verifies that an engine reset by its host (its process died) announces Starting and Ready again, also when its
   /// load is over before anybody looks: the announcement is made before the tasks run, not derived afterwards.
   /// </summary>

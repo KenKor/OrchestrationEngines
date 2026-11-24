@@ -31,30 +31,14 @@ public class DataPatchTest
       CreateTask("Load", token => (loadAsync ?? ((_, _) => Task.CompletedTask))(Interlocked.Increment(ref _loads), token));
   }
 
-  /// <summary>
-  /// Counts how often each engine's context was computed, which happens again when its context is invalidated.
-  /// </summary>
-  private sealed class ContextLog
-  {
-    private readonly ConcurrentDictionary<string, int> _counts = new(StringComparer.OrdinalIgnoreCase);
-
-    public int this[string name] => _counts.GetValueOrDefault(name);
-
-    public Task<IEngineContext> Compute(string name)
-    {
-      _counts.AddOrUpdate(name, 1, (_, count) => count + 1);
-      return Task.FromResult<IEngineContext>(new NoContext());
-    }
-  }
-
   private static EngineCoordinator CreateCoordinator() =>
     new(nameof(DataPatchTest), NullLogger.Instance);
 
-  private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine, string builtOn = null,
-    ContextLog contexts = null)
+  private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine,
+    string builtOn = null)
   {
     var descriptor = coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
-      .SetContextFactory(_ => contexts?.Compute(name) ?? Task.FromResult<IEngineContext>(new NoContext()))
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .WithoutRestarts();
     if (builtOn != null)
       descriptor.AddDependsOn(builtOn);
@@ -76,58 +60,6 @@ public class DataPatchTest
     var patch = await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
 
     patch.Should().BeNull();
-  }
-
-  /// <summary>
-  /// Verifies that invalidating the context of the as-built network computes the contexts of it and its data patch
-  /// again, and loads both again.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_Base_ReloadsItsDataPatches()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var coordinator = CreateCoordinator();
-    var contexts = new ContextLog();
-    var asBuilt = new NetworkEngine();
-    var planned = new NetworkEngine();
-    Register(coordinator, "AsBuilt", asBuilt, contexts: contexts);
-    Register(coordinator, "Planned", planned, builtOn: "AsBuilt", contexts: contexts);
-    await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
-
-    await coordinator.InvalidateContextForEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
-    var patch = await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
-
-    patch.Should().BeSameAs(planned);
-    contexts["AsBuilt"].Should().Be(2);
-    contexts["Planned"].Should().Be(2);
-    asBuilt.Loads.Should().Be(2);
-    planned.Loads.Should().Be(2);
-  }
-
-  /// <summary>
-  /// Verifies that invalidating the context of a data patch loads only the patch again, not the network it is built
-  /// on.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_DataPatch_LeavesBaseLoaded()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var coordinator = CreateCoordinator();
-    var contexts = new ContextLog();
-    var asBuilt = new NetworkEngine();
-    var planned = new NetworkEngine();
-    Register(coordinator, "AsBuilt", asBuilt, contexts: contexts);
-    Register(coordinator, "Planned", planned, builtOn: "AsBuilt", contexts: contexts);
-    await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
-
-    await coordinator.InvalidateContextForEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
-    var patch = await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
-
-    patch.Should().BeSameAs(planned);
-    contexts["AsBuilt"].Should().Be(1);
-    contexts["Planned"].Should().Be(2);
-    asBuilt.Loads.Should().Be(1);
-    planned.Loads.Should().Be(2);
   }
 
   /// <summary>
@@ -303,36 +235,6 @@ public class DataPatchTest
     var start = () => coordinator.StartAsync();
 
     await start.Should().ThrowAsync<CyclicEngineTaskDependencyException>();
-  }
-
-  /// <summary>
-  /// Verifies that waiting on an engine whose kick-start was reset (a context invalidation) does not wait forever when
-  /// the kick-start does not run again, because computing the new context failed. The reset prepared a restart of the
-  /// engine that nobody carries out; the engine is given up on instead, as a data patch that waits for the network it is
-  /// built on would otherwise hang.
-  /// </summary>
-  [Fact]
-  public async Task BaseEngine_EnsureReadyAsync_KickStartResetButContextFails_DoesNotWaitForever()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var coordinator = CreateCoordinator();
-    var asBuilt = new NetworkEngine();
-    var contexts = 0;
-    coordinator.RegisterEngine("AsBuilt", _ => Task.FromResult<IEngine>(asBuilt), requiredForRunning: true)
-      .SetContextFactory(_ => Interlocked.Increment(ref contexts) == 1
-        ? Task.FromResult<IEngineContext>(new NoContext())
-        : throw new InvalidOperationException("The context could not be computed."))
-      .WithoutRestarts();
-    await coordinator.GetEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
-
-    await coordinator.InvalidateContextForEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
-    var lookup = await coordinator.GetEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
-    var ready = await Record.ExceptionAsync(() => asBuilt.EnsureReadyAsync().WaitAsync(MustComplete, ct));
-
-    contexts.Should().Be(2);
-    lookup.Should().BeNull();
-    ready.Should().BeNull("the wait ends instead of timing out");
-    asBuilt.State.Should().Be(EngineState.Faulted);
   }
 
   /// <summary>

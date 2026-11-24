@@ -11,7 +11,7 @@ tasks. So it cannot differ from what it describes. The first row that applies gi
 | `Created` | The coordinator has not been started. |
 | `WaitingForEngines` | The start failed (the mechanic could not set up its tasks). |
 | `WaitingForEngines` | A required engine is `Faulted` or `Stopped`, and is not being started again. |
-| `Initializing` | A context operation (an invalidation or a refresh) is in flight. |
+| `Initializing` | A context refresh (`RefreshEngineContextAsync`) is in flight. |
 | `Running` | Every required engine is `Ready` (with none required: once the start has completed). |
 | `Initializing` | A required engine has begun to start. |
 | `WaitingForEngines` | Started, but no required engine has begun to start yet. |

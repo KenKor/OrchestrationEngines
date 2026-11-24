@@ -35,7 +35,7 @@ namespace OrchestrationEngines.Coordinator;
 public partial class EngineCoordinator : IDisposable
 {
   // What the state is computed from, next to the engines (see State): the start (_mechanicStart), the shutdown, and
-  // the context operations in flight.
+  // the context refreshes in flight (_refreshesInFlight).
   private volatile bool _shutdownStarted;
   private volatile bool _shutdownCompleted;
 
@@ -48,9 +48,9 @@ public partial class EngineCoordinator : IDisposable
   // start); null when no switch runs. See NextGenerationAsync.
   private SwitchBeforeHandover _switchBeforeHandover;
 
-  // The context operations (invalidations and refreshes) in flight. While one is, the coordinator is not Running: an
-  // operation that has not reset its engine yet would otherwise find it Running until the reload starts.
-  private int _contextOperationsInFlight;
+  // The context refreshes in flight. While one is, the coordinator is not Running: an engine's ContextChanged hook,
+  // which the refresh calls, sees it Initializing.
+  private int _refreshesInFlight;
 
   private volatile bool _disposed;
 
@@ -107,7 +107,7 @@ public partial class EngineCoordinator : IDisposable
   /// Computed on every read, not stored, so it cannot differ from what it describes. Created until the start, Stopping
   /// and Stopped from the shutdown. In between it follows the engines registered as required for running:
   /// WaitingForEngines if one is Faulted or Stopped (and is not being started again); else Initializing while a
-  /// context operation is in flight; else Running if all are Ready; else Initializing once one has begun to start,
+  /// context refresh is in flight; else Running if all are Ready; else Initializing once one has begun to start,
   /// and WaitingForEngines before that. A start that failed counts as WaitingForEngines, and one that has not completed
   /// is not Running while no engine is required.
   /// </remarks>
@@ -139,7 +139,7 @@ public partial class EngineCoordinator : IDisposable
       allReady &= state == EngineState.Ready;
       anyStarted |= state != EngineState.Created;
     }
-    if (Volatile.Read(ref _contextOperationsInFlight) > 0)
+    if (Volatile.Read(ref _refreshesInFlight) > 0)
       return EngineCoordinatorState.Initializing;
     if (allReady && (anyRequired || start.IsCompletedSuccessfully))
       return EngineCoordinatorState.Running;
@@ -860,8 +860,8 @@ public partial class EngineCoordinator : IDisposable
   /// hands over is not repeated there.
   /// </summary>
   /// <remarks>
-  /// <paramref name="handedOverToo"/> is set for the operations that change the engine (an invalidation, a refresh, a
-  /// task reset), which would be lost on the previous engine (#145); not for a wait, which the previous engine, still
+  /// <paramref name="handedOverToo"/> is set for the operations that change the engine (a refresh, a task
+  /// reset), which would be lost on the previous engine (#145); not for a wait, which the previous engine, still
   /// running, answers.
   /// </remarks>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
@@ -931,7 +931,7 @@ public partial class EngineCoordinator : IDisposable
   /// A generation switch during the wait is answered by the next generation, which resets its engine, as with
   /// <see cref="EnsureEngineTaskReadyAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
   /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
-  /// generation and goes there, as with <see cref="InvalidateContextForEngineAsync(string, CancellationToken)"/>. The
+  /// generation and goes there, as with <see cref="RefreshEngineContextAsync"/>. The
   /// wait for the engine to start lasts until it is Ready or its start has failed (see
   /// <see cref="MechanicEngine.ResetEngineTasksAsync"/>). A task that hangs during the engine's first
   /// start can be reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>,
@@ -1052,52 +1052,6 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Invalidates the context for a specific engine.
-  /// </summary>
-  /// <param name="name">Name of the engine whose context is invalidated.</param>
-  /// <param name="token">Cancels the caller's wait for the next generation of a switch.</param>
-  /// <remarks>
-  /// This forces re-initialization of the affected engine and its dependents. It does not start a coordinator that has
-  /// not started. On a coordinator that a generation switch has replaced (once it has handed over, see
-  /// <see cref="Successor"/>), the newer generation invalidates its engine, as with
-  /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
-  /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
-  /// generation and goes there too.
-  /// </remarks>
-  /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer
-  /// generation, once this coordinator was replaced).</exception>
-  /// <exception cref="InvalidOperationException">The coordinator is shut down, so the engines would not start
-  /// again.</exception>
-  /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled.</exception>
-  public Task InvalidateContextForEngineAsync(string name, CancellationToken token = default)
-    => ForEngineAsync(name,
-      generation => generation.InvalidateContextForEngineAsync(name, token),
-      () => InvalidateContextForEngineAsyncInt(name),
-      token, start: false);
-
-  /// <summary>
-  /// Internal implementation of <see cref="InvalidateContextForEngineAsync(string, CancellationToken)"/>.
-  /// </summary>
-  /// <param name="name">Name of the engine whose context should be invalidated.</param>
-  /// <remarks>
-  /// Delegates to the mechanic to invalidate the engine context and dependent engines. The coordinator is not Running
-  /// while the operation is in flight; after it, it is Running again once the required engines are Ready (at once
-  /// after an optional engine's invalidation, or one the mechanic rejected).
-  /// </remarks>
-  public async Task InvalidateContextForEngineAsyncInt(string name)
-  {
-    BeginContextOperation();
-    try
-    {
-      await Mechanic.InvalidateContextForEngineAsync(name).ConfigureAwait(false);
-    }
-    finally
-    {
-      EndContextOperation();
-    }
-  }
-
-  /// <summary>
   /// Pushes an already-computed context into a specific, already-running engine instance,
   /// without resetting the engine's own tasks or recreating the engine.
   /// </summary>
@@ -1111,8 +1065,7 @@ public partial class EngineCoordinator : IDisposable
   /// </param>
   /// <param name="token">Cancels the caller's wait for the next generation of a switch.</param>
   /// <remarks>
-  /// Unlike <see cref="InvalidateContextForEngineAsync(string, CancellationToken)"/>, this does NOT
-  /// reset the engine's kick-start task or any of its internal tasks — it only assigns the supplied
+  /// This does NOT reset the engine's kick-start task or any of its internal tasks — it only assigns the supplied
   /// <see cref="IEngineContext"/> to the live engine via its <c>Context</c> setter, which fires the
   /// engine's own <c>ContextChanged</c> hook. It is the engine's responsibility to decide, from the
   /// old vs. new context, what (if anything) needs to be invalidated/reset. Use this when the caller
@@ -1139,29 +1092,18 @@ public partial class EngineCoordinator : IDisposable
   {
     ArgumentNullException.ThrowIfNull(context);
 
-    BeginContextOperation();
+    Interlocked.Increment(ref _refreshesInFlight);
     try
     {
       Mechanic.RegisterContext(name, context);
     }
     finally
     {
-      EndContextOperation();
+      Interlocked.Decrement(ref _refreshesInFlight);
     }
 
     return Task.CompletedTask;
   }
-
-  /// <summary>
-  /// Begins a context operation (an invalidation or a refresh): until <see cref="EndContextOperation"/>, the
-  /// coordinator is not Running (see <see cref="State"/>).
-  /// </summary>
-  private void BeginContextOperation() => Interlocked.Increment(ref _contextOperationsInFlight);
-
-  /// <summary>
-  /// Ends a context operation. After the last one in flight, the coordinator follows the required engines again.
-  /// </summary>
-  private void EndContextOperation() => Interlocked.Decrement(ref _contextOperationsInFlight);
 
   /// <summary>
   /// Returns an engine if it is already Ready.

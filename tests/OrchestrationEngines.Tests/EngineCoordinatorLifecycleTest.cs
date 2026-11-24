@@ -108,47 +108,6 @@ public class EngineCoordinatorLifecycleTest
   }
 
   /// <summary>
-  /// Verifies that a coordinator whose engine failed returns to Running once the engine's context is invalidated and
-  /// the engine loads after all.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_AfterEngineFailed_ReturnsToRunning()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var coordinator = CreateCoordinator();
-    var engine = new NetworkEngine((run, _) => run == 1 ? throw new InvalidOperationException("First load fails.") : Task.CompletedTask);
-    coordinator.RegisterEngineDescriptor(Descriptor(Name, engine));
-    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeNull("the first load fails");
-    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.WaitingForEngines,
-      MustComplete, "the failure must reach the coordinator");
-
-    await coordinator.InvalidateContextForEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
-    var loaded = await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
-
-    loaded.Should().BeSameAs(engine);
-    await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
-      MustComplete, "the coordinator must run again");
-  }
-
-  /// <summary>
-  /// Verifies that invalidating a context on a coordinator that is shut down throws, instead of resetting tasks that
-  /// would never run again (#58, item 1): the mechanic refuses (InvalidOperationException).
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_InvalidateContext_AfterShutdown_Throws()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(EngineCoordinatorLifecycleTest), NullLogger.Instance);
-    coordinator.RegisterEngineDescriptor(Descriptor(Name, new NetworkEngine((_, _) => Task.CompletedTask)));
-    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().NotBeNull();
-    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-
-    var act = () => coordinator.InvalidateContextForEngineAsync(Name, ct).WaitAsync(MustComplete, ct);
-
-    await act.Should().ThrowAsync<InvalidOperationException>();
-  }
-
-  /// <summary>
   /// Verifies that shutting down a coordinator that never started ends it Stopped, as after a start (#153): it takes
   /// no more engines, creates none, and a later ready-wait behaves as on a coordinator shut down after its start.
   /// </summary>

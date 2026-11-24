@@ -52,11 +52,6 @@ public interface IEngine
   /// The context is assigned before the engine is started and may include
   /// references to dependency engines (via <see cref="EngineContextWithDependencies"/>).
   /// </para>
-  ///
-  /// <para>
-  /// Context invalidation causes the engine to be stopped and restarted
-  /// with a newly computed context.
-  /// </para>
   /// </remarks>
   IEngineContext Context { get; set; }
 
@@ -204,8 +199,7 @@ public interface IEngine
   /// </summary>
   /// <remarks>
   /// <para>
-  /// This is typically used during full engine restart scenarios or
-  /// context invalidation cascades.
+  /// This is typically used during full engine restart scenarios.
   /// </para>
   /// <para>
   /// It prepares a restart: until the caller follows up with <see cref="StartAsync"/> or <see cref="StopAsync"/> (or, on a
