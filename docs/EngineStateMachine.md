@@ -26,8 +26,8 @@ tasks. So it cannot differ from what it describes. The first row that applies gi
   kick-start has been fired.
 - An engine registered as not required for running does not count. A coordinator with no required engine is
   `Initializing` until its start has completed, then `Running`.
-- These are the rules by which a lookup (`GetEngineAsync`) decides whether to wait for an engine; the mechanic applies
-  them to both.
+- These are the rules by which a lookup (`GetEngineAsync`) decides whether to wait for an engine: both are built on
+  the same checks in the mechanic.
 
 ## Running is not kept
 
