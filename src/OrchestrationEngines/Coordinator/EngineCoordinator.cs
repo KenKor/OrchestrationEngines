@@ -35,7 +35,7 @@ namespace OrchestrationEngines.Coordinator;
 public partial class EngineCoordinator : IDisposable
 {
   // What the state is computed from, next to the engines (see State): the start (_mechanicStart), the shutdown, and
-  // the context operations in flight.
+  // the context refreshes in flight (_refreshesInFlight).
   private volatile bool _shutdownStarted;
   private volatile bool _shutdownCompleted;
 
@@ -107,7 +107,7 @@ public partial class EngineCoordinator : IDisposable
   /// Computed on every read, not stored, so it cannot differ from what it describes. Created until the start, Stopping
   /// and Stopped from the shutdown. In between it follows the engines registered as required for running:
   /// WaitingForEngines if one is Faulted or Stopped (and is not being started again); else Initializing while a
-  /// context operation is in flight; else Running if all are Ready; else Initializing once one has begun to start,
+  /// context refresh is in flight; else Running if all are Ready; else Initializing once one has begun to start,
   /// and WaitingForEngines before that. A start that failed counts as WaitingForEngines, and one that has not completed
   /// is not Running while no engine is required.
   /// </remarks>
