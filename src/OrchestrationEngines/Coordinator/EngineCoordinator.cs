@@ -10,7 +10,6 @@ using OrchestrationEngines.Engine;
 using OrchestrationEngines.Helpers;
 using OrchestrationEngines.Mechanic;
 using OrchestrationEngines.Tasks;
-using Stateless;
 
 namespace OrchestrationEngines.Coordinator;
 
@@ -29,15 +28,16 @@ namespace OrchestrationEngines.Coordinator;
 /// </para>
 ///
 /// <para>
-/// It uses an application-level state machine to translate low-level
-/// engine lifecycle events into coarse-grained application states
-/// such as Initializing, Running, and Stopped.
+/// Its <see cref="State"/> is not stored but computed, from its own start and shutdown and from the state of the
+/// required engines, as an engine's state is computed from its tasks.
 /// </para>
 /// </remarks>
 public partial class EngineCoordinator : IDisposable
 {
-  // App-level state machine
-  private StateMachine<EngineCoordinatorState, EngineCoordinatorTrigger> _appMachine;
+  // What the state is computed from, next to the engines (see State): the start (_mechanicStart), the shutdown, and
+  // the context operations in flight.
+  private volatile bool _shutdownStarted;
+  private volatile bool _shutdownCompleted;
 
   // Synchronization object for short, synchronous critical sections.
   // Invariant: no awaits occur while holding this lock.
@@ -48,8 +48,8 @@ public partial class EngineCoordinator : IDisposable
   // start); null when no switch runs. See NextGenerationAsync.
   private SwitchBeforeHandover _switchBeforeHandover;
 
-  // The context operations (invalidations and refreshes) in flight, under _sync. While one is in flight, only the last
-  // one to end may bring the coordinator back to Running (see EndContextOperation).
+  // The context operations (invalidations and refreshes) in flight. While one is, the coordinator is not Running: an
+  // operation that has not reset its engine yet would otherwise find it Running until the reload starts.
   private int _contextOperationsInFlight;
 
   private volatile bool _disposed;
@@ -104,9 +104,47 @@ public partial class EngineCoordinator : IDisposable
   /// Current application-level lifecycle state.
   /// </summary>
   /// <remarks>
-  /// If the state machine has not yet been initialized, this defaults to <see cref="EngineCoordinatorState.Created"/>.
+  /// Computed on every read, not stored, so it cannot differ from what it describes. Created until the start, Stopping
+  /// and Stopped from the shutdown. In between it follows the engines registered as required for running:
+  /// WaitingForEngines if one is Faulted or Stopped (and is not being started again); else Initializing while a
+  /// context operation is in flight; else Running if all are Ready; else Initializing once one has begun to start,
+  /// and WaitingForEngines before that. A start that failed counts as WaitingForEngines, and one that has not completed
+  /// is not Running while no engine is required.
   /// </remarks>
-  public EngineCoordinatorState State => AppMachine?.State ?? EngineCoordinatorState.Created;
+  public EngineCoordinatorState State => ComputeState();
+
+  private EngineCoordinatorState ComputeState()
+  {
+    if (_shutdownCompleted)
+      return EngineCoordinatorState.Stopped;
+    if (_shutdownStarted)
+      return EngineCoordinatorState.Stopping;
+    var start = Volatile.Read(ref _mechanicStart);
+    if (start == null)
+      return EngineCoordinatorState.Created;
+    if (start.IsFaulted || start.IsCanceled)
+      return EngineCoordinatorState.WaitingForEngines;
+
+    // The descriptors do not change once the start is claimed (see TryRegisterEngineDescriptor).
+    var mechanic = _mechanic;
+    bool anyRequired = false, allReady = true, anyStarted = false;
+    foreach (var descriptor in _context.EngineDescriptors)
+    {
+      if (!descriptor.RequiredForRunning)
+        continue;
+      var state = mechanic?.StartStateOf(descriptor.Name) ?? EngineState.Created;
+      if (state > EngineState.Ready)
+        return EngineCoordinatorState.WaitingForEngines;
+      anyRequired = true;
+      allReady &= state == EngineState.Ready;
+      anyStarted |= state != EngineState.Created;
+    }
+    if (Volatile.Read(ref _contextOperationsInFlight) > 0)
+      return EngineCoordinatorState.Initializing;
+    if (allReady && (anyRequired || start.IsCompletedSuccessfully))
+      return EngineCoordinatorState.Running;
+    return anyStarted || !anyRequired ? EngineCoordinatorState.Initializing : EngineCoordinatorState.WaitingForEngines;
+  }
 
   /// <summary>
   /// Registry of instantiated engines, keyed by engine name.
@@ -214,134 +252,9 @@ public partial class EngineCoordinator : IDisposable
   {
     var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token) { TimeProvider = TimeProvider };
 
-    // Listen to engine lifecycle events to drive coordinator state.
-    mechanic.EngineStatusChanged += Mechanic_EngineStatusChanged;
-
     // Attach engine descriptors before starting.
     mechanic.Context = _context;
     return mechanic;
-  }
-
-  /// <summary>
-  /// Lazily created application-level state machine.
-  /// </summary>
-  protected StateMachine<EngineCoordinatorState, EngineCoordinatorTrigger> AppMachine
-  {
-    get { return _appMachine ??= CreateStateMachine(); }
-  }
-
-  /// <summary>
-  /// Creates the application-level state machine.
-  /// </summary>
-  /// <remarks>
-  /// This machine represents coarse application intent and aggregates
-  /// engine-level signals into high-level lifecycle transitions.
-  /// </remarks>
-  protected virtual StateMachine<EngineCoordinatorState, EngineCoordinatorTrigger> CreateStateMachine()
-  {
-    var machine =
-        new StateMachine<EngineCoordinatorState, EngineCoordinatorTrigger>(EngineCoordinatorState.Created);
-
-    machine.Configure(EngineCoordinatorState.Created)
-        .Permit(EngineCoordinatorTrigger.Start, EngineCoordinatorState.WaitingForEngines)
-        .Permit(EngineCoordinatorTrigger.StartShutdown, EngineCoordinatorState.Stopping);
-
-    machine.Configure(EngineCoordinatorState.WaitingForEngines)
-        .Ignore(EngineCoordinatorTrigger.Start)
-        .Ignore(EngineCoordinatorTrigger.EngineReady)
-        .Ignore(EngineCoordinatorTrigger.EngineFailed)
-        // A context refresh of an engine that is (re)loading: the engine decides what to load again, and the coordinator
-        // follows the engine as before.
-        .Ignore(EngineCoordinatorTrigger.RefreshEngine)
-        .Permit(EngineCoordinatorTrigger.EngineStarting, EngineCoordinatorState.Initializing)
-        .Permit(EngineCoordinatorTrigger.StartShutdown, EngineCoordinatorState.Stopping);
-
-    machine.Configure(EngineCoordinatorState.Initializing)
-        .Ignore(EngineCoordinatorTrigger.Start)
-        .Ignore(EngineCoordinatorTrigger.EngineStarting)
-        .Ignore(EngineCoordinatorTrigger.RefreshEngine)
-        .Permit(EngineCoordinatorTrigger.EngineReady, EngineCoordinatorState.Running)
-        .Permit(EngineCoordinatorTrigger.EngineFailed, EngineCoordinatorState.WaitingForEngines)
-        .Permit(EngineCoordinatorTrigger.StartShutdown, EngineCoordinatorState.Stopping);
-
-    machine.Configure(EngineCoordinatorState.Running)
-        .Ignore(EngineCoordinatorTrigger.Start)
-        .Ignore(EngineCoordinatorTrigger.EngineStarting)
-        .Ignore(EngineCoordinatorTrigger.EngineReady)
-        .Permit(EngineCoordinatorTrigger.EngineFailed, EngineCoordinatorState.WaitingForEngines)
-        .Permit(EngineCoordinatorTrigger.InvalidateContext, EngineCoordinatorState.Initializing)
-        .Permit(EngineCoordinatorTrigger.RefreshEngine, EngineCoordinatorState.Initializing)
-        .Permit(EngineCoordinatorTrigger.StartShutdown, EngineCoordinatorState.Stopping);
-
-    machine.Configure(EngineCoordinatorState.Stopping)
-        .Ignore(EngineCoordinatorTrigger.Start)
-        .Ignore(EngineCoordinatorTrigger.EngineStarting)
-        .Ignore(EngineCoordinatorTrigger.EngineReady)
-        .Ignore(EngineCoordinatorTrigger.EngineFailed)
-        .Ignore(EngineCoordinatorTrigger.StartShutdown)
-        .Permit(EngineCoordinatorTrigger.CompleteShutdown, EngineCoordinatorState.Stopped);
-
-    machine.Configure(EngineCoordinatorState.Stopped)
-        .Ignore(EngineCoordinatorTrigger.Start)
-        .Ignore(EngineCoordinatorTrigger.EngineStarting)
-        .Ignore(EngineCoordinatorTrigger.EngineReady)
-        .Ignore(EngineCoordinatorTrigger.EngineFailed)
-        .Ignore(EngineCoordinatorTrigger.StartShutdown)
-        .Ignore(EngineCoordinatorTrigger.CompleteShutdown);
-
-    // Log unexpected triggers instead of throwing.
-    machine.OnUnhandledTrigger((state, trigger) =>
-    {
-      LogUnhandledTrigger(_coordinatorName, trigger, state);
-    });
-
-    // Verbose transition logging for diagnostics.
-    machine.OnTransitioned(t =>
-    {
-      LogTransition(_coordinatorName, t.Source, t.Trigger, t.Destination);
-    });
-
-    return machine;
-  }
-
-  /// <summary>
-  /// Handles lifecycle events emitted by the mechanic engine.
-  /// </summary>
-  /// <param name="sender">The event source.</param>
-  /// <param name="e">Engine lifecycle event data.</param>
-  private void Mechanic_EngineStatusChanged(object sender, EngineStatusEventArgs e)
-  {
-    lock (_sync)
-    {
-      // Ignore engine events once shutdown has started.
-      if (State is EngineCoordinatorState.Stopping || State is EngineCoordinatorState.Stopped)
-        return;
-
-      if (e.State == EngineState.Starting)
-      {
-        AppMachine.Fire(EngineCoordinatorTrigger.EngineStarting);
-        return;
-      }
-
-      if (e.State == EngineState.Faulted)
-      {
-        AppMachine.Fire(EngineCoordinatorTrigger.EngineFailed);
-        return;
-      }
-
-      if (e.State == EngineState.Ready)
-      {
-        // Only signal readiness when all required engines have succeeded.
-        // Fix (OptionalEngineTest): required engines only. The mechanic reports Ready as soon as its required
-        // tasks are done; checking every task here left the coordinator Initializing for good whenever an engine
-        // registered with requiredForRunning: false was still loading (or had failed) at that moment.
-        // Fix (OptionalEngineTest): not while a context operation is in flight. One that has not reset its engine yet
-        // would otherwise find the coordinator Running, which ignores the reload's Starting event. The last operation
-        // to end signals readiness instead (see EndContextOperation).
-        if (_contextOperationsInFlight == 0 && _mechanic.IsRequiredCompletedWithSuccess())
-          AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
-      }
-    }
   }
 
   /// <summary>
@@ -401,10 +314,9 @@ public partial class EngineCoordinator : IDisposable
     lock (_sync)
     {
       // Only before the start: once the start is claimed, the mechanic builds its tasks from the descriptors (outside
-      // this lock), so a later descriptor would never be loaded, or fail that enumeration. The state does not tell:
-      // it stays WaitingForEngines while the mechanic builds its tasks, and after a failed first load. A running
-      // coordinator takes new engines through a generation switch (RestartWithDefinitionsAsync).
-      if (_mechanicStart != null || State != EngineCoordinatorState.Created)
+      // this lock), so a later descriptor would never be loaded, or fail that enumeration. A running coordinator takes
+      // new engines through a generation switch (RestartWithDefinitionsAsync).
+      if (_mechanicStart != null || _shutdownStarted)
         return false;
 
       if (!_context.EngineDescriptors.Add(descriptor))
@@ -867,7 +779,6 @@ public partial class EngineCoordinator : IDisposable
       mechanic = Mechanic;
       if (_mechanicStart == null)
       {
-        AppMachine.Fire(EngineCoordinatorTrigger.Start);
         startClaimed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _mechanicStart = startClaimed.Task;
       }
@@ -1120,9 +1031,8 @@ public partial class EngineCoordinator : IDisposable
     {
       // Cancel any pending operations.
       _lifetimeCts.CancelBestEffort(_applicationLogger);
-      // Fire shutdown if not already stopping.
-      if (State >= EngineCoordinatorState.Stopping) return;
-      AppMachine.Fire(EngineCoordinatorTrigger.StartShutdown);
+      if (_shutdownStarted) return;
+      _shutdownStarted = true;
     }
 
     ExceptionDispatchInfo stopFailure = null;
@@ -1137,18 +1047,7 @@ public partial class EngineCoordinator : IDisposable
     }
 
     // A failed stop still ends the shutdown: nothing else would move the coordinator on from Stopping.
-    lock (_sync)
-    {
-      try
-      {
-        AppMachine.Fire(EngineCoordinatorTrigger.CompleteShutdown);
-      }
-      catch (Exception) when (stopFailure != null)
-      {
-        // A logging provider that threw on the transition (the state has already changed): the stop's failure is the
-        // one to report.
-      }
-    }
+    _shutdownCompleted = true;
     stopFailure?.Throw();
   }
 
@@ -1181,24 +1080,19 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   /// <param name="name">Name of the engine whose context should be invalidated.</param>
   /// <remarks>
-  /// Fires an application-level invalidate trigger and delegates to the mechanic to invalidate the
-  /// engine context and dependent engines. When the last context operation in flight ends, an Initializing coordinator
-  /// goes to Running if the required engines are Ready (an optional engine's invalidation, or one the mechanic
-  /// rejected); otherwise the required engine's reload brings it there, once no operation is in flight (see
-  /// EndContextOperation).
+  /// Delegates to the mechanic to invalidate the engine context and dependent engines. The coordinator is not Running
+  /// while the operation is in flight; after it, it is Running again once the required engines are Ready (at once
+  /// after an optional engine's invalidation, or one the mechanic rejected).
   /// </remarks>
   public async Task InvalidateContextForEngineAsyncInt(string name)
   {
-    BeginContextOperation(EngineCoordinatorTrigger.InvalidateContext);
+    BeginContextOperation();
     try
     {
       await Mechanic.InvalidateContextForEngineAsync(name).ConfigureAwait(false);
     }
     finally
     {
-      // An optional engine's invalidation, or one the mechanic rejected, leaves the required tasks completed. A required
-      // engine that loads again keeps them open: its Ready event brings the coordinator back, or, while another
-      // operation is in flight, the end of the last one does.
       EndContextOperation();
     }
   }
@@ -1245,14 +1139,13 @@ public partial class EngineCoordinator : IDisposable
   {
     ArgumentNullException.ThrowIfNull(context);
 
-    BeginContextOperation(EngineCoordinatorTrigger.RefreshEngine);
+    BeginContextOperation();
     try
     {
       Mechanic.RegisterContext(name, context);
     }
     finally
     {
-      // A refresh leaves the mechanic's tasks completed: the engine itself decides what to reload.
       EndContextOperation();
     }
 
@@ -1260,42 +1153,15 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Begins a context operation (an invalidation or a refresh): fires <paramref name="trigger"/>, which takes the
-  /// coordinator to Initializing, and counts the operation as in flight (see <see cref="EndContextOperation"/>).
+  /// Begins a context operation (an invalidation or a refresh): until <see cref="EndContextOperation"/>, the
+  /// coordinator is not Running (see <see cref="State"/>).
   /// </summary>
-  private void BeginContextOperation(EngineCoordinatorTrigger trigger)
-  {
-    lock (_sync)
-    {
-      AppMachine.Fire(trigger);
-      _contextOperationsInFlight++;
-    }
-  }
+  private void BeginContextOperation() => Interlocked.Increment(ref _contextOperationsInFlight);
 
   /// <summary>
-  /// Ends a context operation. The last one in flight brings an Initializing coordinator to Running when the required
-  /// engines are Ready.
+  /// Ends a context operation. After the last one in flight, the coordinator follows the required engines again.
   /// </summary>
-  /// <remarks>
-  /// The coordinator follows the mechanic, but not while operations are in flight: the mechanic's Ready event is not
-  /// passed on then (see Mechanic_EngineStatusChanged). An operation that ends first, or an
-  /// engine that reloads after one, could otherwise find the required tasks completed while another operation is about
-  /// to reset them, and the coordinator would stay Running through that reload. So the last one brings the coordinator
-  /// back here: after an operation that left the required tasks completed (no status change follows), and after a Ready
-  /// event that came while operations were in flight, also when none of them began while the coordinator was Running.
-  /// </remarks>
-  private void EndContextOperation()
-  {
-    lock (_sync)
-    {
-      // Fix (OptionalEngineTest): overlapping operations; the last one decides.
-      if (--_contextOperationsInFlight > 0)
-        return;
-      // Fix (OptionalEngineTest): required engines only, as in Mechanic_EngineStatusChanged.
-      if (State == EngineCoordinatorState.Initializing && _mechanic?.IsRequiredCompletedWithSuccess() == true)
-        AppMachine.Fire(EngineCoordinatorTrigger.EngineReady);
-    }
-  }
+  private void EndContextOperation() => Interlocked.Decrement(ref _contextOperationsInFlight);
 
   /// <summary>
   /// Returns an engine if it is already Ready.
@@ -1469,12 +1335,6 @@ public partial class EngineCoordinator : IDisposable
   // ---------------------------------------------------------------------
   // Logging methods
   // ---------------------------------------------------------------------
-
-  [LoggerMessage(Level = LogLevel.Debug, Message = "'{CoordinatorName}': Unhandled coordinator trigger {Trigger} in state {State}, ignoring.")]
-  private partial void LogUnhandledTrigger(string coordinatorName, EngineCoordinatorTrigger trigger, EngineCoordinatorState state);
-
-  [LoggerMessage(Level = LogLevel.Debug, Message = "'{CoordinatorName}': Coordinator transition {Source} --{Trigger}--> {Destination}")]
-  private partial void LogTransition(string coordinatorName, EngineCoordinatorState source, EngineCoordinatorTrigger trigger, EngineCoordinatorState destination);
 
   [LoggerMessage(Level = LogLevel.Debug, Message = "The kick-start of engine '{EngineName}' did not complete with success, or could not be waited for; letting go of the engine it replaces.")]
   private partial void LogHandoverWaitFailed(Exception exception, string engineName);

@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Tasks;
 using Stateless.Reflection;
 using Xunit;
@@ -13,8 +12,8 @@ using Xunit;
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// Contains snapshot tests of the task and coordinator state machines: every configured transition and ignored
-/// trigger, so any change to them shows up in review. Guards are only marked, not described, since Stateless names
+/// Contains a snapshot test of the task state machine: every configured transition and ignored
+/// trigger, so any change to it shows up in review. Guards are only marked, not described, since Stateless names
 /// lambda guards after compiler-generated methods.
 /// </summary>
 public class StateMachineTransitionsTest
@@ -23,12 +22,6 @@ public class StateMachineTransitionsTest
     NullLogger.Instance, CancellationToken.None)
   {
     public StateMachineInfo Info => StateMachine.GetInfo();
-  }
-
-  private sealed class InspectableCoordinator()
-    : EngineCoordinator(nameof(StateMachineTransitionsTest), NullLogger.Instance)
-  {
-    public StateMachineInfo Info => AppMachine.GetInfo();
   }
 
   private static string[] Describe(StateMachineInfo info) => info.States
@@ -119,46 +112,5 @@ public class StateMachineTransitionsTest
       "RecoveryFailed is in Failed",
       "DependencyFailed is in Failed",
       "TimedOut is in Failed",
-    ]);
-
-  /// <summary>
-  /// Verifies the coordinator's state machine against its snapshot.
-  /// </summary>
-  [Fact]
-  public void EngineCoordinator_StateMachine_MatchesSnapshot() => ShouldMatch(new InspectableCoordinator().Info,
-    [
-      "Created --Start--> WaitingForEngines",
-      "Created --StartShutdown--> Stopping",
-      "WaitingForEngines --EngineStarting--> Initializing",
-      "WaitingForEngines --StartShutdown--> Stopping",
-      "WaitingForEngines ignores EngineFailed",
-      "WaitingForEngines ignores EngineReady",
-      "WaitingForEngines ignores RefreshEngine",
-      "WaitingForEngines ignores Start",
-      "Initializing --EngineFailed--> WaitingForEngines",
-      "Initializing --EngineReady--> Running",
-      "Initializing --StartShutdown--> Stopping",
-      "Initializing ignores EngineStarting",
-      "Initializing ignores RefreshEngine",
-      "Initializing ignores Start",
-      "Running --EngineFailed--> WaitingForEngines",
-      "Running --InvalidateContext--> Initializing",
-      "Running --RefreshEngine--> Initializing",
-      "Running --StartShutdown--> Stopping",
-      "Running ignores EngineReady",
-      "Running ignores EngineStarting",
-      "Running ignores Start",
-      "Stopping --CompleteShutdown--> Stopped",
-      "Stopping ignores EngineFailed",
-      "Stopping ignores EngineReady",
-      "Stopping ignores EngineStarting",
-      "Stopping ignores Start",
-      "Stopping ignores StartShutdown",
-      "Stopped ignores CompleteShutdown",
-      "Stopped ignores EngineFailed",
-      "Stopped ignores EngineReady",
-      "Stopped ignores EngineStarting",
-      "Stopped ignores Start",
-      "Stopped ignores StartShutdown",
     ]);
 }

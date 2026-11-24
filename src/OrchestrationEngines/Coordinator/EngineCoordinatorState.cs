@@ -1,45 +1,44 @@
 namespace OrchestrationEngines.Coordinator;
 
 /// <summary>
-/// States of the Engine Coordinator
-/// 
-/// It tracks the overall lifecycle of the coordinator and its engines.
-/// Starts from Created, goes to WaitingForEngines when startup is requested,
-/// then to Initializing while engines are starting up,
-/// if all goes well it reaches Running.
-/// On shutdown it goes to Stopping and finally Stopped.
+/// The states of the Engine Coordinator.
 /// </summary>
+/// <remarks>
+/// The state is computed, not stored: Created until the start, Stopping and Stopped from the shutdown, and in between
+/// it follows the engines registered as required for running. So it can go back: from Running to Initializing while
+/// a context operation is in flight, and to WaitingForEngines when a required engine faults or stops.
+/// </remarks>
 public enum EngineCoordinatorState
 {
     /// <summary>
-    /// Coordinator has been constructed but startup orchestration has not started yet.
+    /// The coordinator has been constructed and not started yet.
     /// </summary>
     Created,
 
     /// <summary>
-    /// Startup has been requested; coordinator is waiting for engines to begin transitioning.
-    /// (In earlier designs this aligned with "waiting for context", but here context is already attached to the mechanic.)
-    /// The engines are waiting for context to be provided. 
+    /// Started, and either no required engine has begun to start yet, or a required engine is Faulted or Stopped and
+    /// is not being started again.
     /// </summary>
     WaitingForEngines,
 
     /// <summary>
-    /// Engines are being created/started and required tasks are not yet all complete.
+    /// A required engine is being created or started and not all of them are Ready yet, or a context operation is in
+    /// flight.
     /// </summary>
     Initializing,
 
     /// <summary>
-    /// All required engines are Ready; application is operational.
+    /// All required engines are Ready; the application is operational.
     /// </summary>
     Running,
 
     /// <summary>
-    /// Shutdown has started; coordinator will not accept operational triggers anymore.
+    /// The shutdown has started and has not completed yet.
     /// </summary>
     Stopping,
 
     /// <summary>
-    /// Shutdown completed; terminal coordinator state.
+    /// The shutdown has completed; the terminal state.
     /// </summary>
     Stopped
 }
