@@ -1140,7 +1140,8 @@ public partial class EngineCoordinator : IDisposable
   /// wait for the switch to end: the next generation answers once it has started, so an engine of that generation can
   /// make the call from its own tasks. If the switch fails after that (during its wait until ready), such a call
   /// ends with an <see cref="EngineTaskNotReadyException"/> in state Cancelled: the failed switch stopped the engine
-  /// it waited for (#154).
+  /// it waited for (#154). One that reaches the next generation only after the failure shut it down is answered by
+  /// this generation.
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
@@ -1185,11 +1186,9 @@ public partial class EngineCoordinator : IDisposable
     // for an engine the switch hands over (#145): the call would be lost on the previous engine, which the hand-over
     // shuts down. If the next generation did not start, this generation answers.
     if (await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false) is
-        { } nextGeneration)
-    {
-      await onGeneration(nextGeneration).ConfigureAwait(false);
+        { } nextGeneration
+        && await AnsweredOnNextGenerationAsync(nextGeneration, onGeneration, token).ConfigureAwait(false))
       return;
-    }
 
     try
     {
@@ -1205,9 +1204,27 @@ public partial class EngineCoordinator : IDisposable
       // A generation switch while waiting (it stopped this generation's engines, or has this engine): ask the next one,
       // if it has the engine.
       var next = await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false);
-      if (next == null)
+      if (next == null || !await AnsweredOnNextGenerationAsync(next, onGeneration, token).ConfigureAwait(false))
         throw;
+    }
+  }
+
+  /// <summary>
+  /// Runs <paramref name="onGeneration"/> on <paramref name="next"/>: false if a switch that failed abandoned that
+  /// generation and shut it down before the call got there (a cancellation the caller did not ask for), so that this
+  /// generation, current again, answers it, as it answers a call made after the failure (#154).
+  /// </summary>
+  private static async Task<bool> AnsweredOnNextGenerationAsync(EngineCoordinator next,
+    Func<EngineCoordinator, Task> onGeneration, CancellationToken token)
+  {
+    try
+    {
       await onGeneration(next).ConfigureAwait(false);
+      return true;
+    }
+    catch (OperationCanceledException) when (next._abandoned && !token.IsCancellationRequested)
+    {
+      return false;
     }
   }
 

@@ -440,7 +440,8 @@ have ended, and with the dispatcher on, the coordinator calls queued behind the 
 `EnsureEngineTaskReadyAsync`, a refresh or invalidation) does not queue behind the switch: it waits for the next
 generation to start and is answered there, so an engine of the next generation can make one from its own tasks. If
 the switch then fails during its wait until ready, a task wait made during it ends `Cancelled`
-(`EngineTaskNotReadyException`): the failed switch stopped the engine it waited for.
+(`EngineTaskNotReadyException`): the failed switch stopped the engine it waited for. One that reaches the next
+generation only after the failure shut it down is answered by the replaced coordinator.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
