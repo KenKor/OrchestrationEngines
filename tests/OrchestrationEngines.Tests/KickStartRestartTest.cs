@@ -194,6 +194,26 @@ public class KickStartRestartTest
   }
 
   /// <summary>
+  /// Verifies that the coordinator is Running again once a reset has brought an engine whose kick-start failed back to
+  /// Ready (#127): its state follows the engine, not the record of the failed start.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_ResetTasksForEngineAsync_AfterFailedKickStart_CoordinatorIsRunningAgain()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new NetworkEngine((load, _) => load == 1 ? throw new TestTaskException() : Task.CompletedTask);
+    var coordinator = CreateCoordinator(engine);
+    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeNull();
+    coordinator.State.Should().Be(EngineCoordinatorState.WaitingForEngines);
+
+    await coordinator.ResetTasksForEngineAsync(Name, ["Load"], resetDependentTasks: true, ct)
+      .WaitAsync(MustComplete, ct);
+    await engine.EnsureReadyAsync().WaitAsync(MustComplete, ct);
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Running);
+  }
+
+  /// <summary>
   /// Verifies that a lookup that arrives while the kick-start waits to retry a failed engine waits for the retry and
   /// gets the engine once it is Ready, instead of null (on a server, a failed query) a moment before it recovers.
   /// </summary>
@@ -220,6 +240,32 @@ public class KickStartRestartTest
     loaded.Should().BeSameAs(engine);
     engine.State.Should().Be(EngineState.Ready);
     engine.Loads.Should().Be(2);
+  }
+
+  /// <summary>
+  /// Verifies that a required engine that failed, while its kick-start waits to retry it, counts as starting: the
+  /// coordinator is Initializing, as a lookup waits for the retry. The backoff is long, so the retry is still pending.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_State_DuringKickStartRetryWait_IsInitializing()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new NetworkEngine((_, _) => throw new InvalidOperationException("The database was not reachable."));
+    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance);
+    coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .SetRestartPolicy(new RestartPolicy
+      {
+        MaxRestartsInWindow = 5,
+        Window = TimeSpan.FromMinutes(10),
+        InitialBackoff = TimeSpan.FromMinutes(5),
+        MaxBackoff = TimeSpan.FromMinutes(5),
+      });
+    _ = coordinator.StartAsync();
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the first load must fail");
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Initializing);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 
   /// <summary>

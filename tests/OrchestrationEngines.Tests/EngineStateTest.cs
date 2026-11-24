@@ -3,7 +3,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Tasks;
@@ -45,6 +44,25 @@ public class EngineStateTest
   private sealed class QuickEngine() : BaseEngine(NullLogger.Instance)
   {
     protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
+  }
+
+  /// <summary>
+  /// An engine with one load that records the coordinator's state (read through <paramref name="coordinatorState"/>)
+  /// when its context changes after the start.
+  /// </summary>
+  private sealed class ContextWatchingEngine(Func<EngineCoordinatorState> coordinatorState)
+    : BaseEngine(NullLogger.Instance)
+  {
+    public EngineCoordinatorState? StateOnContextChange { get; private set; }
+
+    protected override void SetUpTasks() => CreateTask("Load", _ => Task.CompletedTask);
+
+    protected override void ContextChanged(IEngineContext oldValue, IEngineContext value)
+    {
+      if (oldValue != null)
+        StateOnContextChange = coordinatorState();
+      base.ContextChanged(oldValue, value);
+    }
   }
 
   /// <summary>
@@ -140,29 +158,27 @@ public class EngineStateTest
   }
 
   /// <summary>
-  /// Verifies that refreshing the context of an engine in a running coordinator passes through Initializing (the
-  /// RefreshEngine trigger) and returns to Running, since a refresh does not change the mechanic's state.
+  /// Verifies that refreshing the context of an engine in a running coordinator passes through Initializing (a
+  /// context operation in flight) and returns to Running, since a refresh leaves the engine Ready.
   /// </summary>
   [Fact]
   public async Task EngineCoordinator_RefreshEngineContextAsync_RunningCoordinator_ReturnsToRunning()
   {
-    var logger = new FakeLogger();
-    var engine = new QuickEngine();
-    var coordinator = new EngineCoordinator(nameof(EngineStateTest), logger);
+    EngineCoordinator coordinator = null;
+    var engine = new ContextWatchingEngine(() => coordinator.State);
+    coordinator = new EngineCoordinator(nameof(EngineStateTest), NullLogger.Instance);
     coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true, 1)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext())));
     await coordinator.EnsureReadyAsync(TestContext.Current.CancellationToken).WaitAsync(MustComplete, TestContext.Current.CancellationToken);
     await Wait.UntilAsync(() => coordinator.State == EngineCoordinatorState.Running,
       MustComplete, "the coordinator must be running");
-    var freshContext = new NoContext();
+    var freshContext = new ValueContext("fresh");
 
     await coordinator.RefreshEngineContextAsync(Name, freshContext, TestContext.Current.CancellationToken);
 
     engine.Context.Should().BeSameAs(freshContext);
+    engine.StateOnContextChange.Should().Be(EngineCoordinatorState.Initializing);
     coordinator.State.Should().Be(EngineCoordinatorState.Running);
-    var transitions = logger.Collector.GetSnapshot().Select(r => r.Message).ToArray();
-    transitions.Should().Contain(m => m.Contains("Running --RefreshEngine--> Initializing"));
-    transitions.Should().Contain(m => m.Contains("Initializing --EngineReady--> Running"));
   }
 
   /// <summary>

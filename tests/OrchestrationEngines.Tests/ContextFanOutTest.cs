@@ -18,20 +18,6 @@ namespace OrchestrationEngines.Tests;
 public class ContextFanOutTest
 {
   /// <summary>
-  /// A context that carries a value, for example the path of the open workspace.
-  /// </summary>
-  private sealed class ValueContext(string value) : BaseEngineContext
-  {
-    public string Value { get; } = value;
-
-    public override bool Equals(IEngineContext other) => other is ValueContext o && o.Value == Value;
-
-    public override bool Equals(object obj) => obj is IEngineContext ctx && Equals(ctx);
-
-    public override int GetHashCode() => Value.GetHashCode(StringComparison.Ordinal);
-  }
-
-  /// <summary>
   /// An engine whose load records the value of the context it loaded with: its own, or when it depends on the
   /// session engine, the session's. The session engine is reached through the context, as the Engine wires it.
   /// </summary>
