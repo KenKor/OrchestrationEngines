@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
@@ -255,6 +256,44 @@ public class LookupFromNextGenerationTest
     (await waitDuringSwitch.Invoking(w => w.WaitAsync(MustComplete, ct)).Should()
         .ThrowAsync<EngineTaskNotReadyException>()).Which.State.Should().Be(EngineTaskState.Cancelled);
     await coordinator.EnsureEngineTaskReadyAsync("A", "Load", ct).WaitAsync(MustComplete, ct);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies that a timed lookup from outside an engine, waiting on the next generation when a switch fails, is
+  /// answered by this generation while the failed switch still stops that generation's engines: it does not queue
+  /// behind that clean-up, which no time-out bounds (#154). It gets the previous A, which the switch hands over.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_TimedLookupDuringSwitchThatFails_DoesNotWaitForTheCleanUp()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var clock = new ManualTimeProvider();
+    var nextA = new StopFailingEngine(failure: null, token => Task.Delay(Timeout.Infinite, token), holdStop: true);
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
+      useDispatcher: true) { TimeProvider = clock };
+    var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(nextA));
+    coordinator.RegisterEngineDescriptor(a);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var previousA = coordinator.GetEngineIfReady("A");
+    using var switchCancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+    var @switch = coordinator.RestartWithDefinitionsAsync([a], waitUntilReady: true, switchCancel.Token);
+    await Wait.UntilAsync(() => nextA.Loads > 0, MustComplete, "the next A must be loading");
+    var timersBefore = clock.TimersCreated;
+    var deadline = clock.GetUtcNow() + TimeSpan.FromMinutes(10);
+    var lookup = coordinator.GetEngineAsync("A", (int)TimeSpan.FromMinutes(10).TotalMilliseconds, ct);
+    // The next generation has started, so the lookup waits there, on its mechanic, until its deadline.
+    await Wait.UntilAsync(() => clock.DueTimesSince(timersBefore).Contains(deadline), MustComplete,
+      "the lookup must be waiting on the next generation");
+    switchCancel.Cancel();
+    await nextA.Stopping.Task.WaitAsync(MustComplete, ct);
+
+    (await lookup.WaitAsync(MustComplete, ct)).Should().BeSameAs(previousA,
+      "this generation answers while the failed switch still stops the next A");
+    @switch.IsCompleted.Should().BeFalse("the next A's stop is held");
+    nextA.ReleaseStop.SetResult();
+    await @switch.Invoking(s => s.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>();
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }

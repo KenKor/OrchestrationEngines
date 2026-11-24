@@ -1638,6 +1638,7 @@ public partial class EngineCoordinator : IDisposable
     // (#154): with the dispatcher, so does a switch before it hands over, once its next generation has started (see
     // AnsweredByNextGeneration).
     var pending = Volatile.Read(ref _switchBeforeHandover);
+    var startOnDispatcher = true;
     if (Successor != null || QueuesBehindSwitch(pending))
     {
       var switchWait = TimeProvider.GetTimestamp();
@@ -1663,6 +1664,9 @@ public partial class EngineCoordinator : IDisposable
         // AnsweredOnNextGenerationAsync).
         if (found != null || !answering._abandoned)
           return found;
+        // Not through the dispatcher if this generation has started: the failed switch holds it until its clean-up
+        // has stopped that generation's engines, which no time-out bounds (#154).
+        startOnDispatcher = Volatile.Read(ref _mechanicStart) is not { Status: TaskStatus.RanToCompletion };
       }
       milliSecondsTimeOut = TimeLeft(milliSecondsTimeOut, switchWait);
     }
@@ -1672,7 +1676,8 @@ public partial class EngineCoordinator : IDisposable
     IEngine engine;
     try
     {
-      await DispatchAsync(StartAsync, token).ConfigureAwait(false);
+      if (startOnDispatcher)
+        await DispatchAsync(StartAsync, token).ConfigureAwait(false);
       started = TimeProvider.GetTimestamp();
       engine = milliSecondsTimeOut == Timeout.Infinite
         ? await Mechanic.GetEngineWhenReadyAsync(name, throwErrorIfNotFound, token).ConfigureAwait(false)
