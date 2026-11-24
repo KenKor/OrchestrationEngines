@@ -48,7 +48,8 @@ scripts/gate.sh -- --coverage --results-directory "$PWD/TestResults"   # the sam
 ```
 
 The results directory must be an absolute path: the .NET 10.0.1xx SDK, the lowest band `global.json` allows, resolves a
-relative one against the test app's folder (10.0.404 resolves it against the current folder). `$PWD` works in bash and PowerShell; in cmd.exe, use `%CD%` instead. The test project sets the
+relative one against the test app's folder (10.0.404 resolves it against the current folder). `$PWD` works in bash
+and PowerShell; in cmd.exe, use `%CD%` instead. The test project sets the
 coverage settings (`tests/CodeCoverage.settings.xml`) and the Cobertura format itself, through
 `TestingPlatformCommandLineArguments`. Do not pass `--coverage-settings` or `--coverage-output-format` again: a second
 copy of either option makes the test run fail before any test runs, with an error that does not name the option.

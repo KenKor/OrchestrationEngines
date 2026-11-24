@@ -24,8 +24,8 @@ jobs:
           # The gate's line-length check diffs against the merge base with the base branch.
           fetch-depth: 0
 
-      # Builds with the runner host's SDK: global.json (10.0.100, latestPatch) decides whether it is accepted. Testing on
-      # the newest patch is build.yml's job. The version is logged, so a host SDK that falls behind shows here.
+      # Builds with the runner host's newest 10.0 SDK: global.json (10.0.100, latestFeature) accepts any 10.0 band from
+      # 10.0.100 up. Testing on the lowest band, 10.0.1xx, is build.yml's job. The version is logged here.
       - name: SDK
         run: dotnet --version
 
