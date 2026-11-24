@@ -12,7 +12,7 @@ using Xunit;
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// Contains tests for context operations (an invalidation or a refresh) on a coordinator that a generation switch
+/// Contains tests for context refreshes on a coordinator that a generation switch
 /// replaced, which hand off to the newer generation (#86, item 1), or during a switch that rebuilds the engine from
 /// scratch (#123) or hands it over to its restart factory (#145), before it hands over, which wait for the next
 /// generation and act there.

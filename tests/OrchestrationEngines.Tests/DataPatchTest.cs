@@ -31,30 +31,14 @@ public class DataPatchTest
       CreateTask("Load", token => (loadAsync ?? ((_, _) => Task.CompletedTask))(Interlocked.Increment(ref _loads), token));
   }
 
-  /// <summary>
-  /// Counts how often each engine's context was computed, which happens again when its context is invalidated.
-  /// </summary>
-  private sealed class ContextLog
-  {
-    private readonly ConcurrentDictionary<string, int> _counts = new(StringComparer.OrdinalIgnoreCase);
-
-    public int this[string name] => _counts.GetValueOrDefault(name);
-
-    public Task<IEngineContext> Compute(string name)
-    {
-      _counts.AddOrUpdate(name, 1, (_, count) => count + 1);
-      return Task.FromResult<IEngineContext>(new NoContext());
-    }
-  }
-
   private static EngineCoordinator CreateCoordinator() =>
     new(nameof(DataPatchTest), NullLogger.Instance);
 
-  private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine, string builtOn = null,
-    ContextLog contexts = null)
+  private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine,
+    string builtOn = null)
   {
     var descriptor = coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
-      .SetContextFactory(_ => contexts?.Compute(name) ?? Task.FromResult<IEngineContext>(new NoContext()))
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .WithoutRestarts();
     if (builtOn != null)
       descriptor.AddDependsOn(builtOn);

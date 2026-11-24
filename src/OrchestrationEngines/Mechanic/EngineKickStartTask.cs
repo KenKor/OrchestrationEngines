@@ -109,7 +109,8 @@ public partial class EngineKickStartTask : EngineTask
     /// <summary>
     /// The scope of a <see cref="ResetRecordOnlyAsync"/> in this flow; null otherwise. The runs that the reset starts copy
     /// it with the flow, so its kick-start is taken by the first reset of that task that enters, and the scope is emptied
-    /// when the reset ends: any later reset of the task, wherever it comes from (a context change), restarts the engine.
+    /// when the reset ends: any later reset of the task, wherever it comes from (a reset of an engine it depends on),
+    /// restarts the engine.
     /// </summary>
     /// <remarks>The box holds the kick-start whose next reset clears only its record; null once taken.</remarks>
     private static readonly AsyncLocal<StrongBox<EngineKickStartTask>> s_recordOnly = new();
@@ -333,7 +334,7 @@ public partial class EngineKickStartTask : EngineTask
         // the next run restarts it once the ended run has started it. An engine that no run started needs no restart: the
         // next run starts it.
         // A reset in a ResetRecordOnlyAsync restarts nothing and keeps the record of the engine, so a reset that comes in
-        // before the next run has started (a context change) still restarts it.
+        // before the next run has started (a reset of an engine it depends on) still restarts it.
         var recordOnly = s_recordOnly.Value is { } scope && Interlocked.CompareExchange(ref scope.Value, null, this) == this;
         IEngine engine = null;
         lock (_gate)
