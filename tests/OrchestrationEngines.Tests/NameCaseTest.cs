@@ -29,7 +29,7 @@ public class NameCaseTest
   }
 
   private static EngineCoordinator CreateCoordinator() =>
-    new(nameof(NameCaseTest), NullLogger.Instance, useDispatcher: false);
+    new(nameof(NameCaseTest), NullLogger.Instance);
 
   /// <summary>
   /// Verifies that an engine whose dependency is named in another case starts, and reaches that dependency through

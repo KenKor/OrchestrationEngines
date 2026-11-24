@@ -47,10 +47,10 @@ public class EngineStartupTest
   }
 
   /// <summary>
-  /// Creates a coordinator the way a host without a dispatcher does.
+  /// Creates a coordinator the way a host does.
   /// </summary>
   private static EngineCoordinator CreateCoordinator() =>
-    new("EngineStartupTest", NullLogger.Instance, useDispatcher: false);
+    new("EngineStartupTest", NullLogger.Instance);
 
   private static void Register(EngineCoordinator coordinator, string name, IEngine engine, string dependsOn = null)
   {

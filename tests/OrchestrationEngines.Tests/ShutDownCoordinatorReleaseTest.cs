@@ -38,9 +38,9 @@ public class ShutDownCoordinatorReleaseTest
   /// </summary>
   [MethodImpl(MethodImplOptions.NoInlining)]
   private static async Task<(EngineCoordinator Current, WeakReference Replaced)> SwitchOnceAsync(
-    CancellationToken applicationToken, bool useDispatcher, CancellationToken ct)
+    CancellationToken applicationToken, CancellationToken ct)
   {
-    var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, useDispatcher, applicationToken);
+    var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, applicationToken);
     coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var current = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
@@ -52,15 +52,13 @@ public class ShutDownCoordinatorReleaseTest
   /// Verifies that the token source of the generation a switch replaced, once nothing of the host refers to that
   /// generation, is not kept by the application token, which lives on.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_ReplacedCoordinator_IsNotKeptByTheApplicationToken(bool useDispatcher)
+  [Fact]
+  public async Task Switch_ReplacedCoordinator_IsNotKeptByTheApplicationToken()
   {
     var ct = TestContext.Current.CancellationToken;
     using var application = new CancellationTokenSource();
 
-    var (current, replaced) = await SwitchOnceAsync(application.Token, useDispatcher, ct);
+    var (current, replaced) = await SwitchOnceAsync(application.Token, ct);
     try
     {
       (await Wait.UntilCollectedAsync(MustComplete, replaced)).Should().BeTrue("the replaced generation is shut down, and only the "
@@ -80,9 +78,9 @@ public class ShutDownCoordinatorReleaseTest
   /// </summary>
   [MethodImpl(MethodImplOptions.NoInlining)]
   private static async Task<(EngineCoordinator Current, WeakReference Next)> FailOneSwitchAsync(
-    CancellationToken applicationToken, bool useDispatcher, CancellationToken ct)
+    CancellationToken applicationToken, CancellationToken ct)
   {
-    var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, useDispatcher, applicationToken);
+    var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, applicationToken);
     WeakReference nextGeneration = null;
     coordinator.NextGenerationCreated = next => nextGeneration = TokenSourceOf(next);
     var next = Hanging();
@@ -104,15 +102,13 @@ public class ShutDownCoordinatorReleaseTest
   /// Verifies that the token source of the next generation of a switch that failed after it started it is, once that
   /// generation is shut down, not kept by the application token, which lives on.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_FailedAfterStart_TheNextCoordinatorIsNotKeptByTheApplicationToken(bool useDispatcher)
+  [Fact]
+  public async Task Switch_FailedAfterStart_TheNextCoordinatorIsNotKeptByTheApplicationToken()
   {
     var ct = TestContext.Current.CancellationToken;
     using var application = new CancellationTokenSource();
 
-    var (current, next) = await FailOneSwitchAsync(application.Token, useDispatcher, ct);
+    var (current, next) = await FailOneSwitchAsync(application.Token, ct);
     try
     {
       next.Should().NotBeNull();
@@ -130,14 +126,12 @@ public class ShutDownCoordinatorReleaseTest
   /// Verifies that the public members of a replaced coordinator that read its token still answer once it is shut
   /// down, and that disposing it afterwards does not throw.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_ReplacedCoordinator_ItsTokenMembersStillAnswer(bool useDispatcher)
+  [Fact]
+  public async Task Switch_ReplacedCoordinator_ItsTokenMembersStillAnswer()
   {
     var ct = TestContext.Current.CancellationToken;
     using var application = new CancellationTokenSource();
-    var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, useDispatcher, application.Token);
+    var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, application.Token);
     coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
@@ -166,7 +160,7 @@ public class ShutDownCoordinatorReleaseTest
   {
     var ct = TestContext.Current.CancellationToken;
     using var application = new CancellationTokenSource();
-    using var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, useDispatcher: false,
+    using var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance,
       application.Token);
     coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);

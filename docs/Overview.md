@@ -33,7 +33,7 @@ the state of each engine. In more detail:
 flowchart TB
     Host(["Host application"])
 
-    Coordinator["<b>EngineCoordinator</b><br/>application state machine<br/>optional dispatcher, monitor loop<br/>lineage for generation switches"]
+    Coordinator["<b>EngineCoordinator</b><br/>application state machine<br/>lineage for generation switches"]
 
     MechanicNode["<b>MechanicEngine</b><br/>builds three lifecycle tasks<br/>per registered engine"]
 
@@ -67,8 +67,8 @@ flowchart TB
     EngineB -. "uses" .-> EngineA
 ```
 
-A typical start-up and lookup. With the dispatcher on, only the coordinator's start runs on it; the waits run on the
-caller's side, so a slow engine does not hold up other calls.
+A typical start-up and lookup. The coordinator's calls run on the caller's side, so a slow engine does not hold up
+other calls.
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +81,7 @@ sequenceDiagram
 
     Host->>C: RegisterEngine(name, factory)
     Host->>C: GetEngineAsync(name)
-    C->>C: StartAsync (on the dispatcher, if any)
+    C->>C: StartAsync
     C->>M: StartAsync
     M->>T: build tasks from the descriptors, trigger start
     T->>E: creation task: EngineFactory
@@ -130,7 +130,6 @@ classDiagram
         ShutdownAsync()
     }
     class MechanicEngine
-    class MechanicDispatcher
     class EngineDescriptor {
         Name
         Version
@@ -166,7 +165,6 @@ classDiagram
     EngineTask <|-- EngineContextTask
     EngineTask <|-- EngineKickStartTask
     EngineCoordinator "1" *-- "1" MechanicEngine : owns
-    EngineCoordinator "1" o-- "0..1" MechanicDispatcher : optional
     EngineCoordinator "1" o-- "many" EngineDescriptor : registered
     MechanicEngine "1" o-- "many" IEngine : creates and starts
     EngineCreationTask ..> EngineDescriptor : EngineFactory
@@ -224,8 +222,7 @@ Key properties:
   throws an `ArgumentException`. A call that arrives during a switch that has the engine, before it hands over, waits
   until the switch has started the next generation and goes there too: for an engine the switch rebuilds from scratch,
   and also for one it hands over to its restart factory, whose previous engine the hand-over shuts down. On a
-  coordinator that is shut down otherwise it throws: an `OperationCanceledException` with the dispatcher (the
-  default), whose queue no longer takes work, and an `InvalidOperationException` without it. When the new context
+  coordinator that is shut down otherwise it throws an `InvalidOperationException`. When the new context
   fails, the engine is given up and ends Faulted ("not started again"), not Ready on the previous context, also when a
   start for an earlier invalidation was still under way
 
@@ -436,13 +433,10 @@ after about 25 seconds and six attempts. An engine factory or restart factory th
 the same way, with an `InvalidOperationException` that names the engine. A host that needs a failed load to fault for
 good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation switch that
 waits until the next generation is ready keeps the previous generation (and the engine handed over) until the retries
-have ended, and with the dispatcher on, the coordinator calls queued behind the switch (a shutdown, another switch,
-`EnsureReadyAsync`) wait as well. A lookup, a task wait or a context operation for an engine (`GetEngineAsync`,
-`EnsureEngineTaskReadyAsync`, a refresh or invalidation) does not queue behind the switch: it waits for the next
-generation to start and is answered there, so an engine of the next generation can make one from its own tasks. If
-the switch then fails during its wait until ready, a task wait made during it ends `Cancelled`
-(`EngineTaskNotReadyException`): the failed switch stopped the engine it waited for. One that reaches the next
-generation only after the failure shut it down is answered by the replaced coordinator.
+have ended. Other coordinator calls do not queue behind the switch. A lookup or a task wait (`GetEngineAsync`,
+`EnsureEngineTaskReadyAsync`) for an engine the switch rebuilds from scratch, and a context operation or task reset
+also for one it hands over, waits for the next generation to start and is answered there. One that reaches the next
+generation only after a failed switch shut it down is answered by the coordinator it was asked of.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
@@ -546,15 +540,10 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   cancelled, so no kick-start or recovery goes on in it.
 - All generations of a coordinator share a lineage that knows the current one (`Successor`). A lookup on a replaced
   coordinator, also one that was already waiting, is answered by the current coordinator; an engine that the switch
-  left out gives null. With the dispatcher on, so is a lookup during the switch, once its next generation has started;
-  if the switch fails before that, the replaced coordinator answers. If it fails after (during its wait until
-  ready), an engine such a lookup already got is one the failed switch stops; one that reached the next generation,
-  or was still waiting there, when the failure shut it down is answered by the replaced coordinator.
+  left out gives null.
 - A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One
   generation of a lineage runs at a time: of two switches on one coordinator, only the first to hand over replaces it.
-  With the dispatcher on, the second waits for the first and then goes to the next generation (or, when the first
-  failed before it handed over, switches this coordinator); without it, they run side by side, and the one that comes
-  second cleans up its next coordinator and switches the current one.
+  They run side by side, and the one that comes second cleans up its next coordinator and switches the current one.
 - With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
   usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
   state.
@@ -628,7 +617,5 @@ The framework is structurally complete and documented in code. Its behavior is p
 
 Known open issues:
 
-- the dispatcher (`useDispatcher: true`, the default) runs every coordinator call one at a time, so one slow lookup
-  blocks the others;
 - nothing supervises an engine after its kick-start: a reload that fails leaves the engine `Faulted` until something
   starts it again.

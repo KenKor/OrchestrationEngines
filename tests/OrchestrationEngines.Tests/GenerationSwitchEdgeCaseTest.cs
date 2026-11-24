@@ -15,7 +15,7 @@ namespace OrchestrationEngines.Tests;
 
 /// <summary>
 /// Contains tests for generation switches (RestartWithDefinitionsAsync) that the other switch tests do not cover: an
-/// engine without a restart factory, a switch with the dispatcher on, and a restart factory that misbehaves.
+/// engine without a restart factory, a lookup that waits across a switch, and a restart factory that misbehaves.
 /// </summary>
 public class GenerationSwitchEdgeCaseTest
 {
@@ -38,14 +38,12 @@ public class GenerationSwitchEdgeCaseTest
   /// creates a fresh engine from the registered factory, the previous engine is stopped, and the replaced coordinator
   /// answers from the next generation.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_WithoutRestartFactory_CreatesAFreshEngineFromTheRegisteredFactory(bool useDispatcher)
+  [Fact]
+  public async Task Switch_WithoutRestartFactory_CreatesAFreshEngineFromTheRegisteredFactory()
   {
     var ct = TestContext.Current.CancellationToken;
     var created = new ConcurrentQueue<LoadEngine>();
-    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ =>
     {
       var engine = Quick();
@@ -74,17 +72,17 @@ public class GenerationSwitchEdgeCaseTest
   }
 
   /// <summary>
-  /// Verifies, with the dispatcher on, that a bounded lookup that waits on a generation that is then replaced (the
+  /// Verifies that a bounded lookup that waits on a generation that is then replaced (the
   /// switch cancels that generation's mechanic, which ends the wait) is answered by the next generation instead of
   /// failing with the cancellation.
   /// </summary>
   [Fact]
-  public async Task Switch_WithDispatcher_AnswersAWaitingLookupFromTheNextGeneration()
+  public async Task Switch_AnswersAWaitingLookupFromTheNextGeneration()
   {
     var ct = TestContext.Current.CancellationToken;
     var neverLoads = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var firstGeneration = true;
-    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher: true);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ =>
     {
       // The first generation's engine never finishes loading; the next one is quick.
@@ -129,13 +127,11 @@ public class GenerationSwitchEdgeCaseTest
   /// before it creates the next coordinator, so no next coordinator is created at all. The exception is the copy's own
   /// (the descriptor constructor's), not another <see cref="ArgumentException"/> on the switch path (#92).
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_CandidateCannotBeCopied_ThrowsAndKeepsTheCurrentGeneration(bool useDispatcher)
+  [Fact]
+  public async Task Switch_CandidateCannotBeCopied_ThrowsAndKeepsTheCurrentGeneration()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     var nextGenerations = 0;
     coordinator.NextGenerationCreated = _ => Interlocked.Increment(ref nextGenerations);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
@@ -170,7 +166,7 @@ public class GenerationSwitchEdgeCaseTest
   {
     var ct = TestContext.Current.CancellationToken;
     var logger = new FakeLogger();
-    var coordinator = new EngineCoordinator("Switch", logger, useDispatcher: false);
+    var coordinator = new EngineCoordinator("Switch", logger);
     var restarts = 0;
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()))
       .SetRestartFactory((input, _) =>
@@ -207,7 +203,7 @@ public class GenerationSwitchEdgeCaseTest
   public async Task Switch_RestartFactoryReturnsNullOnce_RetryIsOfferedThePreviousEngineAgain()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     var offered = new ConcurrentQueue<IEngine>();
     var registered = 0;
     coordinator.RegisterEngine("A", _ =>
@@ -244,13 +240,11 @@ public class GenerationSwitchEdgeCaseTest
   /// Verifies that shutting down the coordinator a host started with, after a generation switch replaced it, also shuts
   /// down the current generation: lookups on that coordinator are answered by it, so its shutdown must reach it too.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task ShutdownAsync_ReplacedCoordinator_AlsoShutsDownTheCurrentGeneration(bool useDispatcher)
+  [Fact]
+  public async Task ShutdownAsync_ReplacedCoordinator_AlsoShutsDownTheCurrentGeneration()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator("Shutdown", NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator("Shutdown", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var first = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
@@ -270,13 +264,11 @@ public class GenerationSwitchEdgeCaseTest
   /// generation, as lookups and context operations do: the current generation is replaced and stopped, exactly one
   /// generation runs, and shutting down the first coordinator stops it.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_OnAReplacedCoordinator_ReplacesTheCurrentGeneration(bool useDispatcher)
+  [Fact]
+  public async Task Switch_OnAReplacedCoordinator_ReplacesTheCurrentGeneration()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var second = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), true, ct)
@@ -306,14 +298,11 @@ public class GenerationSwitchEdgeCaseTest
 
   /// <summary>
   /// Verifies that a second switch asked of a coordinator while its first switch waits for the next generation to be
-  /// ready leaves one generation running: without the dispatcher the second switch hands over first, so the first one
-  /// may no longer hand over and goes to the current generation instead; with it, the second switch waits for the first
-  /// and then goes to the generation that replaced the coordinator.
+  /// ready leaves one generation running: the second switch hands over first, so the first one may no longer hand
+  /// over and goes to the current generation instead.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task Switch_TwoOnOneCoordinator_LeaveOneGenerationRunning(bool useDispatcher)
+  [Fact]
+  public async Task Switch_TwoOnOneCoordinator_LeaveOneGenerationRunning()
   {
     var ct = TestContext.Current.CancellationToken;
     var created = new ConcurrentQueue<LoadEngine>();
@@ -324,15 +313,14 @@ public class GenerationSwitchEdgeCaseTest
       created.Enqueue(engine);
       return Task.FromResult<IEngine>(engine);
     }, requiredForRunning: true);
-    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     coordinator.RegisterEngineDescriptor(Definition(Task.CompletedTask));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
     var waiting = coordinator.RestartWithDefinitionsAsync([Definition(gate.Task)], true, ct);
     await Wait.UntilAsync(() => created.Count == 2, MustComplete, "the first switch created its engine");
     var other = coordinator.RestartWithDefinitionsAsync([Definition(Task.CompletedTask)], true, ct);
-    if (!useDispatcher)
-      await other.WaitAsync(MustComplete, ct);
+    await other.WaitAsync(MustComplete, ct);
     gate.SetResult();
     var results = await Task.WhenAll(waiting, other).WaitAsync(MustComplete, ct);
 
@@ -353,16 +341,13 @@ public class GenerationSwitchEdgeCaseTest
 
   /// <summary>
   /// Verifies that shutting a coordinator down a second time, also while the first shutdown is still running, is
-  /// harmless and leaves it Stopped. With the dispatcher on, the first shutdown stops the dispatcher: the later calls
-  /// must still complete instead of waiting for a dispatcher that no longer runs.
+  /// harmless and leaves it Stopped.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task ShutdownAsync_Twice_LeavesTheCoordinatorStopped(bool useDispatcher)
+  [Fact]
+  public async Task ShutdownAsync_Twice_LeavesTheCoordinatorStopped()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator("Shutdown", NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator("Shutdown", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 

@@ -25,8 +25,8 @@ public class StateMachineTransitionsTest
     public StateMachineInfo Info => StateMachine.GetInfo();
   }
 
-  private sealed class InspectableCoordinator() : EngineCoordinator(nameof(StateMachineTransitionsTest), NullLogger.Instance,
-    useDispatcher: false)
+  private sealed class InspectableCoordinator()
+    : EngineCoordinator(nameof(StateMachineTransitionsTest), NullLogger.Instance)
   {
     public StateMachineInfo Info => AppMachine.GetInfo();
   }

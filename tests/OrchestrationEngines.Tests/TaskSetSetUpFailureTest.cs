@@ -220,7 +220,7 @@ public class TaskSetSetUpFailureTest
         throw new InvalidOperationException("The first set-up fails.");
       Valid(e);
     };
-    var coordinator = new EngineCoordinator(nameof(TaskSetSetUpFailureTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(TaskSetSetUpFailureTest), NullLogger.Instance);
     coordinator.RegisterEngine("Engine", _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
       .SetRestartPolicy(new RestartPolicy

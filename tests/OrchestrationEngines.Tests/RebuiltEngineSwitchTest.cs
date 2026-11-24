@@ -41,18 +41,15 @@ public class RebuiltEngineSwitchTest
   /// Verifies that a switch stops an engine without a restart factory, and releases its data, before its replacement
   /// is created, while an engine with a restart factory is still running when its factory takes it over.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task EngineCoordinator_RestartWithDefinitionsAsync_WithoutRestartFactory_StopsThePreviousEngineFirst(
-    bool useDispatcher)
+  [Fact]
+  public async Task EngineCoordinator_RestartWithDefinitionsAsync_WithoutRestartFactory_StopsThePreviousEngineFirst()
   {
     var ct = TestContext.Current.CancellationToken;
     var instancesOfA = new List<DataEngine>();
     Snapshot previousAAtCreation = null;
     Snapshot previousBAtRestart = null;
 
-    var coordinator = new EngineCoordinator(nameof(RebuiltEngineSwitchTest), NullLogger.Instance, useDispatcher);
+    var coordinator = new EngineCoordinator(nameof(RebuiltEngineSwitchTest), NullLogger.Instance);
     coordinator.RegisterEngine("A", _ =>
       {
         lock (instancesOfA)
@@ -103,7 +100,7 @@ public class RebuiltEngineSwitchTest
     var ct = TestContext.Current.CancellationToken;
     var loads = 0;
     var first = new FailingEngine(() => Interlocked.Increment(ref loads));
-    var coordinator = new EngineCoordinator(nameof(RebuiltEngineSwitchTest), NullLogger.Instance, useDispatcher: false);
+    var coordinator = new EngineCoordinator(nameof(RebuiltEngineSwitchTest), NullLogger.Instance);
     var created = 0;
     EngineState? firstAtReplacement = null;
     coordinator.RegisterEngine("A", _ =>
