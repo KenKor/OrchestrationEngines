@@ -40,7 +40,7 @@ jobs:
         env:
           SDK: ${{ steps.setup.outputs.dotnet-version }}
         run: |
-          python - "$SDK" <<'PY'
+          python3 - "$SDK" <<'PY'
           import json, sys
           with open("global.json") as f:
               config = json.load(f)
