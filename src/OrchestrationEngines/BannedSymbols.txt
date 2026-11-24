@@ -1,5 +1,5 @@
-M:System.Threading.CancellationToken.Register(System.Action);Use UnsafeRegister (Helpers/Polyfills.cs on netstandard2.0): Register captures the caller's execution context.
-M:System.Threading.CancellationToken.Register(System.Action,System.Boolean);Use UnsafeRegister (Helpers/Polyfills.cs on netstandard2.0): Register captures the caller's execution context.
-M:System.Threading.CancellationToken.Register(System.Action{System.Object},System.Object);Use UnsafeRegister (Helpers/Polyfills.cs on netstandard2.0): Register captures the caller's execution context.
-M:System.Threading.CancellationToken.Register(System.Action{System.Object},System.Object,System.Boolean);Use UnsafeRegister (Helpers/Polyfills.cs on netstandard2.0): Register captures the caller's execution context.
-M:System.Threading.CancellationToken.Register(System.Action{System.Object,System.Threading.CancellationToken},System.Object);Use UnsafeRegister (Helpers/Polyfills.cs on netstandard2.0): Register captures the caller's execution context.
+M:System.Threading.CancellationToken.Register(System.Action);Use UnsafeRegister: Register captures the caller's execution context.
+M:System.Threading.CancellationToken.Register(System.Action,System.Boolean);Use UnsafeRegister: Register captures the caller's execution context.
+M:System.Threading.CancellationToken.Register(System.Action{System.Object},System.Object);Use UnsafeRegister: Register captures the caller's execution context.
+M:System.Threading.CancellationToken.Register(System.Action{System.Object},System.Object,System.Boolean);Use UnsafeRegister: Register captures the caller's execution context.
+M:System.Threading.CancellationToken.Register(System.Action{System.Object,System.Threading.CancellationToken},System.Object);Use UnsafeRegister: Register captures the caller's execution context.

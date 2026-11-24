@@ -7,8 +7,7 @@
 #
 # Steps: the line-length check's self-test, the line-length check of the lines the change adds (against the merge
 # base with --base, uncommitted edits and new files included), restore, build (Release), and the tests on net10.0.
-# The first step that fails stops the script with its exit code. The net48 tests need Windows: the Windows workflow
-# runs them after this script, as it runs the pack.
+# The first step that fails stops the script with its exit code. The workflow runs the pack after this script.
 #
 # Both workflows call this script. A new home-made check goes here, not into the workflow files.
 set -euo pipefail

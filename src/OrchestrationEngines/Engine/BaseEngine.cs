@@ -196,8 +196,8 @@ public abstract partial class BaseEngine : IEngine
       static type => new EngineNameSource(type))).Name;
 
   /// <summary>
-  /// The <see cref="EngineNameSource"/> of this engine's type, kept here so later reads take no lock (on .NET Framework
-  /// every lookup in <see cref="s_engineNameSources"/> does).
+  /// The <see cref="EngineNameSource"/> of this engine's type, kept here so later reads need no lookup in
+  /// <see cref="s_engineNameSources"/>.
   /// </summary>
   private EngineNameSource _engineNameSource;
 
@@ -1372,7 +1372,7 @@ public abstract partial class BaseEngine : IEngine
     LogWaitingForTask(task);
     // Cancelling the token ends the wait only; the tasks run on. Each task is waited for in turn (a task's latch never
     // faults), so a cancelled wait leaves a continuation only on the task it was waiting for: the one failure observer
-    // that task keeps however many waits are cancelled, and on netstandard2.0 also the wait's own (see
+    // that task keeps however many waits are cancelled (see
     // TaskExtensions.WaitObservedAsync). A WhenAll would stay attached until every task completed, once per cancelled
     // wait. A token that cannot be cancelled awaits each task directly.
     foreach (var completion in completionTasks)

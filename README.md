@@ -2,10 +2,9 @@
 
 A dependency-aware engine orchestration library for .NET. It starts, monitors and restarts a set of interdependent runtime engines in a controlled order.
 
-The library is published as a NuGet package. It targets `netstandard2.0` (so it runs on .NET Framework 4.8) and `net10.0`.
-Cancellation handlers in an engine's work must not block: on .NET Framework they can run inline on the thread that
-stops it, under a library lock, so start one with `await Task.Yield()` and do blocking work in `await Task.Run(...)`
-(see [Overview](docs/Overview.md), on stopping).
+The library is published as a NuGet package. It targets `net10.0`.
+A callback registered on a task's cancellation token must not block: it runs on the thread that stops the task, under
+a library lock (see [Overview](docs/Overview.md), on stopping).
 
 ## Repository layout
 
@@ -27,14 +26,12 @@ It checks the length of the lines the change adds, restores, builds (Release) an
 stops at the first step that fails. `--base <branch>` compares with another branch than `origin/main`, and arguments
 after `--` go to `dotnet test`.
 
-Without the gate, or to run the `net48` tests too:
+Without the gate:
 
 ```bash
 dotnet build
 dotnet test
 ```
-
-The tests run on both `net10.0` and `net48` (the `netstandard2.0` build on .NET Framework), so `dotnet test` needs Windows.
 
 Lines are at most 120 columns. `python scripts/check-line-length.py` checks the lines a change adds, against
 `origin/main`, also uncommitted edits and new files. Three kinds of long line are let through: a line with a URL,

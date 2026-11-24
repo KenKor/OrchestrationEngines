@@ -1,6 +1,5 @@
 # Pilot workflow for the iKendy self-hosted runner, the same arrangement as in kleene.
 # Kept separate from build.yml so the GitHub-hosted pipeline stays authoritative until this one has proven itself.
-# It builds and tests net10.0 only: the net48 tests need Windows and stay in build.yml.
 
 name: CI (self-hosted)
 
