@@ -1138,7 +1138,9 @@ public partial class EngineCoordinator : IDisposable
   /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
   /// reports it as unknown (<see cref="ArgumentException"/>). With the dispatcher on, a call during a switch does not
   /// wait for the switch to end: the next generation answers once it has started, so an engine of that generation can
-  /// make the call from its own tasks.
+  /// make the call from its own tasks. If the switch fails after that (during its wait until ready), such a call
+  /// ends with an <see cref="EngineTaskNotReadyException"/> in state Cancelled: the failed switch stopped the engine
+  /// it waited for (#154).
   /// </remarks>
   /// <param name="engineName">The name of the engine (compared ignoring case).</param>
   /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
@@ -1623,13 +1625,16 @@ public partial class EngineCoordinator : IDisposable
       var switchWait = TimeProvider.GetTimestamp();
       var answering = await NextGenerationAsync(name, handedOverToo: false, milliSecondsTimeOut, token)
         .ConfigureAwait(false);
-      if (answering == null && pending != null)
+      if (answering == null)
       {
         // The time-out passed before the switch started its next generation: null. If it started it just after,
-        // that generation answers, with an engine that is Ready already; if it did not, this generation does.
+        // that generation answers, with an engine that is Ready already; if it did not, this generation does. So
+        // does it once the switch has failed and cleaned up its next generation (the record is gone), or the
+        // generation it handed over to.
         if (!pending.Next.Task.IsCompleted)
           return null;
-        answering = pending.Next.Task.Result;
+        answering = Successor
+          ?? (ReferenceEquals(Volatile.Read(ref _switchBeforeHandover), pending) ? pending.Next.Task.Result : null);
       }
       if (answering != null)
         return await answering.GetEngineWhenReadyAsync(name, false, TimeLeft(milliSecondsTimeOut, switchWait), token)

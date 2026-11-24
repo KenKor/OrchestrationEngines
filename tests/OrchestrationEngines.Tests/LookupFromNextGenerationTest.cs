@@ -6,6 +6,7 @@ using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
+using OrchestrationEngines.Tasks;
 using Xunit;
 
 namespace OrchestrationEngines.Tests;
@@ -220,6 +221,40 @@ public class LookupFromNextGenerationTest
       foundAfter.Should().BeSameAs(previousA).And.Match<IEngine>(e => e.State == EngineState.Ready);
     else
       foundAfter.Should().BeNull("the switch stopped the rebuilt A before its next generation started");
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
+  /// Verifies what a task wait from outside an engine gets when it is made during a switch that then fails while it
+  /// waits until ready: the next generation answers it, and the failed switch stops that generation's engine, so the
+  /// wait ends Cancelled (#154, the owner's option (a)). A wait made after the failure succeeds on this generation.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_TaskWaitDuringSwitchThatFails_EndsCancelled()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var nextALoading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance,
+      useDispatcher: true);
+    var a = Descriptor("A").SetRestartFactory((_, _) => Task.FromResult<IEngine>(
+      new SwitchTestEngines.NetworkEngine(async token =>
+      {
+        nextALoading.TrySetResult();
+        await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+      })));
+    coordinator.RegisterEngineDescriptor(a);
+    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    using var switchCancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+    var @switch = coordinator.RestartWithDefinitionsAsync([a], waitUntilReady: true, switchCancel.Token);
+    await nextALoading.Task.WaitAsync(MustComplete, ct);
+    var waitDuringSwitch = coordinator.EnsureEngineTaskReadyAsync("A", "Load", ct);
+    switchCancel.Cancel();
+    await @switch.Invoking(s => s.WaitAsync(MustComplete, ct)).Should().ThrowAsync<OperationCanceledException>();
+
+    (await waitDuringSwitch.Invoking(w => w.WaitAsync(MustComplete, ct)).Should()
+        .ThrowAsync<EngineTaskNotReadyException>()).Which.State.Should().Be(EngineTaskState.Cancelled);
+    await coordinator.EnsureEngineTaskReadyAsync("A", "Load", ct).WaitAsync(MustComplete, ct);
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
   }
 }
