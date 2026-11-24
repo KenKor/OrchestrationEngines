@@ -6,9 +6,8 @@
 #     scripts/gate.sh -- --coverage --results-directory "$PWD/TestResults"   # extra arguments for dotnet test
 #
 # Steps: the line-length check's self-test, the line-length check of the lines the change adds (against the merge
-# base with --base, uncommitted edits and new files included), restore, build (Release), and the tests on net10.0.
-# The first step that fails stops the script with its exit code. The net48 tests need Windows: the Windows workflow
-# runs them after this script, as it runs the pack.
+# base with --base, uncommitted edits and new files included), restore, build (Release), and the tests.
+# The first step that fails stops the script with its exit code. The workflow runs the pack after this script.
 #
 # Both workflows call this script. A new home-made check goes here, not into the workflow files.
 set -euo pipefail
@@ -61,7 +60,7 @@ dotnet restore
 step "build (Release)"
 dotnet build --no-restore --configuration Release
 
-step "test (net10.0, Release)"
-dotnet test --no-build --configuration Release --framework net10.0 ${test_args[@]+"${test_args[@]}"}
+step "test (Release)"
+dotnet test --no-build --configuration Release ${test_args[@]+"${test_args[@]}"}
 
 step "passed"

@@ -588,7 +588,7 @@ public partial class EngineCoordinator : IDisposable
       // Fix (RebuiltEngineSwitchTest): without a restart factory the next engine is built from scratch and cannot take
       // over anything, yet the previous engine was handed over and kept running until the next generation had started,
       // so two copies of its data could be loaded at the same time. It is now not handed over, and stopped before the
-      // next generation starts (as in the .NET Framework version).
+      // next generation starts.
       if (previousEngine == null || candidate.RestartFromPrevious == null)
       {
         runtimeDescriptor = candidate.Clone();

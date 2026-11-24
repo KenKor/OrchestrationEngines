@@ -1,8 +1,7 @@
 # Releasing
 
-The library is published as one NuGet package, `OrchestrationEngines`. It holds both builds: `lib/netstandard2.0`
-(used by .NET Framework 4.8 and older .NET versions) and `lib/net10.0`. NuGet picks the right one for each consumer, so
-there is no package per framework. The symbols go to a separate `.snupkg` next to it.
+The library is published as one NuGet package, `OrchestrationEngines`. It holds one build, `lib/net10.0`.
+The symbols go to a separate `.snupkg` next to it.
 
 ## Current state
 
@@ -11,7 +10,7 @@ every pull request and every `v*` tag:
 
 | Step | State |
 | --- | --- |
-| Build and test (net10.0 and net48, on Windows) | Works |
+| Build and test (net10.0) | Works |
 | Coverage report as a build artifact | Works |
 | Pack on a pull request or a push to `main` | Warns until packaging is set up |
 | Pack on a `v*` tag | Fails until packaging is set up |

@@ -46,7 +46,7 @@ internal static class TaskExtensions
     this TimeProvider clock, TimeSpan timeOut, CancellationToken token, Func<CancellationToken, Task<T>> run)
     where T : class
   {
-    using var timeout = clock.CreateCancellationTokenSource(timeOut);
+    using var timeout = new CancellationTokenSource(timeOut, clock);
     using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
     try
     {
@@ -57,19 +57,13 @@ internal static class TaskExtensions
       token.ThrowIfCancellationRequested();
       return null;
     }
-    finally
-    {
-      // On netstandard2.0 the source's timer on a clock other than TimeProvider.System is removed only when the source
-      // is cancelled, not when it is disposed: work that ends early would leave it running until the time-out.
-      timeout.Cancel();
-    }
   }
 
   /// <summary>
   /// Waits for <paramref name="task"/> until <paramref name="token"/> is cancelled. When the wait is cancelled first, a
   /// failure of the task that comes later is still read, so it is not reported as an unobserved task exception (#86
   /// item 6); the task keeps at most one such observer, however many waits on it are cancelled. Named apart from
-  /// <c>Task.WaitAsync</c> (the framework's, or the polyfill in Polyfills.cs), which it calls.
+  /// <c>Task.WaitAsync</c>, which it calls.
   /// </summary>
   /// <param name="task">The task to wait for.</param>
   /// <param name="token">Ends the wait, not the task.</param>
