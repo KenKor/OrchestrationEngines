@@ -4,7 +4,6 @@ using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
-using OrchestrationEngines.Restarter;
 using Xunit;
 
 namespace OrchestrationEngines.Tests;
@@ -106,32 +105,6 @@ public class CoordinatorComputedStateTest
   }
 
   /// <summary>
-  /// Verifies that a required engine that failed, while its kick-start waits to retry it, counts as starting: the
-  /// coordinator is Initializing, as a lookup waits for the retry.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_State_RequiredEngineFailedAndRetryPending_IsInitializing()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var engine = new FailingEngine();
-    var coordinator = new EngineCoordinator(nameof(CoordinatorComputedStateTest), NullLogger.Instance);
-    coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRestartPolicy(new RestartPolicy
-      {
-        MaxRestartsInWindow = 5,
-        Window = TimeSpan.FromMinutes(10),
-        InitialBackoff = TimeSpan.FromMinutes(5),
-        MaxBackoff = TimeSpan.FromMinutes(5),
-      });
-    _ = coordinator.StartAsync();
-    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the first load must fail");
-
-    coordinator.State.Should().Be(EngineCoordinatorState.Initializing);
-    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
   /// Verifies that a required engine whose creation failed for good, so that it never exists, counts as Faulted: the
   /// coordinator is WaitingForEngines.
   /// </summary>
@@ -167,14 +140,5 @@ public class CoordinatorComputedStateTest
 
     start.Should().NotBeNull();
     coordinator.State.Should().Be(EngineCoordinatorState.WaitingForEngines);
-  }
-
-  /// <summary>
-  /// An engine whose load fails.
-  /// </summary>
-  private sealed class FailingEngine() : BaseEngine(NullLogger.Instance)
-  {
-    protected override void SetUpTasks() =>
-      CreateTask("Load", _ => throw new InvalidOperationException("The database was not reachable."));
   }
 }

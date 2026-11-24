@@ -243,6 +243,32 @@ public class KickStartRestartTest
   }
 
   /// <summary>
+  /// Verifies that a required engine that failed, while its kick-start waits to retry it, counts as starting: the
+  /// coordinator is Initializing, as a lookup waits for the retry. The backoff is long, so the retry is still pending.
+  /// </summary>
+  [Fact]
+  public async Task EngineCoordinator_State_DuringKickStartRetryWait_IsInitializing()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var engine = new NetworkEngine((_, _) => throw new InvalidOperationException("The database was not reachable."));
+    var coordinator = new EngineCoordinator(nameof(KickStartRestartTest), NullLogger.Instance);
+    coordinator.RegisterEngine(Name, _ => Task.FromResult<IEngine>(engine), requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
+      .SetRestartPolicy(new RestartPolicy
+      {
+        MaxRestartsInWindow = 5,
+        Window = TimeSpan.FromMinutes(10),
+        InitialBackoff = TimeSpan.FromMinutes(5),
+        MaxBackoff = TimeSpan.FromMinutes(5),
+      });
+    _ = coordinator.StartAsync();
+    await Wait.UntilAsync(() => engine.State == EngineState.Faulted, MustComplete, "the first load must fail");
+
+    coordinator.State.Should().Be(EngineCoordinatorState.Initializing);
+    await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
+  }
+
+  /// <summary>
   /// Verifies that a lookup for an engine whose kick-start has given up returns null at once.
   /// </summary>
   [Fact]
