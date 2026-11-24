@@ -146,33 +146,6 @@ public class LookupFromNextGenerationTest
   }
 
   /// <summary>
-  /// Verifies what an engine of the next generation gets when, while it loads, it looks up through the coordinator the
-  /// host holds an engine the switch adds (C), in a switch that does not wait until ready: the next generation's C.
-  /// </summary>
-  [Fact]
-  public async Task EngineCoordinator_SwitchNotWaitingUntilReady_LookupOfAddedEngineFromNextGenerationEngine_GetsIt()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    IEngine foundByB = null;
-    var coordinator = new EngineCoordinator(nameof(LookupFromNextGenerationTest), NullLogger.Instance);
-    coordinator.RegisterEngineDescriptor(Descriptor("A"));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var definitions = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions())
-    {
-      Descriptor("B", async token =>
-        Volatile.Write(ref foundByB, await coordinator.GetEngineAsync("C", token).ConfigureAwait(false))),
-      Descriptor("C"),
-    };
-
-    var next = await coordinator.RestartWithDefinitionsAsync(definitions, waitUntilReady: false, ct)
-      .WaitAsync(MustComplete, ct);
-    await next.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-
-    Volatile.Read(ref foundByB).Should().NotBeNull().And.BeSameAs(next.GetEngineIfReady("C"));
-    await next.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
   /// Verifies what a lookup from outside an engine gets when it lands during a switch that then fails while it waits
   /// until ready, for an engine the switch rebuilds from scratch: the next generation's engine, which the failed
   /// switch stops. A lookup after the failure gets null: the switch stopped A before the next generation started.

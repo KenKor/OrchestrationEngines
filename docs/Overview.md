@@ -446,10 +446,11 @@ the host's coordinator; it should not do that during a switch. What it gets:
   hand-over then stops. With `waitUntilReady: false` the lookup races the hand-over, and gets either that engine or the
   next generation's;
 - for an engine the switch adds: null with `waitUntilReady: true`, as the previous generation does not know it (an
-  exception with `throwErrorIfNotFound`); with `waitUntilReady: false` the added engine;
+  exception with `throwErrorIfNotFound`). With `waitUntilReady: false` the lookup races the hand-over, and gets either
+  that or the added engine;
 - on a coordinator that was never started: with `waitUntilReady: true` the lookup starts the previous generation after
   all (its engine factories run a second time) and usually returns its engine, which the hand-over stops; this is a
-  race. With `waitUntilReady: false` it gets the next generation's engine.
+  race. With `waitUntilReady: false` it races the hand-over in the same way, and can get the next generation's engine.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by

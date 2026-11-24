@@ -1347,13 +1347,14 @@ public partial class EngineCoordinator : IDisposable
   /// </description></item>
   /// <item><description>
   /// An engine the switch adds: in a switch that waits until ready, the previous generation does not know it (null,
-  /// or an exception from a lookup that throws for an unknown name). In one that does not wait, the lookup gets the
-  /// added engine.
+  /// or an exception from a lookup that throws for an unknown name). In one that does not wait, the lookup races the
+  /// hand-over, and gets either that or the added engine.
   /// </description></item>
   /// <item><description>
   /// A switch on a coordinator that was never started: in a switch that waits until ready, the lookup starts the
   /// previous generation after all (its engine factories run), and usually gets its engine, which the hand-over
-  /// stops. One that does not wait gives the next generation's engine.
+  /// stops. In one that does not wait, the lookup races the hand-over in the same way, and can get the next
+  /// generation's engine.
   /// </description></item>
   /// </list>
   /// </para>
