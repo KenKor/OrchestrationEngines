@@ -172,7 +172,7 @@ classDiagram
     IEngineContext <|.. EngineContextWithDependencies
     EngineContextWithDependencies o-- IEngine : underlying engines
     EngineTask ..> IRestartPolicyEnforcer : recovery
-    RestartPolicy ..> IRestartPolicyEnforcer : GetEnforcer()
+    RestartPolicy ..> IRestartPolicyEnforcer : one enforcer per task
     EngineDescriptor ..> RestartPolicy : RestartPolicy, SetRestartPolicy()
     note for IReplacesPreviousEngine "Optional: implemented by an engine that takes over\nwhat its predecessor loaded in a generation switch"
 ```
