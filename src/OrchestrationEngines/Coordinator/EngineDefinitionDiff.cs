@@ -15,26 +15,12 @@ namespace OrchestrationEngines.Coordinator;
 internal sealed class EngineDefinitionDiff
 {
   private EngineDefinitionDiff(
-    IReadOnlyCollection<string> addedEngineNames,
-    IReadOnlyCollection<string> removedEngineNames,
     IReadOnlyCollection<string> versionChangedEngineNames,
     IReadOnlyCollection<string> restartRequiredEngineNames)
   {
-    AddedEngineNames = addedEngineNames;
-    RemovedEngineNames = removedEngineNames;
     VersionChangedEngineNames = versionChangedEngineNames;
     RestartRequiredEngineNames = restartRequiredEngineNames;
   }
-
-  /// <summary>
-  /// Engine names present in candidate definitions, but not in current definitions.
-  /// </summary>
-  public IReadOnlyCollection<string> AddedEngineNames { get; }
-
-  /// <summary>
-  /// Engine names present in current definitions, but not in candidate definitions.
-  /// </summary>
-  public IReadOnlyCollection<string> RemovedEngineNames { get; }
 
   /// <summary>
   /// Engine names that exist in both sets but have a different integer version.
@@ -48,32 +34,12 @@ internal sealed class EngineDefinitionDiff
   public IReadOnlyCollection<string> RestartRequiredEngineNames { get; }
 
   /// <summary>
-  /// Returns true when at least one engine version changed.
-  /// </summary>
-  public bool HasVersionChanges => VersionChangedEngineNames.Count > 0;
-
-  /// <summary>
-  /// Returns true when any restart is required.
-  /// </summary>
-  public bool RequiresRestart => RestartRequiredEngineNames.Count > 0;
-
-  /// <summary>
   /// Builds a diff between definitions already mapped by name (see <see cref="ToDictionaryByName"/>).
   /// </summary>
   internal static EngineDefinitionDiff Create(
     IReadOnlyDictionary<string, EngineDescriptor> currentByName,
     IReadOnlyDictionary<string, EngineDescriptor> candidateByName)
   {
-    var added = candidateByName.Keys
-      .Except(currentByName.Keys, StringComparer.OrdinalIgnoreCase)
-      .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-      .ToArray();
-
-    var removed = currentByName.Keys
-      .Except(candidateByName.Keys, StringComparer.OrdinalIgnoreCase)
-      .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-      .ToArray();
-
     var versionChanged = candidateByName
       .Where(pair => currentByName.TryGetValue(pair.Key, out var current) && current.Version != pair.Value.Version)
       .Select(pair => pair.Key)
@@ -82,11 +48,11 @@ internal sealed class EngineDefinitionDiff
 
     var restartRequired = ComputeRestartClosure(versionChanged, candidateByName);
 
-    return new EngineDefinitionDiff(added, removed, versionChanged, restartRequired);
+    return new EngineDefinitionDiff(versionChanged, restartRequired);
   }
 
   /// <summary>
-  /// Maps descriptors by name, ignoring case and null descriptors.
+  /// Maps descriptors by name, ignoring case.
   /// </summary>
   /// <exception cref="ArgumentException">Two descriptors have the same name.</exception>
   internal static Dictionary<string, EngineDescriptor> ToDictionaryByName(
@@ -94,14 +60,8 @@ internal sealed class EngineDefinitionDiff
     string paramName)
   {
     var byName = new Dictionary<string, EngineDescriptor>(StringComparer.OrdinalIgnoreCase);
-    if (descriptors == null)
-      return byName;
-
     foreach (var descriptor in descriptors)
     {
-      if (descriptor == null)
-        continue;
-
       if (byName.ContainsKey(descriptor.Name))
         throw new ArgumentException(
           $"Duplicate engine descriptor name '{descriptor.Name}'.",

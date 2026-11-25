@@ -342,7 +342,7 @@ public partial class EngineCoordinator : IDisposable
   /// </summary>
   /// <remarks>
   /// <para>
-  /// This method uses <c>EngineDefinitionDiff</c> to annotate restart intent while
+  /// This method compares the descriptors by name and version to annotate restart intent while
   /// creating a fully fresh coordinator generation.
   /// </para>
   /// <para>
@@ -387,7 +387,7 @@ public partial class EngineCoordinator : IDisposable
   /// <para>
   /// A switch asked of a coordinator that another switch replaced, or one that another switch on this coordinator
   /// beat to the hand-over (switches are not queued), switches the current generation of the
-  /// lineage instead (see <c>Successor</c>). The coordinator returned can then be more than one generation past
+  /// lineage instead (see <see cref="Current"/>). The coordinator returned can then be more than one generation past
   /// this one.
   /// </para>
   /// </remarks>
@@ -972,7 +972,7 @@ public partial class EngineCoordinator : IDisposable
   /// <remarks>
   /// <para>
   /// On a coordinator replaced by a generation switch this also shuts down the current generation, as lookups on it
-  /// are answered by that generation (see <c>Successor</c>).
+  /// are answered by that generation (see <see cref="Current"/>).
   /// </para>
   /// <para>
   /// An engine that fails to stop counts as stopped, so the engines it depends on still stop. The coordinator still
@@ -1057,7 +1057,7 @@ public partial class EngineCoordinator : IDisposable
   /// old vs. new context, what (if anything) needs to be invalidated/reset. Use this when the caller
   /// has already determined that a full engine restart is not required. It does not start a coordinator that has not
   /// started. On a coordinator that a generation switch has replaced (once it has handed over, see
-  /// <c>Successor</c>), the context goes to the newer generation's engine, as with
+  /// <see cref="Current"/>), the context goes to the newer generation's engine, as with
   /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
   /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
   /// generation and goes there too.

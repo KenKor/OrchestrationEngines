@@ -542,7 +542,7 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   time.
 - The replaced coordinator is shut down completely: every engine stops, whatever its state, and its mechanic is
   cancelled, so no kick-start or recovery goes on in it.
-- All generations of a coordinator share a lineage that knows the current one. A lookup on a replaced
+- All generations of a coordinator share a lineage that knows the current one (`Current`). A lookup on a replaced
   coordinator, also one that was already waiting, is answered by the current coordinator; an engine that the switch
   left out gives null.
 - A switch asked of a replaced coordinator replaces the current one, and returns what that switch returns. One

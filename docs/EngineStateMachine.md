@@ -40,7 +40,7 @@ record that itself now.
 A read of `State` has no side effect, and a change of it is not logged: the tasks log their own transitions (trace).
 
 A generation switch (`RestartWithDefinitionsAsync`) shuts the replaced coordinator down, so a replaced coordinator ends
-in `Stopped`; lookups on it are answered by the current coordinator of its lineage. A shutdown reaches
+in `Stopped`; lookups on it are answered by the current coordinator of its lineage (`Current`). A shutdown reaches
 `Stopped` also when an engine fails to stop, and also on a coordinator that never started: that one never starts an
 engine afterwards.
 

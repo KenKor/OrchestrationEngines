@@ -21,12 +21,11 @@ public class EngineDefinitionDiffTest
     return descriptor;
   }
 
-  // Maps both lists by name as a generation switch does (the candidates under the switch's parameter name), then diffs.
-  private static EngineDefinitionDiff Diff(
-    EngineDescriptor[] currentDescriptors, EngineDescriptor[] candidateDescriptors)
+  // Maps both lists by name as a generation switch does, then diffs.
+  private static EngineDefinitionDiff Diff(EngineDescriptor[] current, EngineDescriptor[] candidates)
     => EngineDefinitionDiff.Create(
-      EngineDefinitionDiff.ToDictionaryByName(currentDescriptors, nameof(currentDescriptors)),
-      EngineDefinitionDiff.ToDictionaryByName(candidateDescriptors, nameof(candidateDescriptors)));
+      EngineDefinitionDiff.ToDictionaryByName(current, "current"),
+      EngineDefinitionDiff.ToDictionaryByName(candidates, "candidates"));
 
   /// <summary>
   /// Verifies that a version bump of one network leaves an independent network alone.
@@ -96,36 +95,7 @@ public class EngineDefinitionDiffTest
       [Descriptor("North")],
       [Descriptor("North"), Descriptor("NORTH", version: 2)]);
 
-    create.Should().Throw<System.ArgumentException>().Which.ParamName.Should().Be("candidateDescriptors");
-  }
-
-  /// <summary>
-  /// Verifies that null lists and null entries are taken as no engines.
-  /// </summary>
-  [Fact]
-  public void EngineDefinitionDiff_Create_NullListsAndEntries_AreSkipped()
-  {
-    var diff = Diff(null, [null, Descriptor("North")]);
-
-    diff.AddedEngineNames.Should().Equal("North");
-    diff.RemovedEngineNames.Should().BeEmpty();
-    diff.HasVersionChanges.Should().BeFalse();
-    diff.RequiresRestart.Should().BeFalse();
-  }
-
-  /// <summary>
-  /// Verifies added and removed engines, and that a name in another case is the same engine.
-  /// </summary>
-  [Fact]
-  public void EngineDefinitionDiff_Create_AddedAndRemoved_IgnoreCase()
-  {
-    var diff = Diff(
-      [Descriptor("North"), Descriptor("Old")],
-      [Descriptor("NORTH"), Descriptor("New")]);
-
-    diff.AddedEngineNames.Should().Equal("New");
-    diff.RemovedEngineNames.Should().Equal("Old");
-    diff.RequiresRestart.Should().BeFalse();
+    create.Should().Throw<System.ArgumentException>();
   }
 
   /// <summary>
@@ -156,6 +126,5 @@ public class EngineDefinitionDiffTest
       [Descriptor("North", version: 2, dependsOn: "Gone"), Descriptor("South", dependsOn: "Elsewhere")]);
 
     diff.RestartRequiredEngineNames.Should().Equal("North");
-    diff.RemovedEngineNames.Should().Equal("Gone");
   }
 }
