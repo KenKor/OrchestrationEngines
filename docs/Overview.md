@@ -577,8 +577,9 @@ coordinator = await coordinator.RestartWithDefinitionsAsync(
 - **Every engine is a new instance.** Each engine of the next generation gets a new instance and a context that its
   descriptor's context factory computes again. An engine with a restart factory is handed its previous engine and can
   take over its loaded state: one that depends on the rebuilt engine, also indirectly, is told a dependency changed
-  (`DependencyChanged`), and its restart factory should load again what it built on it; the others are told nothing changed. An engine without a
-  restart factory loads from scratch. To rebuild only the one engine, give the others a restart factory.
+  (`DependencyChanged`), and its restart factory should load again what it built on it; the others are told nothing
+  changed. An engine without a restart factory loads from scratch. To rebuild only the one engine, give the others a
+  restart factory.
 - **Contexts come from the factories again.** A context given with `RefreshEngineContextAsync` is not carried over: each
   engine gets what its descriptor's context factory computes, and a factory whose closure captured state at its
   registration computes that old state again. Give the other engines' descriptors factories that compute their current
@@ -586,8 +587,9 @@ coordinator = await coordinator.RestartWithDefinitionsAsync(
 - **Use the coordinator the switch returns.** The replaced one is shut down; a lookup on it is answered by the current
   generation.
 - **During the switch** a lookup of an engine rebuilt from scratch gets the previous engine until its stop begins, and
-  then waits for the next generation and is answered there; a lookup of one handed over to its restart factory gets the previous engine until the switch hands over. A
-  context refresh or task reset of an engine the previous generation had waits for the next generation.
+  then waits for the next generation and is answered there; a lookup of one handed over to its restart factory gets the
+  previous engine until the switch hands over. A context refresh or task reset of an engine the previous generation had
+  waits for the next generation.
 - **When the switch fails** before it hands over, the current coordinator stays current, and the engines that were not
   rebuilt from scratch keep running. A rebuilt engine without a restart factory was stopped already: a lookup of it
   gives null until a later switch succeeds.
