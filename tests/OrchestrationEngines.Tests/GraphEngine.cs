@@ -105,7 +105,7 @@ internal sealed class GraphEngine : BaseEngine
       engine.AfterReset?.Invoke(Name);
     }
 
-    protected override bool DependenciesReady()
+    private protected override bool DependenciesReady()
     {
       engine.OnDependencyCheck?.Invoke(Name);
       return base.DependenciesReady();

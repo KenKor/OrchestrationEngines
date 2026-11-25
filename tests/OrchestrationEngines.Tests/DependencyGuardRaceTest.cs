@@ -24,9 +24,9 @@ public class DependencyGuardRaceTest
   {
     private int _failedLooks;
 
-    protected override bool DependenciesReady() => false;
+    private protected override bool DependenciesReady() => false;
 
-    protected override bool AnyDependencyFailed() => Interlocked.Increment(ref _failedLooks) > 1;
+    private protected override bool AnyDependencyFailed() => Interlocked.Increment(ref _failedLooks) > 1;
   }
 
   /// <summary>
@@ -54,9 +54,9 @@ public class DependencyGuardRaceTest
   {
     private int _readyLooks;
 
-    protected override bool DependenciesReady() => Interlocked.Increment(ref _readyLooks) == 2;
+    private protected override bool DependenciesReady() => Interlocked.Increment(ref _readyLooks) == 2;
 
-    protected override bool AnyDependencyFailed() => false;
+    private protected override bool AnyDependencyFailed() => false;
   }
 
   /// <summary>
@@ -108,7 +108,7 @@ public class DependencyGuardRaceTest
 
     public int Looks => Volatile.Read(ref _looks);
 
-    protected override bool DependenciesReady() =>
+    private protected override bool DependenciesReady() =>
       Interlocked.Increment(ref _looks) > 1 ? throw new InvalidOperationException("Unexpected.") : false;
   }
 }

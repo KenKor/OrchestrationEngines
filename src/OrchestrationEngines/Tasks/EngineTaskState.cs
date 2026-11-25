@@ -182,7 +182,7 @@ public static class EngineTaskStateExtension
   /// </summary>
   /// <param name="e">The e.</param>
   /// <returns></returns>
-  public static bool IsRunning(this EngineTaskState e) => (e & EngineTaskState.Running) == EngineTaskState.Running;
+  internal static bool IsRunning(this EngineTaskState e) => (e & EngineTaskState.Running) == EngineTaskState.Running;
 
   /// <summary>
   /// When a task is at its end state.
