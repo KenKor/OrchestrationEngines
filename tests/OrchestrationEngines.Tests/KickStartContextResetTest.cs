@@ -116,17 +116,23 @@ public class KickStartContextResetTest
   }
 
   /// <summary>
-  /// Registers <paramref name="session"/> on a new coordinator, without restarts, with a context taken from
-  /// <paramref name="current"/> that fails for workspace-C once the test completes the returned gate, and starts it.
+  /// Registers <paramref name="session"/> on a new coordinator with a context taken from <paramref name="current"/>,
+  /// held for workspace-C until the test completes the returned gate, and starts it.
   /// </summary>
+  /// <param name="session">The engine.</param>
+  /// <param name="current">The workspace the next context is computed for.</param>
+  /// <param name="contextForCFails">The context for workspace-C then fails, and the engine is registered without
+  /// restarts; otherwise that context is computed.</param>
   private static async Task<(ContextResettingCoordinator coordinator, TaskCompletionSource contextForCEntered,
-    TaskCompletionSource contextGate)> StartWithContextFailingForCAsync(HeldStartEngine session, Func<string> current)
+    TaskCompletionSource contextGate)> StartWithContextHeldForCAsync(HeldStartEngine session, Func<string> current,
+    bool contextForCFails = true)
   {
     var ct = TestContext.Current.CancellationToken;
     var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var coordinator = new ContextResettingCoordinator(nameof(KickStartContextResetTest));
-    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+    var descriptor = coordinator
+      .RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
       .SetContextFactory(async _ =>
       {
         var value = current();
@@ -134,11 +140,13 @@ public class KickStartContextResetTest
         {
           contextForCEntered.TrySetResult();
           await contextGate.Task;
-          throw new InvalidOperationException("workspace-C cannot be opened");
+          if (contextForCFails)
+            throw new InvalidOperationException("workspace-C cannot be opened");
         }
         return new ValueContext(value);
-      })
-      .WithoutRestarts();
+      });
+    if (contextForCFails)
+      descriptor.WithoutRestarts();
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     return (coordinator, contextForCEntered, contextGate);
   }
@@ -184,22 +192,9 @@ public class KickStartContextResetTest
   {
     var ct = TestContext.Current.CancellationToken;
     var current = "workspace-A";
-    var contextGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var contextForCEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     var session = new HeldStartEngine();
-    var coordinator = new ContextResettingCoordinator(nameof(KickStartContextResetTest));
-    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
-      .SetContextFactory(async _ =>
-      {
-        var value = current;
-        if (value == "workspace-C")
-        {
-          contextForCEntered.TrySetResult();
-          await contextGate.Task;
-        }
-        return new ValueContext(value);
-      });
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+    var (coordinator, contextForCEntered, contextGate) =
+      await StartWithContextHeldForCAsync(session, () => current, contextForCFails: false);
     var hold = session.HoldNextStart(beforeSetUp: true);
 
     current = "workspace-B";
@@ -239,7 +234,7 @@ public class KickStartContextResetTest
     var ct = TestContext.Current.CancellationToken;
     var current = "workspace-A";
     var session = new HeldStartEngine();
-    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextHeldForCAsync(session, () => current);
     var hold = session.HoldNextStart();
 
     current = "workspace-B";
@@ -272,7 +267,7 @@ public class KickStartContextResetTest
     var ct = TestContext.Current.CancellationToken;
     var current = "workspace-A";
     var session = new HeldStartEngine();
-    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextHeldForCAsync(session, () => current);
     var kickStart = coordinator.KickStartOf("Session");
     var hold = session.HoldNextStart(beforeSetUp: true);
 
@@ -311,7 +306,7 @@ public class KickStartContextResetTest
     var ct = TestContext.Current.CancellationToken;
     var current = "workspace-A";
     var session = new HeldStartEngine();
-    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextHeldForCAsync(session, () => current);
     var hold = session.HoldNextStart(beforeSetUp: true);
 
     current = "workspace-B";
@@ -348,7 +343,7 @@ public class KickStartContextResetTest
     var ct = TestContext.Current.CancellationToken;
     var current = "workspace-A";
     var session = new HeldStartEngine(withMonitor: true);
-    var (coordinator, contextForCEntered, contextGate) = await StartWithContextFailingForCAsync(session, () => current);
+    var (coordinator, contextForCEntered, contextGate) = await StartWithContextHeldForCAsync(session, () => current);
     var kickStart = coordinator.KickStartOf("Session");
     var hold = session.HoldNextStart(beforeSetUp: true);
 
