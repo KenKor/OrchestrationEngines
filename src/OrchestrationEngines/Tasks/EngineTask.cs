@@ -1403,17 +1403,12 @@ public partial class EngineTask
       if (cancelRun)
         RequestCancellation();
 
-      await FireMachineAsync(trigger, reason).ConfigureAwait(false);
+      // With the reason as the trigger's argument when one is given.
+      await (string.IsNullOrEmpty(reason) ? StateMachine.FireAsync(trigger) : StateMachine.FireAsync(trigger, reason))
+        .ConfigureAwait(false);
       return true;
     }
   }
-
-  /// <summary>
-  /// Fires <paramref name="trigger"/> into the state machine, with <paramref name="reason"/> as its argument when one
-  /// is given. The caller holds the trigger lock.
-  /// </summary>
-  private Task FireMachineAsync(EngineTaskTrigger trigger, string reason) =>
-    string.IsNullOrEmpty(reason) ? StateMachine.FireAsync(trigger) : StateMachine.FireAsync(trigger, reason);
 
   /// <summary>
   /// Cancels the run's work, but only while the run is still the current one.
