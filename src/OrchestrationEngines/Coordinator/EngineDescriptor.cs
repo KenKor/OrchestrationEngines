@@ -285,7 +285,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// If <see cref="RestartFromPrevious"/> is not configured, this method falls back
   /// to <see cref="EngineFactory"/>.
   /// </remarks>
-  public Task<IEngine> CreateEngineFromPreviousAsync(IEngine previousEngine, EngineDescriptor previousDescriptor,
+  internal Task<IEngine> CreateEngineFromPreviousAsync(IEngine previousEngine, EngineDescriptor previousDescriptor,
       bool definitionChanged, bool dependencyChanged, CancellationToken token)
   {
     // The registered factory, not EngineFactory: on a descriptor from an earlier generation switch, that is the earlier
@@ -302,12 +302,6 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
         dependencyChanged);
     return RestartFromPrevious(input, token);
   }
-
-  /// <summary>
-  /// Backward-compatible overload that treats this as a plain handover.
-  /// </summary>
-  public Task<IEngine> CreateEngineFromPreviousAsync(IEngine previousEngine, EngineDescriptor previousDescriptor, CancellationToken token)
-      => CreateEngineFromPreviousAsync(previousEngine, previousDescriptor, false, false, token);
 
   /// <summary>
   /// Sets a custom context factory for this engine.

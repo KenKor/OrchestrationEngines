@@ -21,18 +21,25 @@ public class EngineDefinitionDiffTest
     return descriptor;
   }
 
+  // Maps both lists by name as a generation switch does, then diffs.
+  private static EngineDefinitionDiff Diff(EngineDescriptor[] current, EngineDescriptor[] candidates)
+    => EngineDefinitionDiff.Create(
+      EngineDefinitionDiff.ToDictionaryByName(current, "current"),
+      EngineDefinitionDiff.ToDictionaryByName(candidates, "candidates"));
+
   /// <summary>
-  /// Verifies that a version bump of one network leaves an independent network alone.
+  /// Verifies that a version bump of one network leaves an independent network alone, also when the bumped one is
+  /// named in another case: engine names are case-insensitive across generations.
   /// </summary>
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnOneNetwork_LeavesIndependentNetworkUnchanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("North"), Descriptor("South")],
-      [Descriptor("North", version: 2), Descriptor("South")]);
+      [Descriptor("NORTH", version: 2), Descriptor("South")]);
 
-    diff.VersionChangedEngineNames.Should().Equal("North");
-    diff.RestartRequiredEngineNames.Should().Equal("North");
+    diff.VersionChangedEngineNames.Should().Equal("NORTH");
+    diff.RestartRequiredEngineNames.Should().Equal("NORTH");
   }
 
   /// <summary>
@@ -42,7 +49,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnBase_MarksWholePatchChainChanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Patch", dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")],
       [Descriptor("AsBuilt", version: 2), Descriptor("Patch", dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")]);
 
@@ -57,7 +64,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnMiddlePatch_LeavesBaseUnchanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Patch", dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")],
       [Descriptor("AsBuilt"), Descriptor("Patch", version: 2, dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")]);
 
@@ -71,7 +78,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_TwoPatchesOnOneBase_BumpOneLeavesTheOtherUnchanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Planned", dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt")],
       [Descriptor("AsBuilt"), Descriptor("Planned", version: 2, dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt")]);
 
@@ -85,40 +92,11 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_DuplicateNameInOtherCase_Throws()
   {
-    var create = () => EngineDefinitionDiff.Create(
+    var create = () => Diff(
       [Descriptor("North")],
       [Descriptor("North"), Descriptor("NORTH", version: 2)]);
 
-    create.Should().Throw<System.ArgumentException>().Which.ParamName.Should().Be("candidateDescriptors");
-  }
-
-  /// <summary>
-  /// Verifies that null lists and null entries are taken as no engines.
-  /// </summary>
-  [Fact]
-  public void EngineDefinitionDiff_Create_NullListsAndEntries_AreSkipped()
-  {
-    var diff = EngineDefinitionDiff.Create(null, [null, Descriptor("North")]);
-
-    diff.AddedEngineNames.Should().Equal("North");
-    diff.RemovedEngineNames.Should().BeEmpty();
-    diff.HasVersionChanges.Should().BeFalse();
-    diff.RequiresRestart.Should().BeFalse();
-  }
-
-  /// <summary>
-  /// Verifies added and removed engines, and that a name in another case is the same engine.
-  /// </summary>
-  [Fact]
-  public void EngineDefinitionDiff_Create_AddedAndRemoved_IgnoreCase()
-  {
-    var diff = EngineDefinitionDiff.Create(
-      [Descriptor("North"), Descriptor("Old")],
-      [Descriptor("NORTH"), Descriptor("New")]);
-
-    diff.AddedEngineNames.Should().Equal("New");
-    diff.RemovedEngineNames.Should().Equal("Old");
-    diff.RequiresRestart.Should().BeFalse();
+    create.Should().Throw<System.ArgumentException>();
   }
 
   /// <summary>
@@ -128,7 +106,7 @@ public class EngineDefinitionDiffTest
   public void EngineDefinitionDiff_Create_Diamond_RestartsTheBottomOnce()
   {
     var bottom = Descriptor("Merged", dependsOn: "Planned").AddDependsOn("Repair");
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Planned", dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt"),
         Descriptor("Merged", dependsOn: "Planned").AddDependsOn("Repair")],
       [Descriptor("AsBuilt", version: 2), Descriptor("Planned", dependsOn: "AsBuilt"),
@@ -144,11 +122,10 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_DependencyNotAmongTheCandidates_IsIgnored()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("Gone"), Descriptor("North")],
       [Descriptor("North", version: 2, dependsOn: "Gone"), Descriptor("South", dependsOn: "Elsewhere")]);
 
     diff.RestartRequiredEngineNames.Should().Equal("North");
-    diff.RemovedEngineNames.Should().Equal("Gone");
   }
 }

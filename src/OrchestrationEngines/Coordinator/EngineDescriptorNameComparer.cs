@@ -25,7 +25,7 @@ namespace OrchestrationEngines.Coordinator;
 /// with the same name are considered equal even if their configurations differ.
 /// </para>
 /// </remarks>
-public sealed class EngineDescriptorNameComparer : IEqualityComparer<EngineDescriptor>
+internal sealed class EngineDescriptorNameComparer : IEqualityComparer<EngineDescriptor>
 {
   /// <summary>
   /// Singleton instance of the comparer.
