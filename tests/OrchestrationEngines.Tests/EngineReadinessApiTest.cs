@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
-using OrchestrationEngines.Mechanic;
 using OrchestrationEngines.Tasks;
 using Xunit;
 using static OrchestrationEngines.Tests.TestRestartPolicies;
@@ -261,15 +260,6 @@ public class EngineReadinessApiTest
   }
 
   /// <summary>
-  /// A coordinator that shows its mechanic, whose creation task for an engine records why it was not created.
-  /// </summary>
-  private sealed class MechanicShowingCoordinator()
-    : EngineCoordinator(nameof(EngineReadinessApiTest), NullLogger.Instance)
-  {
-    public MechanicEngine TheMechanic => Mechanic;
-  }
-
-  /// <summary>
   /// Verifies that an engine whose factory returns null fails to be created with an exception that names it, as a
   /// factory that throws does: nothing is registered, the lookups and the shutdown throw no NullReferenceException, and
   /// the coordinator ends Stopped (#151).
@@ -278,11 +268,11 @@ public class EngineReadinessApiTest
   public async Task EngineCoordinator_FactoryReturnsNull_FailsTheCreationClearly()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new MechanicShowingCoordinator();
+    var coordinator = new ContextResettingCoordinator(nameof(EngineReadinessApiTest));
     coordinator.RegisterEngine("Null", _ => Task.FromResult<IEngine>(null)).WithoutRestarts();
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var ensure = () => coordinator.TheMechanic.EnsureTaskReadyAsync("Null", ct).WaitAsync(MustComplete, ct);
+    var ensure = () => coordinator.EnsureMechanicTaskReadyAsync("Null", ct).WaitAsync(MustComplete, ct);
 
     var thrown = (await ensure.Should().ThrowAsync<EngineTaskNotReadyException>()).Which;
     thrown.TaskName.Should().Be("Null", "the creation task, named after the engine, failed");
