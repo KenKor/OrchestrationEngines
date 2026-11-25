@@ -616,6 +616,17 @@ This framework is intended for:
 
 It is **not** intended as a lightweight task scheduler or job runner.
 
+### Non-goals
+
+The library stays small on purpose. A new public member, guarantee or hardening needs a caller that exists today.
+
+- **No threading model of its own.** Calls run on the caller's side.
+- **No serialising of the host's calls.** A host that can issue overlapping generation switches serialises them itself.
+- **No new generation-switch features.** The switch is kept as it is.
+- **No guarantees for call patterns nobody uses.** A known race on such a path is documented, not fixed.
+- **No .NET Framework or `netstandard` target.**
+- **No cross-process orchestration and no persistence.**
+
 ---
 
 ## Status
