@@ -624,15 +624,6 @@ public class ResetTasksTest
   }
 
   /// <summary>
-  /// The engine Graph of <paramref name="coordinator"/>, once the coordinator is ready.
-  /// </summary>
-  private static async Task<BaseEngine> ReadyGraphAsync(EngineCoordinator coordinator, CancellationToken ct)
-  {
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    return (BaseEngine)coordinator.GetEngineIfCreated("Graph");
-  }
-
-  /// <summary>
   /// Verifies that the coordinator, not started yet, starts and resets the engine's tasks with their dependents.
   /// </summary>
   [Fact]
@@ -947,7 +938,8 @@ public class ResetTasksTest
     try
     {
       stoppedInTime.Should().BeTrue();
-      await (await ReadyGraphAsync(next, ct)).EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
+      await next.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+      await engines.Last().EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
       engines.Should().HaveCount(2);
       engines.Last().Runs("C").Should().Be(2);
     }
@@ -972,7 +964,7 @@ public class ResetTasksTest
     try
     {
       await coordinator.ResetTasksForEngineAsync("Graph", ["C"], resetDependentTasks: false, ct).WaitAsync(MustComplete, ct);
-      await (await ReadyGraphAsync(next, ct)).EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
+      await engines.Last().EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
 
       engines.Should().HaveCount(2);
       engines.Last().Runs("C").Should().Be(2);
