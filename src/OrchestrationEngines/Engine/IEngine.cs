@@ -97,7 +97,7 @@ public interface IEngine
   /// </para>
   ///
   /// <para>
-  /// This method is typically invoked by <see cref="EngineKickStartTask"/>.
+  /// This method is typically invoked by <c>EngineKickStartTask</c>.
   /// </para>
   /// <para>
   /// Stopping is final: on an engine that has been stopped (or cancelled), it does nothing.

@@ -76,7 +76,7 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// </para>
   ///
   /// <para>
-  /// The factory is invoked by <see cref="EngineCreationTask"/> under
+  /// The factory is invoked by <c>EngineCreationTask</c> under
   /// orchestration of the mechanic.
   /// </para>
   /// </remarks>

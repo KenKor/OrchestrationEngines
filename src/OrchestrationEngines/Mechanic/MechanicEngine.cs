@@ -28,9 +28,9 @@ namespace OrchestrationEngines.Mechanic;
 /// <para>
 /// Engine lifecycle is decomposed into three explicit phases per engine:
 /// <list type="number">
-/// <item>Creation (<see cref="EngineCreationTask"/>)</item>
-/// <item>Context resolution (<see cref="EngineContextTask"/>)</item>
-/// <item>Kick-start / readiness (<see cref="EngineKickStartTask"/>)</item>
+/// <item>Creation (<c>EngineCreationTask</c>)</item>
+/// <item>Context resolution (<c>EngineContextTask</c>)</item>
+/// <item>Kick-start / readiness (<c>EngineKickStartTask</c>)</item>
 /// </list>
 /// Each phase is modeled as an EngineTask and wired into a dependency DAG.
 /// </para>
@@ -62,7 +62,7 @@ public partial class MechanicEngine : BaseEngine
   /// Registry of instantiated engines, keyed by engine name.
   /// </summary>
   /// <remarks>
-  /// Engines are created during execution of <see cref="EngineCreationTask"/>s
+  /// Engines are created during execution of <c>EngineCreationTask</c>s
   /// and remain registered for the lifetime of the mechanic.
   /// </remarks>
   public IReadOnlyDictionary<string, IEngine> Engines => _engines;
@@ -107,7 +107,7 @@ public partial class MechanicEngine : BaseEngine
   /// <param name="engine">The engine.</param>
   /// <remarks>
   /// <para>
-  /// This method is intended to be called only by <see cref="EngineCreationTask"/>.
+  /// This method is intended to be called only by <c>EngineCreationTask</c>.
   /// Re-registration replaces any existing instance with the same name.
   /// </para>
   /// <para>
