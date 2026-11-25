@@ -238,6 +238,36 @@ public class DataPatchTest
   }
 
   /// <summary>
+  /// Verifies that waiting on an engine whose kick-start was reset (its context computed again) does not wait forever
+  /// when the kick-start does not run again, because computing the new context failed. The reset prepared a restart of
+  /// the engine that nobody carries out; the engine is given up on instead, as a data patch that waits for the network
+  /// it is built on would otherwise hang.
+  /// </summary>
+  [Fact]
+  public async Task BaseEngine_EnsureReadyAsync_KickStartResetButContextFails_DoesNotWaitForever()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var coordinator = new ContextResettingCoordinator(nameof(DataPatchTest));
+    var asBuilt = new NetworkEngine();
+    var contexts = 0;
+    coordinator.RegisterEngine("AsBuilt", _ => Task.FromResult<IEngine>(asBuilt), requiredForRunning: true)
+      .SetContextFactory(_ => Interlocked.Increment(ref contexts) == 1
+        ? Task.FromResult<IEngineContext>(new NoContext())
+        : throw new InvalidOperationException("The context could not be computed."))
+      .WithoutRestarts();
+    await coordinator.GetEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
+
+    await coordinator.ResetContextAsync("AsBuilt").WaitAsync(MustComplete, ct);
+    var lookup = await coordinator.GetEngineAsync("AsBuilt", ct).WaitAsync(MustComplete, ct);
+    var ready = await Record.ExceptionAsync(() => asBuilt.EnsureReadyAsync().WaitAsync(MustComplete, ct));
+
+    contexts.Should().Be(2);
+    lookup.Should().BeNull();
+    ready.Should().BeNull("the wait ends instead of timing out");
+    asBuilt.State.Should().Be(EngineState.Faulted);
+  }
+
+  /// <summary>
   /// Verifies that a failed start is final for the coordinator: a later start, and a later wait for readiness, throw the
   /// same exception instead of starting again or starting the task graph that failed.
   /// </summary>
