@@ -2,7 +2,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using OrchestrationEngines.Coordinator;
-using OrchestrationEngines.Engine;
 using OrchestrationEngines.Tasks;
 
 namespace OrchestrationEngines.Mechanic;
@@ -28,11 +27,10 @@ namespace OrchestrationEngines.Mechanic;
 /// </para>
 ///
 /// <para>
-/// The computed context is cached in <see cref="ContextComputed"/> for diagnostics
-/// and for potential reuse during recovery.
+/// The computed context goes to the mechanic, which assigns it to the engine with the engines it depends on.
 /// </para>
 /// </remarks>
-public class EngineContextTask : EngineTask
+internal class EngineContextTask : EngineTask
 {
   /// <summary>
   /// Postfix appended to the engine name to form the task name for context computation.
@@ -84,16 +82,8 @@ public class EngineContextTask : EngineTask
       CancellationToken token)
   {
     // Note that this will intentionally throw if not context has been computed, so it will be scheduled for recomputing till it succeeds or is abandoned.
-    ContextComputed = await engineDescriptor.ContextFactory(token).ConfigureAwait(false) ?? throw new InvalidEngineContextException(engineDescriptor.Name);
-    m.RegisterContext(engineDescriptor.Name, ContextComputed);
+    var context = await engineDescriptor.ContextFactory(token).ConfigureAwait(false)
+      ?? throw new InvalidEngineContextException(engineDescriptor.Name);
+    m.RegisterContext(engineDescriptor.Name, context);
   }
-
-  /// <summary>
-  /// The most recent context value computed for this engine.
-  /// </summary>
-  /// <remarks>
-  /// This is primarily for diagnostics.
-  /// A reset of this task will clear this value.
-  /// </remarks>
-  public IEngineContext ContextComputed { get; set; }
 }

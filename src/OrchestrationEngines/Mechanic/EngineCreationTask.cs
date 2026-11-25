@@ -32,7 +32,7 @@ namespace OrchestrationEngines.Mechanic;
 /// recovery and may warrant a separate policy.
 /// </para>
 /// </remarks>
-public class EngineCreationTask : EngineTask
+internal class EngineCreationTask : EngineTask
 {
     /// <summary>
     /// Descriptor defining how this engine is created and configured.

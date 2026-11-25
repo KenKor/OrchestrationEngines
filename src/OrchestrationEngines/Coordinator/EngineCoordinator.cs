@@ -248,7 +248,7 @@ public partial class EngineCoordinator : IDisposable
   /// This wires coordinator-level state tracking to mechanic engine events
   /// and assigns the collected <see cref="MechanicContext"/>.
   /// </remarks>
-  protected virtual MechanicEngine CreateMechanic()
+  private protected virtual MechanicEngine CreateMechanic()
   {
     var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token) { TimeProvider = TimeProvider };
 

@@ -30,7 +30,7 @@ namespace OrchestrationEngines.Mechanic;
 /// </list>
 /// </para>
 /// </remarks>
-public partial class EngineKickStartTask : EngineTask
+internal partial class EngineKickStartTask : EngineTask
 {
     /// <summary>
     /// Postfix appended to the engine name to form the task name for kick-starting.
