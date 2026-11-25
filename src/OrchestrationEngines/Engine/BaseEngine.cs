@@ -1109,9 +1109,9 @@ public abstract partial class BaseEngine : IEngine
   /// may apply to the other.
   /// </remarks>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks that depend on one of <paramref name="tasks"/>, directly
-  /// or not, form a cycle (possible only for tasks added after the set-up, which its cycle check did not see). The
-  /// task in the exception is the one of <paramref name="tasks"/> that the cycle depends on, which need not be in the
-  /// cycle itself.</exception>
+  /// or not, form a cycle (possible only for tasks added after the set-up, which
+  /// <see cref="EngineTask.CheckForCycles"/> did not see). The task in the exception is the one of
+  /// <paramref name="tasks"/> that the cycle depends on, which need not be in the cycle itself.</exception>
   /// <param name="tasks">The tasks to put in levels.</param>
   /// <param name="taskSet">The engine's tasks as the caller read them, holding <paramref name="tasks"/>; null to read
   /// them here.</param>
