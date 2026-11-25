@@ -28,17 +28,18 @@ public class EngineDefinitionDiffTest
       EngineDefinitionDiff.ToDictionaryByName(candidates, "candidates"));
 
   /// <summary>
-  /// Verifies that a version bump of one network leaves an independent network alone.
+  /// Verifies that a version bump of one network leaves an independent network alone, also when the bumped one is
+  /// named in another case: engine names are case-insensitive across generations.
   /// </summary>
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnOneNetwork_LeavesIndependentNetworkUnchanged()
   {
     var diff = Diff(
       [Descriptor("North"), Descriptor("South")],
-      [Descriptor("North", version: 2), Descriptor("South")]);
+      [Descriptor("NORTH", version: 2), Descriptor("South")]);
 
-    diff.VersionChangedEngineNames.Should().Equal("North");
-    diff.RestartRequiredEngineNames.Should().Equal("North");
+    diff.VersionChangedEngineNames.Should().Equal("NORTH");
+    diff.RestartRequiredEngineNames.Should().Equal("NORTH");
   }
 
   /// <summary>
