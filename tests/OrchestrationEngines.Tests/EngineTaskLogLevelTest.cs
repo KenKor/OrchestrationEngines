@@ -221,54 +221,6 @@ public class EngineTaskLogLevelTest
   }
 
   /// <summary>
-  /// Verifies that a Fail fired from outside the task's work (by the host or the coordinator) that moves a running task
-  /// to Failed is one error naming the reason: no exception of the work's logs it.
-  /// </summary>
-  [Theory]
-  [InlineData("disk full", "disk full")]
-  [InlineData("", "Unknown failure.")]
-  public async Task FailFromOutside_RunningTask_LogsOneErrorWithTheReason(string reason, string loggedReason)
-  {
-    var logger = new FakeLogger();
-    // The work does not end while the test runs: a Fail from outside does not cancel it.
-    var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    try
-    {
-      var task = NewTask("Root", _ => hang.Task, logger);
-      await task.FireAsync(EngineTaskTrigger.Start);
-      await Wait.UntilAsync(() => task.State == EngineTaskState.Running, MustComplete, "the task must start");
-
-      await task.FireAsync(EngineTaskTrigger.Fail, reason);
-      await task.InnerTask.WaitAsync(MustComplete, TestContext.Current.CancellationToken);
-
-      task.State.Should().Be(EngineTaskState.Failed);
-      task.FailReason.Should().Be(loggedReason);
-      logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error).Should().ContainSingle()
-        .Which.Message.Should().Be($"Root: Failed from outside its work. Reason: '{loggedReason}'.");
-    }
-    finally
-    {
-      hang.TrySetResult();
-    }
-  }
-
-  /// <summary>
-  /// Verifies that a Fail fired at a task that has completed, which does not move it to Failed, logs no error.
-  /// </summary>
-  [Fact]
-  public async Task FailFromOutside_CompletedTask_LogsNoError()
-  {
-    var logger = new FakeLogger();
-    var task = NewTask("Root", Succeeds, logger);
-    await RunToEndAsync(task);
-
-    await task.FireAsync(EngineTaskTrigger.Fail, "disk full");
-
-    task.State.Should().Be(EngineTaskState.CompletedWithSuccess);
-    logger.Collector.GetSnapshot().Should().NotContain(r => r.Level == LogLevel.Error);
-  }
-
-  /// <summary>
   /// Verifies that when timed-out work does not stop within the grace period, so the task ends in TimedOut instead of
   /// recovering, one warning says the work is abandoned and not retried, next to the one time-out error.
   /// </summary>

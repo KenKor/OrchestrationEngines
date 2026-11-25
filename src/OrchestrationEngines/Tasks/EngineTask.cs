@@ -1155,9 +1155,9 @@ public partial class EngineTask
     WasCancelled = cancelled;
     if (cancelled)
       LogEnteredCancelled(Logger, FailReason);
-    // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, the
-    // time-out, or, for a Fail from outside the work, FireAsync); entering the state is Debug, so a failure is not an
-    // error twice. The state is the destination already: Stateless sets it before it runs the entry actions.
+    // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, or
+    // the time-out); entering the state is Debug, so a failure is not an error twice. The state is the destination
+    // already: Stateless sets it before it runs the entry actions.
     else if (State == EngineTaskState.DependencyFailed)
       LogEnteredDependencyFailed(Logger, FailReason);
     else
@@ -1273,12 +1273,8 @@ public partial class EngineTask
   /// Fires a trigger into the state machine.
   /// Only returns when the firing has completed or earlier if this task is not RequiredForRunning.
   /// </summary>
-  /// <remarks>
-  /// The current implementation forwards <paramref name="reason"/> to Stateless for all triggers.
-  /// Only parameterized triggers actually consume this (Fail / FailRecovery). For other triggers, the parameter may be ignored.
-  /// </remarks>
   /// <returns>Task that executes the trigger.</returns>
-  internal async Task FireAsync(EngineTaskTrigger trigger, string reason = "")
+  internal async Task FireAsync(EngineTaskTrigger trigger)
   {
     if (trigger == EngineTaskTrigger.Reset)
     {
@@ -1287,15 +1283,7 @@ public partial class EngineTask
     }
 
     using (await _triggerLock.LockAsync().ConfigureAwait(false))
-    {
-      var wasFailed = State == EngineTaskState.Failed;
-      await FireMachineAsync(trigger, reason).ConfigureAwait(false);
-
-      // No exception of the work's logs this failure, so it is the one error; a Fail that does not move the task to
-      // Failed logs no error.
-      if (trigger == EngineTaskTrigger.Fail && !wasFailed && State == EngineTaskState.Failed)
-        LogFailedFromOutside(Logger, FailReason);
-    }
+      await StateMachine.FireAsync(trigger).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1742,9 +1730,6 @@ public partial class EngineTask
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Exception: '{Reason}'.")]
   private static partial void LogWorkFailed(ILogger logger, Exception exception, string reason);
-
-  [LoggerMessage(Level = LogLevel.Error, Message = "Failed from outside its work. Reason: '{Reason}'.")]
-  private static partial void LogFailedFromOutside(ILogger logger, string reason);
 
   [LoggerMessage(Level = LogLevel.Warning,
     Message = "The work did not stop within {Grace} after the time-out; it is abandoned and the task is not retried.")]
