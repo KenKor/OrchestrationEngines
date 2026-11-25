@@ -23,9 +23,9 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// Max nr of restarts in a row without a successful run before failing, however long each attempt takes; a success
   /// (or a reset) starts counting again. The window alone never gives up on an attempt that takes longer than
   /// Window / MaxRestartsInWindow to fail: older restarts leave the window before the limit is reached.
-  /// Set this to 0 (the default for a policy you create) to stop checking restarts in a row.
+  /// The presets set it; a policy you create has 0, which stops checking restarts in a row.
   /// </summary>
-  public int MaxConsecutiveRestarts { get; init; }
+  public int MaxConsecutiveRestarts { get; internal init; }
 
   /// <summary>
   /// Initial Backoff time
@@ -36,13 +36,6 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// Maximum Backoff time
   /// </summary>
   public TimeSpan MaxBackoff { get; init; } = TimeSpan.FromSeconds(10);
-
-  /// <summary>
-  /// The share of each wait that is random, from 0 (no jitter, the default) to 1: the wait before a restart is the
-  /// backoff × (1 − Jitter × a random fraction in [0, 1)). With jitter, engines that failed together do not all restart
-  /// at the same moment. The backoff itself still doubles without the jitter.
-  /// </summary>
-  public double Jitter { get; init; }
 
   /// <summary>
   /// Default restart policy. For typical engine, IO-bound / flaky:<br/>
@@ -109,7 +102,8 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// </summary>
   /// <param name="timeProvider">The clock the enforcer uses; <see cref="TimeProvider.System"/> when <c>null</c>.</param>
   /// <returns></returns>
-  public IRestartPolicyEnforcer GetEnforcer(TimeProvider timeProvider = null) => new RestartPolicyEnforcer(this, timeProvider);
+  internal IRestartPolicyEnforcer GetEnforcer(TimeProvider timeProvider = null) =>
+    new RestartPolicyEnforcer(this, timeProvider);
 
   /// <summary>
   /// Throws if the settings cannot be enforced.
@@ -117,8 +111,8 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// <remarks>
   /// Called by <see cref="RestartPolicyEnforcer"/>, and when the policy is set on a descriptor.
   /// </remarks>
-  /// <exception cref="ArgumentOutOfRangeException">A setting is negative, <see cref="MaxBackoff"/> is less than
-  /// <see cref="InitialBackoff"/>, or <see cref="Jitter"/> is not in 0..1.</exception>
+  /// <exception cref="ArgumentOutOfRangeException">A setting is negative, or <see cref="MaxBackoff"/> is less than
+  /// <see cref="InitialBackoff"/>.</exception>
   internal void Validate()
   {
     // 0 means disable this check.
@@ -127,8 +121,6 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
     if (MaxConsecutiveRestarts < 0) throw new ArgumentOutOfRangeException(nameof(MaxConsecutiveRestarts));
     if (InitialBackoff < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(InitialBackoff));
     if (MaxBackoff < InitialBackoff) throw new ArgumentOutOfRangeException(nameof(MaxBackoff));
-    // Written so that NaN is rejected too.
-    if (!(Jitter >= 0 && Jitter <= 1)) throw new ArgumentOutOfRangeException(nameof(Jitter));
   }
 
   /*
@@ -142,8 +134,7 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
     if (ReferenceEquals(this, other)) return true;
     return MaxRestartsInWindow == other.MaxRestartsInWindow && Window.Equals(other.Window) &&
            MaxConsecutiveRestarts == other.MaxConsecutiveRestarts &&
-           InitialBackoff.Equals(other.InitialBackoff) && MaxBackoff.Equals(other.MaxBackoff) &&
-           Jitter.Equals(other.Jitter);
+           InitialBackoff.Equals(other.InitialBackoff) && MaxBackoff.Equals(other.MaxBackoff);
   }
 
   /// <inheritdoc/>
@@ -155,6 +146,6 @@ public sealed class RestartPolicy : IEquatable<RestartPolicy>
   /// <inheritdoc/>
   public override int GetHashCode()
   {
-    return HashCode.Combine(MaxRestartsInWindow, Window, MaxConsecutiveRestarts, InitialBackoff, MaxBackoff, Jitter);
+    return HashCode.Combine(MaxRestartsInWindow, Window, MaxConsecutiveRestarts, InitialBackoff, MaxBackoff);
   }
 }

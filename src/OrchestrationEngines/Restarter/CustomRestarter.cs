@@ -19,7 +19,7 @@ namespace OrchestrationEngines.Restarter
   /// restart behavior must be composed dynamically or configured at runtime.
   /// </para>
   /// </remarks>
-  public class CustomRestarter : IRestartPolicyEnforcer
+  internal class CustomRestarter : IRestartPolicyEnforcer
   {
     private readonly Func<EngineTask, CancellationToken, Task> _recoveryHelper;
 

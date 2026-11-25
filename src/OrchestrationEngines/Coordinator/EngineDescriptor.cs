@@ -179,9 +179,8 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// A <see cref="RecoveryHelper"/> that is set wins over this policy.
   /// </para>
   /// </remarks>
-  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is negative, its
-  /// <see cref="RestartPolicy.MaxBackoff"/> is less than its <see cref="RestartPolicy.InitialBackoff"/>, or its
-  /// <see cref="RestartPolicy.Jitter"/> is not in 0..1.</exception>
+  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is negative, or its
+  /// <see cref="RestartPolicy.MaxBackoff"/> is less than its <see cref="RestartPolicy.InitialBackoff"/>.</exception>
   public RestartPolicy RestartPolicy
   {
     get => _restartPolicy;
@@ -326,9 +325,8 @@ public class EngineDescriptor : IEquatable<EngineDescriptor>
   /// Each lifecycle task of the engine gets an enforcer of its own from this policy (see <see cref="CreateRecoveryHelper"/>).
   /// A <see cref="RecoveryHelper"/> that is set wins over it.
   /// </remarks>
-  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is negative, its
-  /// <see cref="RestartPolicy.MaxBackoff"/> is less than its <see cref="RestartPolicy.InitialBackoff"/>, or its
-  /// <see cref="RestartPolicy.Jitter"/> is not in 0..1.</exception>
+  /// <exception cref="ArgumentOutOfRangeException">A setting of the policy is negative, or its
+  /// <see cref="RestartPolicy.MaxBackoff"/> is less than its <see cref="RestartPolicy.InitialBackoff"/>.</exception>
   public EngineDescriptor SetRestartPolicy(RestartPolicy policy)
   {
     RestartPolicy = policy;

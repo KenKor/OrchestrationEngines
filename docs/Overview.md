@@ -258,11 +258,10 @@ Recovery and restarts:
 
 - A task with a recovery policy (`SetRecovery`) that fails, times out, or is cancelled from outside (its own token was
   not cancelled) goes to `Recovering`, waits, and runs its work again. Its state message says why.
-- `RestartPolicy` limits the restarts: at most `MaxRestartsInWindow` within `Window`, and at most
+- `RestartPolicy` limits the restarts: at most `MaxRestartsInWindow` within `Window`, and, in the presets, at most
   `MaxConsecutiveRestarts` in a row without a successful run, however long each attempt takes (the window alone never
-  gives up on slow failures). The wait between restarts doubles from `InitialBackoff` up to `MaxBackoff`; a `Jitter`
-  from 0 (the default) to 1 shortens each wait by that share of a random fraction, so engines that failed together do
-  not all restart at once. A success or a reset starts counting again. The settings are fixed once the policy is made.
+  gives up on slow failures). The wait between restarts doubles from `InitialBackoff` up to `MaxBackoff`. A success or
+  a reset starts counting again. The settings are fixed once the policy is made.
 - A task that starts, or whose dependency completes, while another of its dependencies has failed ends
   `DependencyFailed` at once.
 
