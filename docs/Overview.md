@@ -582,8 +582,8 @@ coordinator = await coordinator.RestartWithDefinitionsAsync(
   restart factory.
 - **Contexts come from the factories again.** A context given with `RefreshEngineContextAsync` is not carried over: each
   engine gets what its descriptor's context factory computes, and a factory whose closure captured state at its
-  registration computes that old state again. Give the other engines' descriptors factories that compute their current
-  context.
+  registration computes that old state again. Register context factories that read the current state when they
+  run.
 - **Use the coordinator the switch returns.** The replaced one is shut down; a lookup on it is answered by the current
   generation.
 - **During the switch** a lookup of an engine rebuilt from scratch gets the previous engine until its stop begins, and
