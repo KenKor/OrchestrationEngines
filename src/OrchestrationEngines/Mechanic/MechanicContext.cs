@@ -20,7 +20,7 @@ namespace OrchestrationEngines.Mechanic;
 /// Actual engine instances are created and managed by the <see cref="MechanicEngine"/>.
 /// </para>
 /// </remarks>
-public class MechanicContext : IEngineContext
+internal class MechanicContext : IEngineContext
 {
   /// <summary>
   /// Descriptors for all engines managed by the mechanic.

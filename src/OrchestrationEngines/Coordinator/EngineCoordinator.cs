@@ -248,7 +248,7 @@ public partial class EngineCoordinator : IDisposable
   /// This wires coordinator-level state tracking to mechanic engine events
   /// and assigns the collected <see cref="MechanicContext"/>.
   /// </remarks>
-  protected virtual MechanicEngine CreateMechanic()
+  private MechanicEngine CreateMechanic()
   {
     var mechanic = new MechanicEngine(_applicationLogger, _lifetimeCts.Token) { TimeProvider = TimeProvider };
 
@@ -933,7 +933,7 @@ public partial class EngineCoordinator : IDisposable
   /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
   /// generation and goes there, as with <see cref="RefreshEngineContextAsync"/>. The
   /// wait for the engine to start lasts until it is Ready or its start has failed (see
-  /// <see cref="MechanicEngine.ResetEngineTasksAsync"/>). A task that hangs during the engine's first
+  /// <c>MechanicEngine.ResetEngineTasksAsync</c>). A task that hangs during the engine's first
   /// start can be reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>,
   /// then <see cref="BaseEngine.ResetTasksAsync"/>), or its run bounded with the task's <see cref="EngineTask.Timeout"/>.
   /// </remarks>

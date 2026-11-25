@@ -28,9 +28,9 @@ namespace OrchestrationEngines.Mechanic;
 /// <para>
 /// Engine lifecycle is decomposed into three explicit phases per engine:
 /// <list type="number">
-/// <item>Creation (<see cref="EngineCreationTask"/>)</item>
-/// <item>Context resolution (<see cref="EngineContextTask"/>)</item>
-/// <item>Kick-start / readiness (<see cref="EngineKickStartTask"/>)</item>
+/// <item>Creation (<c>EngineCreationTask</c>)</item>
+/// <item>Context resolution (<c>EngineContextTask</c>)</item>
+/// <item>Kick-start / readiness (<c>EngineKickStartTask</c>)</item>
 /// </list>
 /// Each phase is modeled as an EngineTask and wired into a dependency DAG.
 /// </para>
@@ -62,7 +62,7 @@ public partial class MechanicEngine : BaseEngine
   /// Registry of instantiated engines, keyed by engine name.
   /// </summary>
   /// <remarks>
-  /// Engines are created during execution of <see cref="EngineCreationTask"/>s
+  /// Engines are created during execution of <c>EngineCreationTask</c>s
   /// and remain registered for the lifetime of the mechanic.
   /// </remarks>
   public IReadOnlyDictionary<string, IEngine> Engines => _engines;
@@ -107,7 +107,7 @@ public partial class MechanicEngine : BaseEngine
   /// <param name="engine">The engine.</param>
   /// <remarks>
   /// <para>
-  /// This method is intended to be called only by <see cref="EngineCreationTask"/>.
+  /// This method is intended to be called only by <c>EngineCreationTask</c>.
   /// Re-registration replaces any existing instance with the same name.
   /// </para>
   /// <para>
@@ -144,7 +144,7 @@ public partial class MechanicEngine : BaseEngine
   /// can be accessed by the engine at runtime.
   /// </para>
   /// </remarks>
-  public void RegisterContext(string engineName, IEngineContext context)
+  internal void RegisterContext(string engineName, IEngineContext context)
   {
     ArgumentNullException.ThrowIfNull(context);
 
@@ -197,7 +197,7 @@ public partial class MechanicEngine : BaseEngine
   /// Creates and registers the EngineCreationTask for an engine.
   /// </summary>
   /// <param name="engineDescriptor">The engine descriptor.</param>
-  protected EngineCreationTask GetCreationTask(EngineDescriptor engineDescriptor)
+  private EngineCreationTask GetCreationTask(EngineDescriptor engineDescriptor)
   {
     var task = new EngineCreationTask(this, engineDescriptor, Logger, CancellationToken);
     AddTask(task.Name, task);
@@ -208,7 +208,7 @@ public partial class MechanicEngine : BaseEngine
   /// Creates and registers the EngineContextTask for an engine.
   /// </summary>
   /// <param name="engineDescriptor">The engine descriptor.</param>
-  protected EngineContextTask GetContextTask(EngineDescriptor engineDescriptor)
+  private EngineContextTask GetContextTask(EngineDescriptor engineDescriptor)
   {
     var task = new EngineContextTask(this, engineDescriptor, Logger, CancellationToken);
     AddTask(task.Name, task);
@@ -219,7 +219,7 @@ public partial class MechanicEngine : BaseEngine
   /// Creates and registers the EngineKickStartTask for an engine.
   /// </summary>
   /// <param name="engineDescriptor">The engine descriptor.</param>
-  protected EngineKickStartTask GetKickStartTask(EngineDescriptor engineDescriptor)
+  private EngineKickStartTask GetKickStartTask(EngineDescriptor engineDescriptor)
   {
     var task = new EngineKickStartTask(this, engineDescriptor, Logger, CancellationToken);
     AddTask(task.Name, task);
@@ -356,7 +356,7 @@ public partial class MechanicEngine : BaseEngine
   /// The task ended without success; or the engine could not be created (reported by its creation task, which bears
   /// the engine's name) or was created but never started (reported by its kick-start task).
   /// </exception>
-  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
+  internal async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
   {
     var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
 
@@ -429,7 +429,7 @@ public partial class MechanicEngine : BaseEngine
   /// The engine, or this mechanic, was stopped, before or during the reset, for example by a generation switch: the
   /// next generation has the live engine. Its <see cref="EngineTaskNotReadyException.State"/> is Cancelled.
   /// </exception>
-  public async Task ResetEngineTasksAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
+  internal async Task ResetEngineTasksAsync(string engineName, IEnumerable<string> taskNames, bool resetDependentTasks,
     CancellationToken token = default)
   {
     // A failed start leaves an engine with tasks to reset, or one without, which is answered below.
@@ -635,20 +635,6 @@ public partial class MechanicEngine : BaseEngine
       await engine.EnsureReadyAsync().ConfigureAwait(false);
 
     return engine;
-  }
-
-  /// <summary>
-  /// Ensures all managed engines reach Ready state.
-  /// </summary>
-  public virtual Task EnsureAllEnginesReadyAsync()
-  {
-    var completionTasks = _engines.Values
-        .Where(e => e.State < EngineState.Ready)
-        .Select(e => e.EnsureReadyAsync())
-        .ToArray();
-
-    LogWaitingForAllEngines(Logger);
-    return Task.WhenAll(completionTasks);
   }
 
   // ---------------------------------------------------------------------
