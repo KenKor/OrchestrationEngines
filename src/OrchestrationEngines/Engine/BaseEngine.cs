@@ -297,7 +297,7 @@ public abstract partial class BaseEngine : IEngine
   /// Requests cancellation of all engine activities.
   /// </summary>
   /// <remarks>
-  /// As for <c>CancelAll</c>: the token's callbacks run under the engine's source gate.
+  /// The token's callbacks run under the engine's source gate.
   /// </remarks>
   protected virtual void RequestCancellation() => CancelSource();
 
