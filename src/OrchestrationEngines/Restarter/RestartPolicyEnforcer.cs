@@ -100,15 +100,7 @@ internal class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// smaller than the initial backoff).
   /// </exception>
   /// <remarks>
-  /// <para>
-  /// Validation rules:
-  /// </para>
-  /// <list type="bullet">
-  /// <item><c>MaxRestartsInWindow</c> may be 0 (disables rate limiting) but must not be negative.</item>
-  /// <item><c>Window</c> may be 0 (disables windowing) but must not be negative.</item>
-  /// <item><c>InitialBackoff</c> must not be negative.</item>
-  /// <item><c>MaxBackoff</c> must be greater than or equal to <c>InitialBackoff</c>.</item>
-  /// </list>
+  /// The policy is checked by <see cref="RestartPolicy.Validate"/>.
   /// </remarks>
   public RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider = null)
   {
