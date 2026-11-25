@@ -365,16 +365,9 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
   the cancelling thread, inside `Cancel()`: an `EngineStatusChanged` subscriber must not block there or stop the engine
   synchronously from there
 
-To wait for one task, `EnsureTaskReadyAsync(taskName)` starts it (and what it depends on) if needed and returns once
-it has completed with success. If it ended otherwise (`Failed`, `TimedOut`, `DependencyFailed`, `RecoveryFailed` or
-`Cancelled`) it throws an `EngineTaskNotReadyException` with the task's name, its final state and its fail reason; when
-the task's work (or recovery) threw, that exception is the inner exception. An unknown task name throws an
-`ArgumentException`. A restart or reset that ends the task during the wait is not a failure: the wait goes on with the
-task's next run. If the restart's set no longer has the task, the answer is how the task it waited for ended: it
-returns if that was with success, throws the `EngineTaskNotReadyException` if it ended otherwise, and throws an
-`ArgumentException` if it has not ended (it was replaced while it ran again). Cancelling the wait's token ends the wait
-only. `EnsureReadyAsync(taskName)` is the same wait without a token, with the same answers; `EnsureTasksReadyAsync`
-still only waits.
+To wait for one task, `EnsureReadyAsync(task)` starts it (and what it depends on) if needed and returns once they have
+all ended, whatever their state: the caller reads the task's state. Cancelling the wait's token ends the wait only.
+`EnsureTasksReadyAsync(taskNames)` waits in the same way for tasks by name, and returns false if it finds none of them.
 
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
 engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A stop during a
@@ -426,10 +419,10 @@ after about 25 seconds and six attempts. An engine factory or restart factory th
 the same way, with an `InvalidOperationException` that names the engine. A host that needs a failed load to fault for
 good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation switch that
 waits until the next generation is ready keeps the previous generation (and the engine handed over) until the retries
-have ended. Other coordinator calls do not queue behind the switch. A lookup or a task wait (`GetEngineAsync`,
-`EnsureEngineTaskReadyAsync`) for an engine the switch rebuilds from scratch, and a context operation or task reset
-also for one it hands over, waits for the next generation to start and is answered there. One that reaches the next
-generation only after a failed switch shut it down is answered by the coordinator it was asked of.
+have ended. Other coordinator calls do not queue behind the switch. A lookup (`GetEngineAsync`) for an engine the
+switch rebuilds from scratch, and a context operation or task reset also for one it hands over, waits for the next
+generation to start and is answered there. One that reaches the next generation only after a failed switch shut it
+down is answered by the coordinator it was asked of.
 
 Every other lookup made through the host's coordinator during a switch sees the previous generation until the switch
 hands over. This matters for an engine of the next generation that, from its own load, looks up another engine through
@@ -515,14 +508,6 @@ rethrown once all have stopped, and the next generation does not start.
 
 Its readiness follows the required engines only: an engine registered as not required for running may still be
 loading, or have failed, while the coordinator is `Running`.
-
-`EnsureEngineTaskReadyAsync(engineName, taskName)` does the same for one engine's task, starting the coordinator if
-needed. It waits for the engine to start first (its kick-start, which ends once the engine is `Ready` or failed), so a
-task that completes early is reported once the engine is `Ready`. An engine that could not be created or started is
-reported by the mechanic's task that failed: its creation task, named after the engine, or its kick-start task. An
-unknown engine name throws an `ArgumentException`. A generation switch during the wait is answered by the next
-generation, as engine lookups are; if the next generation no longer has the engine, that is an unknown engine
-(`ArgumentException`).
 
 #### Generation switch
 

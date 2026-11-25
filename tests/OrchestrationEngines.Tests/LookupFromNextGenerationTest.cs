@@ -32,14 +32,10 @@ public class LookupFromNextGenerationTest
   /// <summary>
   /// Verifies that a switch that waits until ready completes when an engine of the next generation, while it loads,
   /// looks up another engine through the coordinator the host holds. It gets the next generation's A, which the switch
-  /// rebuilds from scratch. With <paramref name="waitForTask"/>,
-  /// B waits for A's task through <see cref="EngineCoordinator.EnsureEngineTaskReadyAsync"/> before the lookup.
+  /// rebuilds from scratch.
   /// </summary>
-  [Theory]
-  [InlineData(false)]
-  [InlineData(true)]
-  public async Task EngineCoordinator_SwitchWaitingUntilReady_LookupFromNextGenerationEngine_Completes(
-    bool waitForTask)
+  [Fact]
+  public async Task EngineCoordinator_SwitchWaitingUntilReady_LookupFromNextGenerationEngine_Completes()
   {
     var ct = TestContext.Current.CancellationToken;
     var lookups = 0;
@@ -48,8 +44,6 @@ public class LookupFromNextGenerationTest
     coordinator.RegisterEngineDescriptor(Descriptor("A"));
     coordinator.RegisterEngineDescriptor(Descriptor("B", async token =>
     {
-      if (waitForTask)
-        await coordinator.EnsureEngineTaskReadyAsync("A", "Load", token).ConfigureAwait(false);
       var found = await coordinator.GetEngineAsync("A", token).ConfigureAwait(false);
       if (Interlocked.Increment(ref lookups) > 1)
         Volatile.Write(ref foundByNextB, found);

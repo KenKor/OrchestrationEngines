@@ -1275,8 +1275,24 @@ public abstract partial class BaseEngine : IEngine
     return true;
   }
 
-  /// <inheritdoc/>
-  public virtual async Task EnsureTaskReadyAsync(string taskName, CancellationToken token = default)
+  /// <summary>
+  /// Starts the task named <paramref name="taskName"/> and the tasks it depends on if they have not started, and waits
+  /// until it has completed with success.
+  /// </summary>
+  /// <param name="taskName">The name of the task (compared ignoring case).</param>
+  /// <param name="token">Ends the wait when cancelled (it then throws <see cref="OperationCanceledException"/>); the
+  /// tasks run on.</param>
+  /// <remarks>
+  /// The engine's tasks are set up when it starts: on an engine that has not started, every name is unknown. A restart
+  /// or reset that ends the task during the wait is not its answer: the wait goes on with the task's next run.
+  /// </remarks>
+  /// <exception cref="ArgumentException">The engine has no task of that name, also when a restart replaced the task
+  /// waited for with a set that has none.</exception>
+  /// <exception cref="EngineTaskNotReadyException">
+  /// The task ended Failed (or one of its kinds: TimedOut, DependencyFailed, RecoveryFailed) or Cancelled. It carries
+  /// the task's name, its final state and its fail reason, and the work's exception as inner exception if it threw.
+  /// </exception>
+  internal async Task EnsureTaskReadyAsync(string taskName, CancellationToken token = default)
   {
     ArgumentNullException.ThrowIfNull(taskName);
     // The task an earlier pass waited for, which a restart or reset ended or made run again.
@@ -1316,13 +1332,6 @@ public abstract partial class BaseEngine : IEngine
       throw EngineTaskNotReadyException.For(task, state);
     }
   }
-
-  /// <inheritdoc cref="EnsureTaskReadyAsync(string, CancellationToken)"/>
-  /// <summary>
-  /// The same as <see cref="EnsureTaskReadyAsync"/> without a token: it calls it, so an override of
-  /// <see cref="EnsureTaskReadyAsync"/> must not call this overload.
-  /// </summary>
-  public virtual Task EnsureReadyAsync(string taskName) => EnsureTaskReadyAsync(taskName);
 
   /// <summary>
   /// Waits for all task identified by <paramref name="task"/> and its dependencies to complete, including optional ones.
