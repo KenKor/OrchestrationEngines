@@ -634,7 +634,7 @@ public class ResetTasksTest
     var coordinator = CoordinatorWith(engine);
 
     await coordinator.ResetTasksForEngineAsync("graph", ["B"], resetDependentTasks: true, ct).WaitAsync(MustComplete, ct);
-    await coordinator.EnsureEngineTaskReadyAsync("Graph", "C", ct).WaitAsync(MustComplete, ct);
+    await engine.EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
 
     new[] { engine.Runs("A"), engine.Runs("B"), engine.Runs("C") }.Should().Equal(1, 2, 2);
     await coordinator.ShutdownAsync(ct).WaitAsync(MustComplete, ct);
@@ -938,7 +938,8 @@ public class ResetTasksTest
     try
     {
       stoppedInTime.Should().BeTrue();
-      await next.EnsureEngineTaskReadyAsync("Graph", "C", ct).WaitAsync(MustComplete, ct);
+      await next.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
+      await engines.Last().EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
       engines.Should().HaveCount(2);
       engines.Last().Runs("C").Should().Be(2);
     }
@@ -963,7 +964,7 @@ public class ResetTasksTest
     try
     {
       await coordinator.ResetTasksForEngineAsync("Graph", ["C"], resetDependentTasks: false, ct).WaitAsync(MustComplete, ct);
-      await next.EnsureEngineTaskReadyAsync("Graph", "C", ct).WaitAsync(MustComplete, ct);
+      await engines.Last().EnsureTaskReadyAsync("C", ct).WaitAsync(MustComplete, ct);
 
       engines.Should().HaveCount(2);
       engines.Last().Runs("C").Should().Be(2);

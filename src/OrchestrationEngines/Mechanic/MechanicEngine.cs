@@ -343,39 +343,6 @@ public partial class MechanicEngine : BaseEngine
     _engines.ContainsKey(name) || _tasks.ContainsKey(EngineKickStartTask.KickStartName(name));
 
   /// <summary>
-  /// Waits until the task <paramref name="taskName"/> of the engine <paramref name="engineName"/> has completed with
-  /// success (see <see cref="IEngine.EnsureTaskReadyAsync"/>), after the engine has started: its tasks are set up when
-  /// its kick-start starts it, and the kick-start ends once the engine is Ready, or has failed.
-  /// </summary>
-  /// <remarks>
-  /// An engine that was created but never started is recognised as a <see cref="BaseEngine"/> that has not set up a task
-  /// set (tasks it created in its constructor do not count); another <see cref="IEngine"/> answers for itself.
-  /// </remarks>
-  /// <exception cref="ArgumentException">No engine of that name is registered, or the engine has no such task.</exception>
-  /// <exception cref="EngineTaskNotReadyException">
-  /// The task ended without success; or the engine could not be created (reported by its creation task, which bears
-  /// the engine's name) or was created but never started (reported by its kick-start task).
-  /// </exception>
-  internal async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
-  {
-    var (engine, notStarted) = await WaitForKickStartAsync(engineName, token).ConfigureAwait(false);
-
-    // Not created: the creation task says why.
-    if (engine == null)
-    {
-      await EnsureTaskReadyAsync(engineName, token).ConfigureAwait(false);
-      throw notStarted ?? new EngineTaskNotReadyException(engineName, EngineTaskState.Failed, "The engine was not created.");
-    }
-
-    // Created but never started (its context failed): report the kick-start, and start none of its tasks (which would
-    // run without a context). Also when it has no tasks: its last set-up failed (a restart), and the kick-start's
-    // failure is the answer, not an unknown name. An engine that started and then faulted answers for its task.
-    if (notStarted != null && engine is BaseEngine { HasTaskSet: false })
-      throw notStarted;
-    await engine.EnsureTaskReadyAsync(taskName, token).ConfigureAwait(false);
-  }
-
-  /// <summary>
   /// Waits for the kick-start of the engine <paramref name="engineName"/> to settle: until the engine is Ready, or its
   /// start has failed (or been cancelled). An engine's tasks are set up when its kick-start starts it.
   /// </summary>

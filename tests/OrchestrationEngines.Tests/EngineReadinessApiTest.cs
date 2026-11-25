@@ -268,11 +268,11 @@ public class EngineReadinessApiTest
   public async Task EngineCoordinator_FactoryReturnsNull_FailsTheCreationClearly()
   {
     var ct = TestContext.Current.CancellationToken;
-    var coordinator = new EngineCoordinator(nameof(EngineReadinessApiTest), NullLogger.Instance);
+    var coordinator = new ContextResettingCoordinator(nameof(EngineReadinessApiTest));
     coordinator.RegisterEngine("Null", _ => Task.FromResult<IEngine>(null)).WithoutRestarts();
 
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var ensure = () => coordinator.EnsureEngineTaskReadyAsync("Null", "Load", ct).WaitAsync(MustComplete, ct);
+    var ensure = () => coordinator.EnsureMechanicTaskReadyAsync("Null", ct).WaitAsync(MustComplete, ct);
 
     var thrown = (await ensure.Should().ThrowAsync<EngineTaskNotReadyException>()).Which;
     thrown.TaskName.Should().Be("Null", "the creation task, named after the engine, failed");

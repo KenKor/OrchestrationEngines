@@ -290,7 +290,7 @@ public partial class EngineCoordinator : IDisposable
   /// <remarks>
   /// This API is used by generation-switch flows where descriptors are prepared externally.
   /// </remarks>
-  public EngineDescriptor RegisterEngineDescriptor(EngineDescriptor descriptor) =>
+  internal EngineDescriptor RegisterEngineDescriptor(EngineDescriptor descriptor) =>
     TryRegisterEngineDescriptor(descriptor)
       ? descriptor
       : throw new InvalidOperationException(
@@ -805,61 +805,27 @@ public partial class EngineCoordinator : IDisposable
   }
 
   /// <summary>
-  /// Waits until the task <paramref name="taskName"/> of the engine <paramref name="engineName"/> has completed with
-  /// success, starting the coordinator if it has not been started yet.
-  /// </summary>
-  /// <remarks>
-  /// It first waits for the engine to start (its kick-start, which ends once the engine is Ready or has failed), since
-  /// an engine's tasks are set up when it starts: a task that completes early is reported once the engine is Ready.
-  /// A generation switch during the wait is answered by the next generation; one that no longer has the engine
-  /// reports it as unknown (<see cref="ArgumentException"/>). A call that reaches the next generation of a switch
-  /// only after the switch failed and shut that generation down is answered by this generation. Until a switch hands
-  /// over, a wait for an engine it does not rebuild from scratch is answered by the previous generation, as a lookup
-  /// is (see <see cref="GetEngineAsync(string, bool, CancellationToken)"/>): an engine of the next generation should
-  /// not wait for another engine's task through this coordinator from its own tasks.
-  /// </remarks>
-  /// <param name="engineName">The name of the engine (compared ignoring case).</param>
-  /// <param name="taskName">The name of the engine's task (compared ignoring case).</param>
-  /// <param name="token">Cancels the caller's wait; the engine and its tasks go on.</param>
-  /// <exception cref="ArgumentException">No engine of that name is registered, or the engine has no such task.</exception>
-  /// <exception cref="EngineTaskNotReadyException">
-  /// The task ended without success; or the engine could not be created or started, and then the exception names the
-  /// mechanic's task that failed (its creation task, named after the engine, or its kick-start task) instead.
-  /// </exception>
-  public async Task EnsureEngineTaskReadyAsync(string engineName, string taskName, CancellationToken token = default)
-  {
-    ArgumentNullException.ThrowIfNull(engineName);
-    ArgumentNullException.ThrowIfNull(taskName);
-    await ForEngineAsync(engineName,
-      generation => generation.EnsureEngineTaskReadyAsync(engineName, taskName, token),
-      () => Mechanic.EnsureEngineTaskReadyAsync(engineName, taskName, token),
-      token, handedOverToo: false).ConfigureAwait(false);
-  }
-
-  /// <summary>
   /// Runs <paramref name="onMechanic"/> for the engine <paramref name="engineName"/> on the generation that has it:
   /// <paramref name="onGeneration"/> on the next generation once this one was replaced, or once a switch that rebuilds
-  /// the engine from scratch (or, with <paramref name="handedOverToo"/>, hands it over) has started it, else on this
-  /// one, started if needed and <paramref name="start"/> is set. A
-  /// generation switch during the call that ends it with a cancellation or a Cancelled task (its engine stopped) is
+  /// or hands over the engine has started it, else on this one, started if needed and <paramref name="start"/> is set.
+  /// A generation switch during the call that ends it with a cancellation or a Cancelled task (its engine stopped) is
   /// answered by the next generation, if it has the engine; a call that completes on this generation before the switch
   /// hands over is not repeated there.
   /// </summary>
   /// <remarks>
-  /// <paramref name="handedOverToo"/> is set for the operations that change the engine (a refresh, a task
-  /// reset), which would be lost on the previous engine (#145); not for a wait, which the previous engine, still
-  /// running, answers.
+  /// An engine the switch hands over counts too: the operations change the engine (a refresh, a task reset), which
+  /// would be lost on the previous engine (#145).
   /// </remarks>
   private async Task ForEngineAsync(string engineName, Func<EngineCoordinator, Task> onGeneration, Func<Task> onMechanic,
-    CancellationToken token, bool start = true, bool handedOverToo = true)
+    CancellationToken token, bool start = true)
   {
     // A coordinator replaced by a generation switch has stopped its engines: answer from the next generation. Fix
     // (ContextOperationGenerationTest): so does a switch that rebuilds this engine from scratch, which stops it before it
     // hands over. A call on this generation would then throw, be lost on the stopped engine, or start it again: wait for
-    // the next generation and ask it, as the catch below does for a call the stop interrupts. With handedOverToo, also
-    // for an engine the switch hands over (#145): the call would be lost on the previous engine, which the hand-over
-    // shuts down. If the next generation did not start, this generation answers.
-    if (await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false) is
+    // the next generation and ask it, as the catch below does for a call the stop interrupts. Also for an engine the
+    // switch hands over (#145): the call would be lost on the previous engine, which the hand-over shuts down. If the
+    // next generation did not start, this generation answers.
+    if (await NextGenerationAsync(engineName, handedOverToo: true, Timeout.Infinite, token).ConfigureAwait(false) is
         { } nextGeneration
         && await AnsweredOnNextGenerationAsync(nextGeneration, onGeneration, token).ConfigureAwait(false))
       return;
@@ -877,7 +843,8 @@ public partial class EngineCoordinator : IDisposable
     {
       // A generation switch while waiting (it stopped this generation's engines, or has this engine): ask the next one,
       // if it has the engine.
-      var next = await NextGenerationAsync(engineName, handedOverToo, Timeout.Infinite, token).ConfigureAwait(false);
+      var next = await NextGenerationAsync(engineName, handedOverToo: true, Timeout.Infinite, token)
+        .ConfigureAwait(false);
       if (next == null || !await AnsweredOnNextGenerationAsync(next, onGeneration, token).ConfigureAwait(false))
         throw;
     }
@@ -914,14 +881,14 @@ public partial class EngineCoordinator : IDisposable
   /// <param name="token">Cancels the caller's wait for the engine to start.</param>
   /// <exception cref="ArgumentException">No engine of that name is registered, or it has no task of one of the names.</exception>
   /// <remarks>
-  /// A generation switch during the wait is answered by the next generation, which resets its engine, as with
-  /// <see cref="EnsureEngineTaskReadyAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
-  /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
-  /// generation and goes there, as with <see cref="RefreshEngineContextAsync"/>. The
-  /// wait for the engine to start lasts until it is Ready or its start has failed (see
-  /// <c>MechanicEngine.ResetEngineTasksAsync</c>). A task that hangs during the engine's first
-  /// start can be reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, cast to <see cref="BaseEngine"/>,
-  /// then <see cref="BaseEngine.ResetTasksAsync"/>), or its run bounded with the task's <see cref="EngineTask.Timeout"/>.
+  /// A generation switch during the wait is answered by the next generation, which resets its engine. A call that
+  /// arrives during a switch that has the engine (rebuilt from scratch, or handed over to its restart factory), before
+  /// it hands over, waits until the switch has started the next generation and goes there, as with
+  /// <see cref="RefreshEngineContextAsync"/>. The wait for the engine to start lasts until it is Ready or its start has
+  /// failed (see <c>MechanicEngine.ResetEngineTasksAsync</c>). A task that hangs during the engine's first start can be
+  /// reset without that wait through the engine itself (<see cref="GetEngineIfCreated"/>, cast to
+  /// <see cref="BaseEngine"/>, then <see cref="BaseEngine.ResetTasksAsync"/>), or its run bounded with the task's
+  /// <see cref="EngineTask.Timeout"/>.
   /// </remarks>
   /// <exception cref="InvalidOperationException">
   /// The engine was not created (its kick-start's exception is the <see cref="Exception.InnerException"/>), never
