@@ -40,7 +40,6 @@ warning.
 | Package feed and owner | `publish` job in the workflow | nuget.org, a private feed, or both. On nuget.org: which account or organisation owns the package. |
 | Feed login | `publish` job in the workflow | nuget.org Trusted Publishing (no stored key) or an API key in a GitHub secret. |
 | Versioning | `.csproj` or a versioning package | Version from git tags (for example MinVer) or set by hand. Also the first version: 0.1.0 or 1.0.0. |
-| Strong naming | `.csproj` and a key file | Needed if any strong-named .NET Framework assembly will reference this package. |
 
 ## Finishing the pipeline
 
