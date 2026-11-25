@@ -31,7 +31,7 @@ namespace OrchestrationEngines.Restarter;
 /// that share it then share that state, so they count each other's restarts and each doubles the one backoff.
 /// </para>
 /// </remarks>
-public class RestartPolicyEnforcer : IRestartPolicyEnforcer
+internal class RestartPolicyEnforcer : IRestartPolicyEnforcer
 {
   private readonly RestartPolicy _policy;
 
@@ -39,11 +39,6 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// The clock that dates the restarts and times the backoff delay.
   /// </summary>
   private readonly TimeProvider _timeProvider;
-
-  /// <summary>
-  /// The random source of the jitter: a fraction in [0, 1).
-  /// </summary>
-  private readonly Func<double> _nextRandom;
 
   /// <summary>
   /// Gets the timestamps (UTC) of recorded restart attempts used to enforce the restart-rate limit.
@@ -105,34 +100,12 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// smaller than the initial backoff).
   /// </exception>
   /// <remarks>
-  /// <para>
-  /// Validation rules:
-  /// </para>
-  /// <list type="bullet">
-  /// <item><c>MaxRestartsInWindow</c> may be 0 (disables rate limiting) but must not be negative.</item>
-  /// <item><c>Window</c> may be 0 (disables windowing) but must not be negative.</item>
-  /// <item><c>InitialBackoff</c> must not be negative.</item>
-  /// <item><c>MaxBackoff</c> must be greater than or equal to <c>InitialBackoff</c>.</item>
-  /// <item><c>Jitter</c> must be in 0..1.</item>
-  /// </list>
+  /// The policy is checked by <see cref="RestartPolicy.Validate"/>.
   /// </remarks>
   public RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider = null)
-    : this(policy, timeProvider, () => Random.Shared.NextDouble())
-  {
-  }
-
-  /// <summary>
-  /// Initializes a new instance with the random source of the jitter, which tests fix.
-  /// </summary>
-  /// <param name="policy">The restart policy configuration to enforce.</param>
-  /// <param name="timeProvider">The clock; <see cref="TimeProvider.System"/> when <c>null</c>.</param>
-  /// <param name="nextRandom">Returns a fraction in [0, 1) for each wait.</param>
-  /// <exception cref="ArgumentNullException"><paramref name="policy"/> or <paramref name="nextRandom"/> is null.</exception>
-  internal RestartPolicyEnforcer(RestartPolicy policy, TimeProvider timeProvider, Func<double> nextRandom)
   {
     _policy = policy ?? throw new ArgumentNullException(nameof(policy));
     _timeProvider = timeProvider ?? TimeProvider.System;
-    _nextRandom = nextRandom ?? throw new ArgumentNullException(nameof(nextRandom));
     _policy.Validate();
     _currentBackoff = _policy.InitialBackoff;
   }
@@ -180,8 +153,8 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
   /// older timestamps may be pruned based on the configured window, and the rate limit is enforced.
   /// </para>
   /// <para>
-  /// The delay is computed using the current backoff, shortened by <see cref="RestartPolicy.Jitter"/>, and then the
-  /// backoff is updated (doubling, without the jitter) for the next invocation. The delay itself is applied outside the internal lock to avoid blocking other operations.
+  /// The delay is the current backoff, and then the backoff is updated (doubling) for the next invocation. The delay
+  /// itself is applied outside the internal lock to avoid blocking other operations.
   /// </para>
   /// </remarks>
   public async Task Invoke(EngineTask et, CancellationToken token)
@@ -224,12 +197,9 @@ public class RestartPolicyEnforcer : IRestartPolicyEnforcer
         throw EngineTaskLimitExceededException.ForConsecutiveRestarts(et, _policy.MaxConsecutiveRestarts);
       }
 
-      // Exponential backoff update for next time, from the backoff without the jitter.
+      // Exponential backoff update for next time.
       _currentBackoff = NextBackoff(delayToApply, _policy.MaxBackoff);
     }
-
-    if (_policy.Jitter > 0)
-      delayToApply = TimeSpan.FromTicks((long)(delayToApply.Ticks * (1 - _policy.Jitter * _nextRandom())));
 
     // Check if this task was canceled in the mean time.
     if (token.IsCancellationRequested) throw new TaskCanceledException();

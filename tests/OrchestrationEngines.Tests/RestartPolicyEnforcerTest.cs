@@ -141,73 +141,6 @@ public class RestartPolicyEnforcerTest
   }
 
   /// <summary>
-  /// Verifies that the jitter shortens the wait by its share of a random fraction of the backoff (#59, item 3): with a
-  /// random draw of 0.5, a 10-second backoff waits 10 seconds without jitter, 7.5 with half, and 5 with full jitter.
-  /// The next backoff still doubles from the backoff without jitter. It is read while the wait is running: once the
-  /// wait ends, the failing work runs again and the next restart doubles it again (#88, item 3).
-  /// </summary>
-  [Theory]
-  [InlineData(0.0, 10_000)]
-  [InlineData(0.5, 7_500)]
-  [InlineData(1.0, 5_000)]
-  public async Task RestartPolicyEnforcer_Invoke_JitterShortensTheWait(double jitter, int expectedWaitMs)
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var clock = new ManualTimeProvider();
-    var enforcer = new RestartPolicyEnforcer(new RestartPolicy
-    {
-      InitialBackoff = TimeSpan.FromSeconds(10),
-      MaxBackoff = TimeSpan.FromSeconds(40),
-      Jitter = jitter,
-    }, clock, nextRandom: () => 0.5);
-    var (_, backoff) = await StartFailingRunAsync(enforcer);
-    await Wait.UntilAsync(() => clock.WaitingTimers == 1, MustComplete, "the restart must wait for its backoff");
-    enforcer.CurrentBackoff.Should().Be(TimeSpan.FromSeconds(20), "the backoff doubles without the jitter");
-
-    clock.Advance(TimeSpan.FromMilliseconds(expectedWaitMs - 1));
-    await Task.Delay(100, ct);
-    backoff.IsCompleted.Should().BeFalse("the wait has not passed yet");
-    clock.Advance(TimeSpan.FromMilliseconds(1));
-    await backoff.WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
-  /// Verifies that the jitter is part of a policy's equality and hash code.
-  /// </summary>
-  [Fact]
-  public void RestartPolicy_Equals_ComparesTheJitter()
-  {
-    var half = new RestartPolicy { Jitter = 0.5 };
-
-    half.Should().Be(new RestartPolicy { Jitter = 0.5 });
-    half.GetHashCode().Should().Be(new RestartPolicy { Jitter = 0.5 }.GetHashCode());
-    half.Should().NotBe(new RestartPolicy { Jitter = 0.25 });
-    new RestartPolicy().Jitter.Should().Be(0, "no jitter unless the host sets one");
-  }
-
-  /// <summary>
-  /// Verifies that with full jitter, a wait drawn from the enforcer's own random source ends within the backoff: a
-  /// smoke test of that source, with one draw.
-  /// </summary>
-  [Fact]
-  public async Task RestartPolicyEnforcer_Invoke_FullJitterWithTheSharedRandom_EndsWithinTheBackoff()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var clock = new ManualTimeProvider();
-    var enforcer = new RestartPolicyEnforcer(new RestartPolicy
-    {
-      InitialBackoff = TimeSpan.FromSeconds(10),
-      MaxBackoff = TimeSpan.FromSeconds(10),
-      Jitter = 1,
-    }, clock);
-    var (_, backoff) = await StartFailingRunAsync(enforcer);
-
-    clock.Advance(TimeSpan.FromSeconds(10));
-
-    await backoff.WaitAsync(MustComplete, ct);
-  }
-
-  /// <summary>
   /// Verifies that restarts older than the window no longer count towards the limit: the third restart would exceed
   /// a limit of two, but the first two lie outside the window by then.
   /// </summary>
@@ -367,7 +300,7 @@ public class RestartPolicyEnforcerTest
 
   /// <summary>
   /// Verifies that the enforcer rejects a policy with a negative limit, a negative window or backoff, a maximum
-  /// backoff below the initial one, or a jitter outside 0..1.
+  /// backoff below the initial one.
   /// </summary>
   [Fact]
   public void RestartPolicyEnforcer_Constructor_InvalidPolicy_Throws()
@@ -379,9 +312,6 @@ public class RestartPolicyEnforcerTest
       new RestartPolicy { Window = TimeSpan.FromSeconds(-1) },
       new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(-1) },
       new RestartPolicy { InitialBackoff = TimeSpan.FromSeconds(5), MaxBackoff = TimeSpan.FromSeconds(1) },
-      new RestartPolicy { Jitter = -0.1 },
-      new RestartPolicy { Jitter = 1.1 },
-      new RestartPolicy { Jitter = double.NaN },
     };
 
     foreach (var policy in invalidPolicies)
@@ -389,18 +319,6 @@ public class RestartPolicyEnforcerTest
       var create = () => new RestartPolicyEnforcer(policy);
       create.Should().Throw<ArgumentOutOfRangeException>();
     }
-  }
-
-  /// <summary>
-  /// Verifies that the constructor that takes the jitter's random source refuses a null source (#88, item 1), instead
-  /// of failing with a <see cref="NullReferenceException"/> at the first restart with jitter.
-  /// </summary>
-  [Fact]
-  public void RestartPolicyEnforcer_Constructor_NullRandomSource_Throws()
-  {
-    var act = () => new RestartPolicyEnforcer(new RestartPolicy(), new ManualTimeProvider(), nextRandom: null);
-
-    act.Should().ThrowExactly<ArgumentNullException>().WithParameterName("nextRandom");
   }
 
   /// <summary>
