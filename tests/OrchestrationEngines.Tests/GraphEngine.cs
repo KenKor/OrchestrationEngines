@@ -97,7 +97,7 @@ internal sealed class GraphEngine : BaseEngine
   private sealed class HookedTask(string name, Func<CancellationToken, Task> work, GraphEngine engine)
     : EngineTask(name, work, requiredForRunning: true, NullLogger.Instance, engine.CancellationToken)
   {
-    protected override async Task OnResetEnteredAsync()
+    private protected override async Task OnResetEnteredAsync()
     {
       engine._resets.AddOrUpdate(Name, 1, (_, n) => n + 1);
       engine.OnReset?.Invoke(Name);

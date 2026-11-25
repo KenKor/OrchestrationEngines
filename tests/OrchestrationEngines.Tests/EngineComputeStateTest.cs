@@ -23,7 +23,7 @@ public class EngineComputeStateTest
   private sealed class FixedStateTask(EngineTaskState state)
     : EngineTask("Fixed", _ => Task.CompletedTask, requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
   {
-    protected override StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine() => new(state);
+    private protected override StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine() => new(state);
   }
 
   /// <summary>

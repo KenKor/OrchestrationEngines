@@ -104,7 +104,7 @@ public class KickStartContextResetTest
       ct => Task.Delay(System.Threading.Timeout.Infinite, ct), requiredForRunning: false, NullLogger.Instance,
       engine.CancellationToken)
     {
-      protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
+      private protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
       {
         base.OnFailedEntered(reasonFromTrigger, cancelled);
         if (!cancelled || Interlocked.Exchange(ref engine._endHold, null) is not { } hold)

@@ -23,7 +23,7 @@ namespace OrchestrationEngines.Tasks;
 /// </para>
 ///
 /// <para>
-/// This class uses a Stateless state machine (<see cref="StateMachine"/>) to model transitions such as
+/// This class uses a Stateless state machine (<c>StateMachine</c>) to model transitions such as
 /// Created → WaitingForDependencies → Running → CompletedWithSuccess, or failure/cancellation paths.
 /// </para>
 ///
@@ -59,12 +59,12 @@ public partial class EngineTask
   /// <summary>
   /// Parameterized triggers used to capture a human-readable failure reason.
   /// </summary>
-  protected StateMachine<EngineTaskState, EngineTaskTrigger>.TriggerWithParameters<string> _failTriggerWithReason;
+  private StateMachine<EngineTaskState, EngineTaskTrigger>.TriggerWithParameters<string> _failTriggerWithReason;
 
   /// <summary>
   /// Parameterized trigger used to capture a human-readable recovery failure reason.
   /// </summary>
-  protected StateMachine<EngineTaskState, EngineTaskTrigger>.TriggerWithParameters<string> _failRecoveryTriggerWithReason;
+  private StateMachine<EngineTaskState, EngineTaskTrigger>.TriggerWithParameters<string> _failRecoveryTriggerWithReason;
 
   /// <summary>
   /// Suppresses dependency callbacks while this task is being reset.
@@ -737,7 +737,7 @@ public partial class EngineTask
   /// parameterized-trigger fields) tied to the one live machine. A reset replaces the machine under the same lock (see
   /// <see cref="ReplaceStateMachine"/>).
   /// </remarks>
-  protected StateMachine<EngineTaskState, EngineTaskTrigger> StateMachine
+  private protected StateMachine<EngineTaskState, EngineTaskTrigger> StateMachine
   {
     get
     {
@@ -846,7 +846,7 @@ public partial class EngineTask
   /// this method's side effects (the parameterized-trigger fields) are replaced together, and the machine is published
   /// with a fence: a reader of <see cref="State"/> without a lock sees the old machine or the new one, fully built.
   /// </remarks>
-  protected virtual StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
+  private protected virtual StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
   {
     var machine = new StateMachine<EngineTaskState, EngineTaskTrigger>(EngineTaskState.Created);
 
@@ -966,7 +966,6 @@ public partial class EngineTask
           var run = CurrentRun;
           StartRun(() => ExecuteRecoveryAsync(run));
         })
-        .OnExit(t => RecoveryCompleted(t.Destination))
         .Permit(EngineTaskTrigger.SucceedRecovery, EngineTaskState.Running)
         .Permit(EngineTaskTrigger.FailRecovery, EngineTaskState.RecoveryFailed)
         .Permit(EngineTaskTrigger.Cancel, EngineTaskState.Cancelled)
@@ -1101,11 +1100,6 @@ public partial class EngineTask
     { EngineTaskState.DependencyFailed, "a dependency failed" },
   };
 
-  /// <summary>
-  /// Hook for subclasses to observe recovery completion and optionally act on the destination state.
-  /// </summary>
-  protected virtual void RecoveryCompleted(EngineTaskState nextState) { }
-
   // ---------------------------
   // Timing hooks
   // ---------------------------
@@ -1116,7 +1110,7 @@ public partial class EngineTask
   /// or block, or the task could never enter Running. It also clears the end of the previous run, so a task that runs
   /// again after a recovery (Running, Recovering, Running, without a reset) does not show that end while it runs.
   /// </remarks>
-  protected virtual void StartCallTimer()
+  private void StartCallTimer()
   {
     // End first, so the writes themselves never pair the new start with the old end (a negative duration). A reader
     // without the lock is not promised this order, nor whole values: making that hold is a separate change.
@@ -1129,7 +1123,7 @@ public partial class EngineTask
   /// Runs as the exit action of Running, under the trigger lock, before the state changes: it must not throw or block,
   /// or the task could never leave Running.
   /// </remarks>
-  protected virtual void StopCallTimer() => RunEndedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
+  private void StopCallTimer() => RunEndedAtUtc = TimeProvider.GetUtcNow().UtcDateTime;
 
   // ---------------------------
   // Terminal state handling
@@ -1143,7 +1137,7 @@ public partial class EngineTask
   /// Whether the task was cancelled (or a task it depends on was) rather than failed: that is expected when an engine
   /// stops or restarts, so it is logged as a warning, not as an error.
   /// </param>
-  protected virtual void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
+  private protected virtual void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
   {
     // Ensure we don't double-complete if this entry is hit multiple times (an OnEntryFrom, then the plain OnEntry).
     if (_completionTcs.Task.IsCompleted)
@@ -1161,9 +1155,9 @@ public partial class EngineTask
     WasCancelled = cancelled;
     if (cancelled)
       LogEnteredCancelled(Logger, FailReason);
-    // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, the
-    // time-out, or, for a Fail from outside the work, FireAsync); entering the state is Debug, so a failure is not an
-    // error twice. The state is the destination already: Stateless sets it before it runs the entry actions.
+    // The cause of the failure was logged as an error where it was caught (the work's or the recovery's exception, or
+    // the time-out); entering the state is Debug, so a failure is not an error twice. The state is the destination
+    // already: Stateless sets it before it runs the entry actions.
     else if (State == EngineTaskState.DependencyFailed)
       LogEnteredDependencyFailed(Logger, FailReason);
     else
@@ -1235,7 +1229,7 @@ public partial class EngineTask
   /// This method creates a new token, and a new completion latch when the last one completed. The caller is
   /// responsible for replacing the state machine so the task returns to Created.
   /// </remarks>
-  protected virtual Task OnResetEnteredAsync()
+  private protected virtual Task OnResetEnteredAsync()
   {
     var suppressDependencyCallbacks = _suppressDependencyCallbacks;
     _suppressDependencyCallbacks = true;
@@ -1279,12 +1273,8 @@ public partial class EngineTask
   /// Fires a trigger into the state machine.
   /// Only returns when the firing has completed or earlier if this task is not RequiredForRunning.
   /// </summary>
-  /// <remarks>
-  /// The current implementation forwards <paramref name="reason"/> to Stateless for all triggers.
-  /// Only parameterized triggers actually consume this (Fail / FailRecovery). For other triggers, the parameter may be ignored.
-  /// </remarks>
   /// <returns>Task that executes the trigger.</returns>
-  public async Task FireAsync(EngineTaskTrigger trigger, string reason = "")
+  internal async Task FireAsync(EngineTaskTrigger trigger)
   {
     if (trigger == EngineTaskTrigger.Reset)
     {
@@ -1293,15 +1283,7 @@ public partial class EngineTask
     }
 
     using (await _triggerLock.LockAsync().ConfigureAwait(false))
-    {
-      var wasFailed = State == EngineTaskState.Failed;
-      await FireMachineAsync(trigger, reason).ConfigureAwait(false);
-
-      // No exception of the work's logs this failure, so it is the one error; a Fail that does not move the task to
-      // Failed logs no error.
-      if (trigger == EngineTaskTrigger.Fail && !wasFailed && State == EngineTaskState.Failed)
-        LogFailedFromOutside(Logger, FailReason);
-    }
+      await StateMachine.FireAsync(trigger).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1421,17 +1403,12 @@ public partial class EngineTask
       if (cancelRun)
         RequestCancellation();
 
-      await FireMachineAsync(trigger, reason).ConfigureAwait(false);
+      // With the reason as the trigger's argument when one is given.
+      await (string.IsNullOrEmpty(reason) ? StateMachine.FireAsync(trigger) : StateMachine.FireAsync(trigger, reason))
+        .ConfigureAwait(false);
       return true;
     }
   }
-
-  /// <summary>
-  /// Fires <paramref name="trigger"/> into the state machine, with <paramref name="reason"/> as its argument when one
-  /// is given. The caller holds the trigger lock.
-  /// </summary>
-  private Task FireMachineAsync(EngineTaskTrigger trigger, string reason) =>
-    string.IsNullOrEmpty(reason) ? StateMachine.FireAsync(trigger) : StateMachine.FireAsync(trigger, reason);
 
   /// <summary>
   /// Cancels the run's work, but only while the run is still the current one.
@@ -1473,8 +1450,7 @@ public partial class EngineTask
   }
 
   /// <summary>
-  /// Fires Cancel if the run's token was cancelled, as <see cref="CheckForCancellation"/> does, but only while the run
-  /// is still the current one.
+  /// Fires Cancel if the run's token was cancelled, but only while the run is still the current one.
   /// </summary>
   /// <param name="run">The generation the run started in.</param>
   /// <param name="token">The run's token, taken with the generation.</param>
@@ -1493,21 +1469,6 @@ public partial class EngineTask
   // ---------------------------
   // Work execution
   // ---------------------------
-
-  /// <summary>
-  /// Checks cancellation and, if requested, transitions to Cancelled.
-  /// </summary>
-  protected async Task<bool> CheckForCancellation()
-  {
-    if (CancellationToken.IsCancellationRequested)
-    {
-      LogCancellationRequested(Logger);
-      await FireCancelAsync();
-      return true;
-    }
-
-    return false;
-  }
 
   /// <summary>
   /// Waits until the work of a run that timed out or was cancelled has ended, so this run (see <see cref="StartRun"/>)
@@ -1646,7 +1607,7 @@ public partial class EngineTask
   /// <see cref="FireIfCurrentAsync"/>). A reset during the recovery's backoff cancels the wait; the recovery used to
   /// fire Cancel into the next run, which then ended Cancelled before it had started.
   /// </remarks>
-  protected virtual async Task ExecuteRecoveryAsync(int run)
+  private protected virtual async Task ExecuteRecoveryAsync(int run)
   {
     try
     {
@@ -1698,15 +1659,6 @@ public partial class EngineTask
       LogRecoveryFailed(Logger, ex, ex.Message);
       await FireIfCurrentAsync(run, EngineTaskTrigger.FailRecovery, ex.Message, exception: ex).ConfigureAwait(false);
     }
-  }
-
-  /// <summary>
-  /// Drives cancellation transition and normalizes <see cref="FailReason"/>.
-  /// </summary>
-  protected virtual async Task FireCancelAsync()
-  {
-    FailReason = CancellationReason();
-    await FireAsync(EngineTaskTrigger.Cancel).ConfigureAwait(false);
   }
 
   /// <inheritdoc/>
@@ -1773,9 +1725,6 @@ public partial class EngineTask
 
   [LoggerMessage(Level = LogLevel.Error, Message = "Exception: '{Reason}'.")]
   private static partial void LogWorkFailed(ILogger logger, Exception exception, string reason);
-
-  [LoggerMessage(Level = LogLevel.Error, Message = "Failed from outside its work. Reason: '{Reason}'.")]
-  private static partial void LogFailedFromOutside(ILogger logger, string reason);
 
   [LoggerMessage(Level = LogLevel.Warning,
     Message = "The work did not stop within {Grace} after the time-out; it is abandoned and the task is not retried.")]

@@ -511,7 +511,7 @@ public class EngineLifecycleTokenTest
     : EngineTask("Held", token => Task.Delay(System.Threading.Timeout.Infinite, token), requiredForRunning: true, NullLogger.Instance,
       engineToken)
   {
-    protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
+    private protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
     {
       ending.Set();
       release.Wait(MustComplete);
