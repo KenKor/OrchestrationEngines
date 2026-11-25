@@ -21,7 +21,7 @@ public class RecoveryWithoutHelperTest
   private sealed class HelperClearedTask() : EngineTask("Load", _ => throw new InvalidOperationException("Run fails."),
     requiredForRunning: true, NullLogger.Instance, CancellationToken.None)
   {
-    protected override Task ExecuteRecoveryAsync(int run)
+    private protected override Task ExecuteRecoveryAsync(int run)
     {
       RecoveryHelper = null;
       return base.ExecuteRecoveryAsync(run);

@@ -35,7 +35,7 @@ public class StateMachinePublicationTest
     public int NumberOf(StateMachine<EngineTaskState, EngineTaskTrigger> machine) =>
       _numbers.TryGetValue(machine, out var number) ? number : -1;
 
-    protected override StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
+    private protected override StateMachine<EngineTaskState, EngineTaskTrigger> CreateStateMachine()
     {
       var machine = base.CreateStateMachine();
       // Numbered before it is published. The init lock serializes the builds; the increment does not rely on it.

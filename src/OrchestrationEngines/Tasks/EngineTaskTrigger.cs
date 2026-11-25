@@ -14,7 +14,7 @@ namespace OrchestrationEngines.Tasks;
 /// failure, and recovery behavior.
 /// </para>
 /// </remarks>
-public enum EngineTaskTrigger
+internal enum EngineTaskTrigger
 {
   /// <summary>
   /// Signals that the task should begin execution.

@@ -325,7 +325,7 @@ internal partial class EngineKickStartTask : EngineTask
     /// <summary>
     /// Resets this task and the associated engine tasks in preparation for re-execution.
     /// </summary>
-    protected override async Task OnResetEnteredAsync()
+    private protected override async Task OnResetEnteredAsync()
     {
         // Reset all engine-level tasks before restarting. That prepares a restart which only this task carries out, when it
         // runs again. A run that is still starting the engine (this reset ended it, but its work goes on) has not recorded
@@ -369,7 +369,7 @@ internal partial class EngineKickStartTask : EngineTask
     /// was prepared), and not left Ready on the previous context, which looks the same as a right answer (#86 item 7):
     /// by that run once its start returns, or here if it has returned already.
     /// </remarks>
-    protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
+    private protected override void OnFailedEntered(string reasonFromTrigger = null, bool cancelled = false)
     {
         base.OnFailedEntered(reasonFromTrigger, cancelled);
         BaseEngine abandoned;
