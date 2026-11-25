@@ -622,7 +622,7 @@ The library stays small on purpose. A new public member, guarantee or hardening 
 
 - **No dispatcher or thread of its own.** The coordinator's calls run on the caller's side; task work runs on the
   thread pool.
-- **No queueing of overlapping generation switches.** A host that can issue overlapping generation switches serialises them itself.
+- **No queueing of overlapping generation switches.** A host that can issue them serialises them itself.
 - **No new generation-switch features.** The switch is kept as it is.
 - **No guarantees for call patterns nobody uses.** A race found on such a path is documented rather than fixed.
 - **No .NET Framework or `netstandard` target.**
