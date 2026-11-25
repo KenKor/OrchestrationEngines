@@ -146,25 +146,9 @@ public abstract partial class BaseEngine : IEngine
   public IReadOnlyDictionary<string, EngineTask> Tasks => _tasks;
 
   /// <summary>
-  /// Indicates whether any task is currently running.
-  /// </summary>
-  public bool IsRunning() => _tasks.Values.Any(t => t.State == EngineTaskState.Running);
-
-  /// <summary>
-  /// Indicates whether any task has been cancelled.
-  /// </summary>
-  public bool IsTaskCancelled() => _tasks.Values.Any(t => t.State == EngineTaskState.Cancelled);
-
-  /// <summary>
   /// Indicates whether all tasks have completed (success, failure, or cancellation).
   /// </summary>
   public bool IsCompleted => _tasks.Values.All(t => t.InnerTask.IsCompleted);
-
-  /// <summary>
-  /// Indicates whether all tasks required for running have completed.
-  /// </summary>
-  public bool IsRequiredCompleted =>
-      _tasks.Values.Where(t => t.RequiredForRunning).All(t => t.InnerTask.IsCompleted);
 
   /// <summary>
   /// Indicates whether all tasks completed successfully.
@@ -313,7 +297,7 @@ public abstract partial class BaseEngine : IEngine
   /// Requests cancellation of all engine activities.
   /// </summary>
   /// <remarks>
-  /// As for <see cref="CancelAll"/>: the token's callbacks run under the engine's source gate.
+  /// The token's callbacks run under the engine's source gate.
   /// </remarks>
   protected virtual void RequestCancellation() => CancelSource();
 
@@ -637,12 +621,6 @@ public abstract partial class BaseEngine : IEngine
     await EnsureReadyAsync().ConfigureAwait(false);
     await StopAsync().ConfigureAwait(false);
   }
-
-  /// <summary>
-  /// Validates that no EngineTask depends on itself.
-  /// </summary>
-  /// <exception cref="CyclicEngineTaskDependencyException"></exception>
-  public void CheckForCyclicDependecies() => EngineTask.CheckForCycles(_tasks.Values);
 
   /// <summary>
   /// The last start that was called: the next start waits until it has ended (see <see cref="StartAsync"/>). Completes
@@ -1132,7 +1110,7 @@ public abstract partial class BaseEngine : IEngine
   /// </remarks>
   /// <exception cref="CyclicEngineTaskDependencyException">Tasks that depend on one of <paramref name="tasks"/>, directly
   /// or not, form a cycle (possible only for tasks added after the set-up, which
-  /// <see cref="CheckForCyclicDependecies()"/> did not see). The task in the exception is the one of
+  /// <see cref="EngineTask.CheckForCycles"/> did not see). The task in the exception is the one of
   /// <paramref name="tasks"/> that the cycle depends on, which need not be in the cycle itself.</exception>
   /// <param name="tasks">The tasks to put in levels.</param>
   /// <param name="taskSet">The engine's tasks as the caller read them, holding <paramref name="tasks"/>; null to read
@@ -1606,7 +1584,7 @@ public abstract partial class BaseEngine : IEngine
   /// <see cref="StopAsync"/> on another thread waits for them. A callback that waits for another cancel or stop of this
   /// engine may deadlock: hand that off (for example with <c>Task.Run</c>).
   /// </remarks>
-  public void CancelAll()
+  internal void CancelAll()
   {
     LogCancellingAllTasks();
     CancelSource();
@@ -1749,22 +1727,6 @@ public abstract partial class BaseEngine : IEngine
     AddAllDependents([task], visited, DirectDependents(_tasks.Values));
     return visited;
   }
-
-  /// <summary>
-  /// Collection of tasks, in order as defined by the engine descriptor. Each call looks through every task.
-  /// </summary>
-  /// <param name="task">Task's who's dependents (tasks that are depedent on) we want to retrieve.</param>
-  /// <returns></returns>
-  protected IEnumerable<EngineTask> GetDependents(EngineTask task) => _tasks.Values
-      .Where(t => t.DependsOn.Contains(task));
-
-  /// <summary>
-  /// Collection of tasks, ordered on name. Each call looks through every task, as <see cref="GetDependents"/> does.
-  /// </summary>
-  /// <param name="task">Task's who's dependents (tasks that are depedent on) we want to retrieve.</param>
-  /// <returns></returns>
-  protected IEnumerable<EngineTask> GetDependentsOrdered(EngineTask task) => GetDependents(task)
-      .OrderBy(t => t.Name);
 
   // ---------------------------------------------------------------------
   // Reporting helpers (diagnostics only)

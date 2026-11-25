@@ -5,7 +5,7 @@ namespace OrchestrationEngines.Mermaid;
 /// <summary>
 /// Extensions on strings to produce Mermaid-safe node identifiers and labels.
 /// </summary>
-public static class StringExtension
+internal static class StringExtension
 {
   /// <summary>
   /// Converts a string into a Mermaid-safe node identifier.
@@ -13,7 +13,7 @@ public static class StringExtension
   /// </summary>
   /// <param name="identifier">The identifier.</param>
   /// <returns>The sanitized version of <paramref name="identifier"/>; an underscore when it is empty.</returns>
-  public static string ForMermaid(this string identifier)
+  internal static string ForMermaid(this string identifier)
   {
     if (string.IsNullOrWhiteSpace(identifier))
       return "_";

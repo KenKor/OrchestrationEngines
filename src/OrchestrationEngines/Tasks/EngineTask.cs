@@ -625,19 +625,6 @@ public partial class EngineTask
   // ---------------------------
 
   /// <summary>
-  /// Checks whether this task (transitively) depends on itself and throws if it does.
-  /// </summary>
-  /// <remarks>
-  /// This is a local safety check. A more complete validation can be done engine-wide by checking all tasks.
-  /// </remarks>
-  /// <exception cref="CyclicEngineTaskDependencyException"></exception>
-  public void CheckForCyclicDependecies()
-  {
-    if (GetAllDependsOn().Contains(this))
-      throw new CyclicEngineTaskDependencyException(this);
-  }
-
-  /// <summary>
   /// Validates that no task of <paramref name="tasks"/>, or a task they depend on, directly or not, depends on itself.
   /// </summary>
   /// <remarks>
@@ -682,20 +669,9 @@ public partial class EngineTask
   }
 
   /// <summary>
-  /// Returns a list of all tasks where this task is depending on.
-  /// Computes the transitive closure of <see cref="DependsOn"/> (direct + indirect dependencies).
-  /// </summary>
-  public IReadOnlyCollection<EngineTask> GetAllDependsOn()
-  {
-    var visited = new HashSet<EngineTask>();
-    CollectAllDependsOn(visited);
-    return visited;
-  }
-
-  /// <summary>
   /// Computes the transitive closure of <see cref="DependsOn"/>, including this task itself.
   /// </summary>
-  public IReadOnlyCollection<EngineTask> GetThisAndAllDependsOn()
+  internal IReadOnlyCollection<EngineTask> GetThisAndAllDependsOn()
   {
     var visited = new HashSet<EngineTask> { this };
     CollectAllDependsOn(visited);
@@ -820,21 +796,6 @@ public partial class EngineTask
         return;
       await StateMachine.FireAsync(trigger).ConfigureAwait(false);
     }
-  }
-
-  /// <summary>
-  /// Convenience helper to add this task as the parent of one or more dependents.
-  /// </summary>
-  public virtual EngineTask AddDependent(EngineTask dependant, params EngineTask[] dependents)
-  {
-    dependant.AddDependsOn(this);
-
-    foreach (var otherDependent in dependents)
-    {
-      otherDependent.AddDependsOn(this);
-    }
-
-    return this;
   }
 
   /// <summary>
@@ -1060,19 +1021,15 @@ public partial class EngineTask
   // ---------------------------
 
   /// <summary>
-  /// Returns true if this task has any dependencies.
-  /// </summary>
-  protected virtual bool HasDependecies() => DependsOn.Any();
-
-  /// <summary>
   /// Returns true when all dependencies have reached CompletedWithSuccess.
   /// </summary>
-  protected virtual bool DependenciesReady() => DependsOn.All(d => d.State == EngineTaskState.CompletedWithSuccess);
+  private protected virtual bool DependenciesReady() =>
+    DependsOn.All(d => d.State == EngineTaskState.CompletedWithSuccess);
 
   /// <summary>
   /// Returns true when a dependency has ended failed (including cancelled), so this task cannot run.
   /// </summary>
-  protected virtual bool AnyDependencyFailed() => DependsOn.Any(d => d.IsFailed);
+  private protected virtual bool AnyDependencyFailed() => DependsOn.Any(d => d.IsFailed);
 
   /// <summary>
   /// Returns where Start or a completed dependency takes a task that has not started: Running when it has no
@@ -1085,7 +1042,7 @@ public partial class EngineTask
   /// </remarks>
   private EngineTaskState DependencyDestination()
   {
-    if (!HasDependecies() || DependenciesReady())
+    if (_dependsOn.Count == 0 || DependenciesReady())
       return EngineTaskState.Running;
     return AnyDependencyFailed() ? EngineTaskState.DependencyFailed : EngineTaskState.WaitingForDependencies;
   }

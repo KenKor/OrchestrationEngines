@@ -500,9 +500,9 @@ public class EngineTaskTest
   {
     public bool Failed { get; set; }
 
-    protected override bool DependenciesReady() => false;
+    private protected override bool DependenciesReady() => false;
 
-    protected override bool AnyDependencyFailed() => Failed;
+    private protected override bool AnyDependencyFailed() => Failed;
   }
 
   /// <summary>
