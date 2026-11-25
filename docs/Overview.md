@@ -545,6 +545,60 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   own failure. The current coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and
   a lookup of one of them gives null.
 
+##### Rebuilding one engine with a new context
+
+`RefreshEngineContextAsync` gives a running engine a new context in place, and its `ContextChanged` decides what to
+load again. To build the engine again with the new context instead, switch to a generation in which only its
+descriptor differs:
+
+```csharp
+var definitions = coordinator.GetRegisteredDefinitions();
+var current = definitions.Single(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+var rebuilt = new EngineDescriptor(current.Name, engineFactory, current.RequiredForRunning, current.Version + 1)
+  .SetContextFactory(newContextFactory);
+foreach (var dependency in current.DependsOn)
+  rebuilt.AddDependsOn(dependency);
+// Set the restart policy, recovery helper and restart factory again, as the engine had them.
+coordinator = await coordinator.RestartWithDefinitionsAsync(
+  definitions.Where(d => d != current).Append(rebuilt), token: token);
+```
+
+- **Pass the factory the engine was registered with** as `engineFactory`, not `current.EngineFactory`: after an
+  earlier switch that is the switch's own factory, which can hand the new engine an engine of an older generation, and
+  each rebuild would chain one more generation to it.
+- **Make a new descriptor.** `GetRegisteredDefinitions` returns the registered descriptors themselves, and the switch
+  compares the candidates with them: a registered descriptor changed in place (`SetVersion`, `ContextFactory`) is
+  compared with itself, and the engine counts as unchanged.
+- **Bump the version.** The switch compares descriptors by name and version, not by their factories. Without the
+  bump the engine counts as unchanged: its restart factory is told nothing changed (`EngineRestartInput.NothingChanged`)
+  and may take over the old engine's state, which was loaded with the old context. With it, its restart factory is told
+  the definition changed; without a restart factory it is rebuilt from scratch, stopped before the next generation
+  starts.
+- **Every engine is a new instance.** Each engine of the next generation gets a new instance and a context that its
+  descriptor's context factory computes again. An engine with a restart factory is handed its previous engine and can
+  take over its loaded state: one that depends on the rebuilt engine, also indirectly, is told a dependency changed
+  (`DependencyChanged`), and its restart factory should load again what it built on it; the others are told nothing
+  changed. An engine without a restart factory loads from scratch. To rebuild only the one engine, give the others a
+  restart factory.
+- **Contexts come from the factories again.** A context given with `RefreshEngineContextAsync` is not carried over: each
+  engine gets what its descriptor's context factory computes, and a factory whose closure captured state at its
+  registration computes that old state again. Register context factories that read the current state when they
+  run.
+- **Use the coordinator the switch returns.** The replaced one is shut down; a lookup on it is answered by the current
+  generation.
+- **During the switch** a lookup of an engine rebuilt from scratch gets the previous engine until its stop begins, and
+  then waits for the next generation and is answered there; a lookup of one handed over to its restart factory gets the
+  previous engine until the switch hands over. A context refresh or task reset of an engine the previous generation had
+  waits for the next generation.
+- **When the switch fails** before it hands over, the current coordinator stays current, and the engines that were not
+  rebuilt from scratch keep running. A rebuilt engine without a restart factory was stopped already: a lookup of it
+  gives null until a later switch succeeds.
+- **One switch at a time.** Overlapping switches are not queued (see Non-goals): the host serialises them.
+
+`DataPatchTest.EngineCoordinator_RestartWithDefinitions_DataPatchVersionBump_ReloadsPatchesButNotBase` covers the
+version bump: the bumped engine is told its definition changed, the one built on it that its dependency changed, and
+the one it is built on that nothing changed.
+
 ---
 
 ## Lifecycle Summary
