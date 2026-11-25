@@ -366,8 +366,10 @@ Concrete engines typically inherit from **`BaseEngine`**, which:
   synchronously from there
 
 To wait for one task, `EnsureReadyAsync(task)` starts it (and what it depends on) if needed and returns once they have
-all ended, whatever their state: the caller reads the task's state. Cancelling the wait's token ends the wait only.
-`EnsureTasksReadyAsync(taskNames)` waits in the same way for tasks by name, and returns false if it finds none of them.
+all ended, whatever their state; cancelling its token ends the wait only. The caller then reads the task's state from
+the task of that name in `Tasks`: a restart replaces the engine's tasks, and a task of the replaced set reads
+`Cancelled`. `EnsureTasksReadyAsync(taskNames)` takes no token: it starts the engine's tasks if needed, waits until the
+named ones have ended (not what they depend on), and returns false if it finds none of them.
 
 Stopping is final: `StopAsync` cancels the engine's token, cancels the tasks that have not started their work, and the
 engine reports `Stopped` from then on: a reset of its tasks or a start after the stop does nothing. A stop during a
