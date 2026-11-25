@@ -21,13 +21,20 @@ public class EngineDefinitionDiffTest
     return descriptor;
   }
 
+  // Maps both lists by name as a generation switch does (the candidates under the switch's parameter name), then diffs.
+  private static EngineDefinitionDiff Diff(
+    EngineDescriptor[] currentDescriptors, EngineDescriptor[] candidateDescriptors)
+    => EngineDefinitionDiff.Create(
+      EngineDefinitionDiff.ToDictionaryByName(currentDescriptors, nameof(currentDescriptors)),
+      EngineDefinitionDiff.ToDictionaryByName(candidateDescriptors, nameof(candidateDescriptors)));
+
   /// <summary>
   /// Verifies that a version bump of one network leaves an independent network alone.
   /// </summary>
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnOneNetwork_LeavesIndependentNetworkUnchanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("North"), Descriptor("South")],
       [Descriptor("North", version: 2), Descriptor("South")]);
 
@@ -42,7 +49,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnBase_MarksWholePatchChainChanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Patch", dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")],
       [Descriptor("AsBuilt", version: 2), Descriptor("Patch", dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")]);
 
@@ -57,7 +64,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_VersionBumpOnMiddlePatch_LeavesBaseUnchanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Patch", dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")],
       [Descriptor("AsBuilt"), Descriptor("Patch", version: 2, dependsOn: "AsBuilt"), Descriptor("PatchOnPatch", dependsOn: "Patch")]);
 
@@ -71,7 +78,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_TwoPatchesOnOneBase_BumpOneLeavesTheOtherUnchanged()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Planned", dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt")],
       [Descriptor("AsBuilt"), Descriptor("Planned", version: 2, dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt")]);
 
@@ -85,7 +92,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_DuplicateNameInOtherCase_Throws()
   {
-    var create = () => EngineDefinitionDiff.Create(
+    var create = () => Diff(
       [Descriptor("North")],
       [Descriptor("North"), Descriptor("NORTH", version: 2)]);
 
@@ -98,7 +105,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_NullListsAndEntries_AreSkipped()
   {
-    var diff = EngineDefinitionDiff.Create(null, [null, Descriptor("North")]);
+    var diff = Diff(null, [null, Descriptor("North")]);
 
     diff.AddedEngineNames.Should().Equal("North");
     diff.RemovedEngineNames.Should().BeEmpty();
@@ -112,7 +119,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_AddedAndRemoved_IgnoreCase()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("North"), Descriptor("Old")],
       [Descriptor("NORTH"), Descriptor("New")]);
 
@@ -128,7 +135,7 @@ public class EngineDefinitionDiffTest
   public void EngineDefinitionDiff_Create_Diamond_RestartsTheBottomOnce()
   {
     var bottom = Descriptor("Merged", dependsOn: "Planned").AddDependsOn("Repair");
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("AsBuilt"), Descriptor("Planned", dependsOn: "AsBuilt"), Descriptor("Repair", dependsOn: "AsBuilt"),
         Descriptor("Merged", dependsOn: "Planned").AddDependsOn("Repair")],
       [Descriptor("AsBuilt", version: 2), Descriptor("Planned", dependsOn: "AsBuilt"),
@@ -144,7 +151,7 @@ public class EngineDefinitionDiffTest
   [Fact]
   public void EngineDefinitionDiff_Create_DependencyNotAmongTheCandidates_IsIgnored()
   {
-    var diff = EngineDefinitionDiff.Create(
+    var diff = Diff(
       [Descriptor("Gone"), Descriptor("North")],
       [Descriptor("North", version: 2, dependsOn: "Gone"), Descriptor("South", dependsOn: "Elsewhere")]);
 

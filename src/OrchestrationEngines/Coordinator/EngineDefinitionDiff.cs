@@ -12,7 +12,7 @@ namespace OrchestrationEngines.Coordinator;
 /// - restart roots are engines whose definition version changed,
 /// - restart closure is those roots plus all transitive dependents.
 /// </remarks>
-public sealed class EngineDefinitionDiff
+internal sealed class EngineDefinitionDiff
 {
   private EngineDefinitionDiff(
     IReadOnlyCollection<string> addedEngineNames,
@@ -56,18 +56,6 @@ public sealed class EngineDefinitionDiff
   /// Returns true when any restart is required.
   /// </summary>
   public bool RequiresRestart => RestartRequiredEngineNames.Count > 0;
-
-  /// <summary>
-  /// Builds a diff between current and candidate definitions.
-  /// </summary>
-  public static EngineDefinitionDiff Create(
-    IEnumerable<EngineDescriptor> currentDescriptors,
-    IEnumerable<EngineDescriptor> candidateDescriptors)
-  {
-    return Create(
-      ToDictionaryByName(currentDescriptors, nameof(currentDescriptors)),
-      ToDictionaryByName(candidateDescriptors, nameof(candidateDescriptors)));
-  }
 
   /// <summary>
   /// Builds a diff between definitions already mapped by name (see <see cref="ToDictionaryByName"/>).
