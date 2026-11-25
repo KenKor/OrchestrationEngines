@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
 using OrchestrationEngines.Tasks;
 using Xunit;
@@ -116,16 +115,6 @@ public class KickStartContextResetTest
     }
   }
 
-  private static EngineDescriptor Register(EngineCoordinator coordinator, string name, IEngine engine,
-    Func<IEngineContext> context = null, string dependsOn = null)
-  {
-    var descriptor = coordinator.RegisterEngine(name, _ => Task.FromResult(engine), requiredForRunning: true)
-      .SetContextFactory(_ => Task.FromResult(context?.Invoke() ?? new NoContext()));
-    if (dependsOn != null)
-      descriptor.AddDependsOn(dependsOn);
-    return descriptor;
-  }
-
   /// <summary>
   /// Registers <paramref name="session"/> on a new coordinator, without restarts, with a context taken from
   /// <paramref name="current"/> that fails for workspace-C once the test completes the returned gate, and starts it.
@@ -166,7 +155,8 @@ public class KickStartContextResetTest
     var current = "workspace-A";
     var session = new HeldStartEngine();
     var coordinator = new ContextResettingCoordinator(nameof(KickStartContextResetTest));
-    Register(coordinator, "Session", session, () => new ValueContext(current));
+    coordinator.RegisterEngine("Session", _ => Task.FromResult<IEngine>(session), requiredForRunning: true)
+      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new ValueContext(current)));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var hold = session.HoldNextStart();
 
