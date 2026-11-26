@@ -297,8 +297,8 @@ public class GenerationSwitchEdgeCaseTest
   }
 
   /// <summary>
-  /// Verifies that a second switch asked of a coordinator whose first switch has handed over, while that next
-  /// generation is not yet ready, goes to the current generation and leaves one generation running.
+  /// Verifies that a second switch asked of a coordinator while the next generation of its first switch is not yet
+  /// ready leaves one generation running.
   /// </summary>
   [Fact]
   public async Task Switch_TwoOnOneCoordinator_LeaveOneGenerationRunning()
