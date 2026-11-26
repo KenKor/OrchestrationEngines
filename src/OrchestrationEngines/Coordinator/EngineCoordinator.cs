@@ -363,8 +363,9 @@ public partial class EngineCoordinator : IDisposable
   /// The switch returns once the new coordinator has started, without waiting until it is ready: then all
   /// previous-generation engines are stopped to avoid duplicate runtime activity and token coupling to the old
   /// coordinator. A caller that needs the new engines ready calls <see cref="EnsureReadyAsync"/> on the coordinator
-  /// returned; <see cref="GetEngineIfCreated"/> gives an engine without waiting. Wait before a
-  /// <see cref="RefreshEngineContextAsync"/>: one that comes before the engine is created throws or is lost.
+  /// returned; <see cref="GetEngineIfCreated"/> gives an engine without waiting. Wait for the engine before a
+  /// <see cref="RefreshEngineContextAsync"/> (<see cref="GetEngineAsync(string, CancellationToken)"/> if it is not
+  /// required for running): one that comes before the engine is created throws or is lost.
   /// </para>
   /// <para>
   /// The engines rebuilt from scratch are stopped dependents first, as a shutdown stops them (see
@@ -1025,8 +1026,9 @@ public partial class EngineCoordinator : IDisposable
   /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
   /// generation and goes there too. A refresh that reaches a generation before it has created the engine and computed
   /// its context throws an <see cref="ArgumentException"/> or is replaced by the context the creation computes (a
-  /// known defect): during a switch, and right after one returns. After a switch, call <see cref="EnsureReadyAsync"/>
-  /// on the coordinator it returns before refreshing.
+  /// known defect): during a switch, and right after one returns. After a switch, wait on the coordinator it returns
+  /// before refreshing: <see cref="EnsureReadyAsync"/>, or <see cref="GetEngineAsync(string, CancellationToken)"/> for
+  /// an engine not required for running, which <see cref="EnsureReadyAsync"/> does not wait for.
   /// </remarks>
   /// <exception cref="ArgumentNullException"><paramref name="context"/> is null.</exception>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer

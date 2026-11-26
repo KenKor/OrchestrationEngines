@@ -221,7 +221,8 @@ Key properties:
   over, waits until the switch has started the next generation and goes there too. A refresh that reaches a generation
   before it has created the engine and computed its context throws an `ArgumentException` or is replaced by the
   context the creation computes (a known defect): this happens during a switch, and right after one returns. After a
-  switch, call `EnsureReadyAsync` on the coordinator it returns before refreshing. A context that needs the engines
+  switch, wait on the coordinator it returns before refreshing: `EnsureReadyAsync`, or `GetEngineAsync` for an engine
+  not required for running, which `EnsureReadyAsync` does not wait for. A context that needs the engines
   rebuilt is a generation switch (`RestartWithDefinitionsAsync`)
 
 Important implementations:
@@ -540,8 +541,9 @@ coordinator (a generation) with the new descriptors and shuts the current one do
 - The switch returns once the next generation has started, without waiting until it is ready; the previous engines are
   then usually stopped before their replacements start, so a restart factory must be able to take over a stopped
   engine's state. To wait for the next generation, call `EnsureReadyAsync` on the coordinator the switch returns;
-  `GetEngineIfCreated` gives an engine without waiting. Wait before a context refresh: one that comes before the next
-  generation has created the engine throws or is lost (see contexts above).
+  `GetEngineIfCreated` gives an engine without waiting. Wait for the engine before a context refresh (`GetEngineAsync`
+  if it is not required for running): one that comes before the next generation has created the engine throws or is
+  lost (see contexts above).
 - A switch that fails before it hands over (a rebuilt engine fails to stop, or the next coordinator fails to start)
   shuts the next coordinator down, or disposes it if it did not start, and throws its own failure. The current
   coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and a lookup of one of them
