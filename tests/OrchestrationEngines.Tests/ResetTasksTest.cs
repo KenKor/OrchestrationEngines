@@ -928,7 +928,7 @@ public class ResetTasksTest
     {
       if (name != "C" || switching != null)
         return;
-      switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+      switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions());
       // The switch stops this engine while its task is being reset.
       stoppedInTime = SpinWait.SpinUntil(() => first.IsCancellationRequested, MustComplete);
     };
@@ -959,7 +959,7 @@ public class ResetTasksTest
     var engines = new ConcurrentQueue<GraphEngine>();
     var coordinator = CoordinatorRecording(engines);
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
     try
     {

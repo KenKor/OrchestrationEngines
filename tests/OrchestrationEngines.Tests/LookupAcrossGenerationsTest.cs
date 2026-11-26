@@ -93,7 +93,7 @@ public class LookupAcrossGenerationsTest
 
     var timersBeforeSwitch = clock.TimersCreated;
     var next = await coordinator
-      .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+      .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
       .WaitAsync(MustComplete, ct);
 
     await EndsAtTheDeadlineAsync(lookup, clock, timersBeforeSwitch, deadline,
@@ -116,7 +116,7 @@ public class LookupAcrossGenerationsTest
 
     var timersBeforeSwitch = clock.TimersCreated;
     var switching = coordinator.RestartWithDefinitionsAsync(
-      coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+      coordinator.GetRegisteredDefinitions());
     await first.Stopping.Task.WaitAsync(MustComplete, ct);
 
     await EndsAtTheDeadlineAsync(lookup, clock, timersBeforeSwitch, deadline,
@@ -143,7 +143,7 @@ public class LookupAcrossGenerationsTest
 
     var timersBeforeSwitch = clock.TimersCreated;
     var switching = coordinator.RestartWithDefinitionsAsync(
-      coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+      coordinator.GetRegisteredDefinitions());
     await first.Stopping.Task.WaitAsync(MustComplete, ct);
     await Wait.UntilAsync(() => lookup.IsCompleted || clock.DueTimesSince(timersBeforeSwitch).Contains(deadline),
       MustComplete, "the lookup must wait for the next generation");
@@ -172,7 +172,7 @@ public class LookupAcrossGenerationsTest
     var coordinator = await StartAsync(clock, RebuiltDescriptor(first));
     await Wait.UntilAsync(() => coordinator.Engines.ContainsKey(Name), MustComplete, "the engine must exist");
     var switching = coordinator.RestartWithDefinitionsAsync(
-      coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct);
+      coordinator.GetRegisteredDefinitions());
     await first.Stopping.Task.WaitAsync(MustComplete, ct);
 
     var timersBefore = clock.TimersCreated;

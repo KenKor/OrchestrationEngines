@@ -129,7 +129,7 @@ public class EngineDescriptorRecoveryTest
     coordinator.RegisterEngine("Network", Factory, requiredForRunning: true).SetRestartPolicy(RestartPolicy.Critical);
 
     var next = await coordinator
-      .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), token: ct)
+      .SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
     var copy = next.GetRegisteredDefinitions().Single();
 

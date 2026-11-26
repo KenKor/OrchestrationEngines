@@ -53,7 +53,7 @@ public class GenerationSwitchEdgeCaseTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var first = coordinator.GetEngineIfReady("A");
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     try
@@ -105,7 +105,7 @@ public class GenerationSwitchEdgeCaseTest
       await Task.Delay(100, ct);
       lookup.IsCompleted.Should().BeFalse("the first engine is still loading");
 
-      next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+      next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
         .WaitAsync(MustComplete, ct);
 
       var engine = await lookup.WaitAsync(MustComplete, ct);
@@ -143,7 +143,7 @@ public class GenerationSwitchEdgeCaseTest
 
     try
     {
-      var act = () => coordinator.RestartWithDefinitionsAsync([candidate], waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+      var act = () => coordinator.SwitchUntilReadyAsync([candidate], ct).WaitAsync(MustComplete, ct);
 
       (await act.Should().ThrowExactlyAsync<ArgumentNullException>()).WithParameterName("createEngineFactory");
       Volatile.Read(ref nextGenerations).Should().Be(0, "the copy fails before the next coordinator is created");
@@ -177,7 +177,7 @@ public class GenerationSwitchEdgeCaseTest
       .SetRestartPolicy(TestRestartPolicies.NoWait(5));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     try
@@ -221,7 +221,7 @@ public class GenerationSwitchEdgeCaseTest
     var previous = coordinator.GetEngineIfReady("A");
 
     var next = await coordinator
-      .RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      .SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     try
@@ -247,9 +247,9 @@ public class GenerationSwitchEdgeCaseTest
     var coordinator = new EngineCoordinator("Shutdown", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var first = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var first = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
-    var second = await first.RestartWithDefinitionsAsync(first.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var second = await first.SwitchUntilReadyAsync(first.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
     var engine = second.GetEngineIfReady("A");
 
@@ -271,11 +271,11 @@ public class GenerationSwitchEdgeCaseTest
     var coordinator = new EngineCoordinator("Switch", NullLogger.Instance);
     coordinator.RegisterEngine("A", _ => Task.FromResult<IEngine>(Quick()));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var second = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), true, ct)
+    var second = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
     var secondEngine = second.GetEngineIfReady("A");
 
-    var third = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), true, ct)
+    var third = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     try
@@ -297,9 +297,8 @@ public class GenerationSwitchEdgeCaseTest
   }
 
   /// <summary>
-  /// Verifies that a second switch asked of a coordinator while its first switch waits for the next generation to be
-  /// ready leaves one generation running: the second switch hands over first, so the first one may no longer hand
-  /// over and goes to the current generation instead.
+  /// Verifies that a second switch asked of a coordinator while the next generation of its first switch is not yet
+  /// ready leaves one generation running.
   /// </summary>
   [Fact]
   public async Task Switch_TwoOnOneCoordinator_LeaveOneGenerationRunning()
@@ -317,9 +316,9 @@ public class GenerationSwitchEdgeCaseTest
     coordinator.RegisterEngineDescriptor(Definition(Task.CompletedTask));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var waiting = coordinator.RestartWithDefinitionsAsync([Definition(gate.Task)], true, ct);
+    var waiting = coordinator.SwitchUntilReadyAsync([Definition(gate.Task)], ct);
     await Wait.UntilAsync(() => created.Count == 2, MustComplete, "the first switch created its engine");
-    var other = coordinator.RestartWithDefinitionsAsync([Definition(Task.CompletedTask)], true, ct);
+    var other = coordinator.SwitchUntilReadyAsync([Definition(Task.CompletedTask)], ct);
     await other.WaitAsync(MustComplete, ct);
     gate.SetResult();
     var results = await Task.WhenAll(waiting, other).WaitAsync(MustComplete, ct);

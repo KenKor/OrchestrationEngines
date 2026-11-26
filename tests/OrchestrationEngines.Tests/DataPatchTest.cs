@@ -88,12 +88,11 @@ public class DataPatchTest
   }
 
   /// <summary>
-  /// Verifies that a generation switch that does not wait until ready (as a host may do) still offers each restart
-  /// factory its previous engine with nothing changed, although the previous generation is stopped straight away,
-  /// and that the new generation becomes ready.
+  /// Verifies that a generation switch offers each restart factory its previous engine with nothing changed, although
+  /// the previous generation is stopped straight away, and that the new generation becomes ready.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_RestartWithDefinitions_WithoutWaiting_StillOffersPreviousEngine()
+  public async Task EngineCoordinator_RestartWithDefinitions_StillOffersPreviousEngine()
   {
     var ct = TestContext.Current.CancellationToken;
     var coordinator = CreateCoordinator();
@@ -110,7 +109,7 @@ public class DataPatchTest
     await coordinator.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
     var previousPatch = coordinator.Engines["Planned"];
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
       .WaitAsync(MustComplete, ct);
     var patch = await next.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
 
@@ -156,7 +155,7 @@ public class DataPatchTest
       Describe("PlannedOnPlanned", "Planned", version: 1),
     };
 
-    var next = await coordinator.RestartWithDefinitionsAsync(candidates, waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    var next = await coordinator.SwitchUntilReadyAsync(candidates, ct).WaitAsync(MustComplete, ct);
 
     offered["AsBuilt"].NothingChanged.Should().BeTrue();
     offered["Planned"].DefinitionChanged.Should().BeTrue();
@@ -305,7 +304,7 @@ public class DataPatchTest
     var asBuiltDescriptor = new EngineDescriptor("AsBuilt", _ => Task.FromResult<IEngine>(asBuilt), requiredForRunning: true)
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
     var next = await coordinator
-      .RestartWithDefinitionsAsync([.. coordinator.GetRegisteredDefinitions(), asBuiltDescriptor], token: ct)
+      .SwitchUntilReadyAsync([.. coordinator.GetRegisteredDefinitions(), asBuiltDescriptor], ct)
       .WaitAsync(MustComplete, ct);
     var patch = await next.GetEngineAsync("Planned", ct).WaitAsync(MustComplete, ct);
 

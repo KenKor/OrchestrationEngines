@@ -218,7 +218,11 @@ Key properties:
   engine decides in its `ContextChanged` hook what to redo. On a coordinator that a generation switch has replaced
   (once it has handed over), it goes to the newer generation, as `ResetTasksForEngineAsync` does; a name that generation
   does not have throws an `ArgumentException`. A call that arrives during a switch that has the engine, before it hands
-  over, waits until the switch has started the next generation and goes there too. A context that needs the engines
+  over, waits until the switch has started the next generation and goes there too. A refresh that reaches a generation
+  before it has created the engine and computed its context throws an `ArgumentException` or is replaced by the
+  context the creation computes (a known defect): this happens during a switch, and right after one returns. After a
+  switch, wait on the coordinator it returns before refreshing: `EnsureReadyAsync`, or `GetEngineAsync` for an engine
+  not required for running, which `EnsureReadyAsync` does not wait for. A context that needs the engines
   rebuilt is a generation switch (`RestartWithDefinitionsAsync`)
 
 Important implementations:
@@ -419,26 +423,23 @@ only once the policy gives up, which a lookup sees (it waits for the retries, an
 `RestartPolicy.Default` (five restarts in a row, the wait doubling from 1 s up to 10 s) a permanent error is given up on
 after about 25 seconds and six attempts. An engine factory or restart factory that returns null fails the creation in
 the same way, with an `InvalidOperationException` that names the engine. A host that needs a failed load to fault for
-good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation switch that
-waits until the next generation is ready keeps the previous generation (and the engine handed over) until the retries
-have ended. Other coordinator calls do not queue behind the switch. A lookup (`GetEngineAsync`) for an engine the
-switch rebuilds from scratch, and a context operation or task reset also for one it hands over, waits for the next
-generation to start and is answered there. One that reaches the next generation only after a failed switch shut it
-down is answered by the coordinator it was asked of.
+good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine, such as `EnsureReadyAsync`
+on the coordinator a generation switch returns. Other coordinator calls do not queue behind the switch. A lookup
+(`GetEngineAsync`) for an engine the switch rebuilds from scratch, and a context operation or task reset also for one it
+hands over, waits for the next generation to start and is answered there. One that reaches the next generation only
+after a failed switch shut it down is answered by the coordinator it was asked of.
 
 Every other lookup made through the host's coordinator during a switch sees the previous generation until the switch
 hands over. This matters for an engine of the next generation that, from its own load, looks up another engine through
 the host's coordinator; it should not do that during a switch. What it gets:
 
 - for an engine the switch hands over (one with a restart factory): the previous generation's engine, which the
-  hand-over then stops. With `waitUntilReady: false` the lookup races the hand-over, and gets either that engine or the
-  next generation's;
-- for an engine the switch adds: null with `waitUntilReady: true`, as the previous generation does not know it (an
-  exception with `throwErrorIfNotFound`). With `waitUntilReady: false` the lookup races the hand-over, and gets either
-  null (the exception) or the added engine;
-- on a coordinator that was never started: with `waitUntilReady: true` the lookup starts the previous generation after
-  all (its engine factories run a second time) and usually returns its engine, which the hand-over stops; this is a
-  race. With `waitUntilReady: false` it races the hand-over in the same way, and can get the next generation's engine.
+  hand-over then stops. The lookup races the hand-over, and gets either that engine or the next generation's;
+- for an engine the switch adds: the lookup races the hand-over, and gets either null (an exception with
+  `throwErrorIfNotFound`), as the previous generation does not know it, or the added engine;
+- on a coordinator that was never started: the lookup can start the previous generation after all (its engine
+  factories run a second time) and get its engine, which the hand-over stops, or get the next generation's engine: it
+  races the hand-over.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
@@ -537,13 +538,16 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   They run side by side, and the one that comes second cleans up its next coordinator and switches the current one.
   Overlapping `RestartWithDefinitionsAsync` calls on one coordinator are not queued: each builds a whole generation, and
   one wins. A host that can overlap them should serialise the calls itself.
-- With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
-  usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
-  state.
-- A switch that fails before it hands over (a rebuilt engine fails to stop, the next coordinator fails to start, or the
-  ready-wait fails or is cancelled) shuts the next coordinator down, or disposes it if it did not start, and throws its
-  own failure. The current coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and
-  a lookup of one of them gives null.
+- The switch returns once the next generation has started, without waiting until it is ready; the previous engines are
+  then usually stopped before their replacements start, so a restart factory must be able to take over a stopped
+  engine's state. To wait for the next generation, call `EnsureReadyAsync` on the coordinator the switch returns;
+  `GetEngineIfCreated` gives an engine without waiting. Wait for the engine before a context refresh (`GetEngineAsync`
+  if it is not required for running): one that comes before the next generation has created the engine throws or is
+  lost (see contexts above).
+- A switch that fails before it hands over (a rebuilt engine fails to stop, or the next coordinator fails to start)
+  shuts the next coordinator down, or disposes it if it did not start, and throws its own failure. The current
+  coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and a lookup of one of them
+  gives null.
 
 ##### Rebuilding one engine with a new context
 
@@ -560,7 +564,7 @@ foreach (var dependency in current.DependsOn)
   rebuilt.AddDependsOn(dependency);
 // Set the restart policy, recovery helper and restart factory again, as the engine had them.
 coordinator = await coordinator.RestartWithDefinitionsAsync(
-  definitions.Where(d => d != current).Append(rebuilt), token: token);
+  definitions.Where(d => d != current).Append(rebuilt));
 ```
 
 - **Pass the factory the engine was registered with** as `engineFactory`, not `current.EngineFactory`: after an

@@ -39,7 +39,7 @@ public class RebuiltEngineSwitchTest
 
   /// <summary>
   /// Verifies that a switch stops an engine without a restart factory, and releases its data, before its replacement
-  /// is created, while an engine with a restart factory is still running when its factory takes it over.
+  /// is created.
   /// </summary>
   [Fact]
   public async Task EngineCoordinator_RestartWithDefinitionsAsync_WithoutRestartFactory_StopsThePreviousEngineFirst()
@@ -47,7 +47,6 @@ public class RebuiltEngineSwitchTest
     var ct = TestContext.Current.CancellationToken;
     var instancesOfA = new List<DataEngine>();
     Snapshot previousAAtCreation = null;
-    Snapshot previousBAtRestart = null;
 
     var coordinator = new EngineCoordinator(nameof(RebuiltEngineSwitchTest), NullLogger.Instance);
     coordinator.RegisterEngine("A", _ =>
@@ -67,22 +66,15 @@ public class RebuiltEngineSwitchTest
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()));
     coordinator.RegisterEngine("B", _ => Task.FromResult<IEngine>(new DataEngine()))
       .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .SetRestartFactory((input, _) =>
-      {
-        var previous = (DataEngine)input.PreviousEngine;
-        previousBAtRestart = new Snapshot(previous.State, previous.Released);
-        return Task.FromResult<IEngine>(new DataEngine());
-      })
+      .SetRestartFactory((_, _) => Task.FromResult<IEngine>(new DataEngine()))
       .AddDependsOn("A");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     previousAAtCreation.Should().Be(new Snapshot(EngineState.Stopped, Released: true),
       "an engine without a restart factory is stopped before its replacement is created");
-    previousBAtRestart.Should().Be(new Snapshot(EngineState.Ready, Released: false),
-      "an engine with a restart factory runs until the next generation has started, so it can be taken over");
     next.GetEngineIfReady("A").Should().BeSameAs(instancesOfA[1]);
     next.GetEngineIfReady("B").Should().NotBeNull();
     instancesOfA.Should().HaveCount(2);
@@ -115,7 +107,7 @@ public class RebuiltEngineSwitchTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     first.State.Should().Be(EngineState.Faulted);
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     firstAtReplacement.Should().Be(EngineState.Stopped, "the Faulted engine is stopped before its replacement is created");

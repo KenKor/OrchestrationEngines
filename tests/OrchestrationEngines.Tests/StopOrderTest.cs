@@ -394,8 +394,8 @@ public class StopOrderTest
     RegisterRebuilt(coordinator, c, "C").AddDependsOn("B");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = coordinator.RestartWithDefinitionsAsync(
-      coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
+    var next = coordinator.SwitchUntilReadyAsync(
+      coordinator.GetRegisteredDefinitions(), ct);
     try
     {
       await c.StopEntered.Task.WaitAsync(MustComplete, ct);
@@ -435,8 +435,8 @@ public class StopOrderTest
     RegisterRebuilt(coordinator, b, "B").AddDependsOn("H");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = coordinator.RestartWithDefinitionsAsync(
-      coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
+    var next = coordinator.SwitchUntilReadyAsync(
+      coordinator.GetRegisteredDefinitions(), ct);
     try
     {
       await b.StopEntered.Task.WaitAsync(MustComplete, ct);
@@ -472,8 +472,8 @@ public class StopOrderTest
     RegisterHandedOver(coordinator, c, "C").AddDependsOn("B");
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = coordinator.RestartWithDefinitionsAsync(
-      coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct);
+    var next = coordinator.SwitchUntilReadyAsync(
+      coordinator.GetRegisteredDefinitions(), ct);
     try
     {
       await c.StopEntered.Task.WaitAsync(MustComplete, ct);

@@ -92,7 +92,7 @@ public class PreviousEngineReleaseTest
       MustComplete, "the first engine must load");
     var previous = coordinator.GetEngineIfReady(Patch);
 
-    var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+    var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
       .WaitAsync(MustComplete, ct);
     await Wait.UntilAsync(() => nextCoordinator.GetEngineIfReady(Patch) != null,
       MustComplete, "the next engine must load");
@@ -117,7 +117,7 @@ public class PreviousEngineReleaseTest
     coordinator.RegisterEngineDescriptor(Descriptor(Patch, required: true, previous => Offered(nextPatch, previous), builtOn: Base));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+    var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
       .WaitAsync(MustComplete, ct);
 
     await Wait.UntilAsync(() => nextPatch.Releases == 1,
@@ -158,7 +158,7 @@ public class PreviousEngineReleaseTest
     coordinator.RegisterEngineDescriptor(Descriptor(Patch, required: true, _ => throw new InvalidOperationException("The creation fails.")));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var previous = new WeakReference(coordinator.GetEngineIfReady(Patch));
-    var nextCoordinator = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var nextCoordinator = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
     return (previous, nextCoordinator);
   }
