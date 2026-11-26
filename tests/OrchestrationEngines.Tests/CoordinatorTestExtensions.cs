@@ -8,7 +8,7 @@ namespace OrchestrationEngines.Tests;
 /// <summary>
 /// A generation switch followed by a wait until the next generation is ready, as most tests want it.
 /// </summary>
-internal static class SwitchUntilReady
+internal static class CoordinatorTestExtensions
 {
   /// <summary>
   /// Switches to a generation built from <paramref name="candidates"/>, then waits until it is ready.

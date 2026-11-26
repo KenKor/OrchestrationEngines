@@ -157,7 +157,7 @@ public class GenerationSwitchShutdownTest
 
   /// <summary>
   /// Verifies that a lookup made on the replaced coordinator after the switch (a caller that still holds it) is answered
-  /// by the next generation too, also the one that does not wait.
+  /// by the next generation too.
   /// </summary>
   [Fact]
   public async Task EngineCoordinator_ReplacedCoordinator_LaterLookups_AreAnsweredByTheNextGeneration()

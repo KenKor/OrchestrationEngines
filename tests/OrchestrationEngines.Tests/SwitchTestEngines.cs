@@ -55,4 +55,12 @@ internal static class SwitchTestEngines
       .WithoutRestarts();
     return next == null ? descriptor : descriptor.SetRestartFactory((_, _) => Task.FromResult(next()));
   }
+
+  /// <summary>
+  /// A descriptor whose task graph names an engine that is not registered, so a next coordinator that has it fails to
+  /// start (a <see cref="System.Collections.Generic.KeyNotFoundException"/>).
+  /// </summary>
+  public static EngineDescriptor Unstartable() =>
+    new EngineDescriptor("Planned", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
+      .AddDependsOn("NotRegistered");
 }

@@ -218,7 +218,9 @@ Key properties:
   engine decides in its `ContextChanged` hook what to redo. On a coordinator that a generation switch has replaced
   (once it has handed over), it goes to the newer generation, as `ResetTasksForEngineAsync` does; a name that generation
   does not have throws an `ArgumentException`. A call that arrives during a switch that has the engine, before it hands
-  over, waits until the switch has started the next generation and goes there too. A context that needs the engines
+  over, waits until the switch has started the next generation and goes there too; it can arrive before that generation
+  has created the engine, and then throws an `ArgumentException` or is replaced by the context the creation computes
+  (a known defect). A context that needs the engines
   rebuilt is a generation switch (`RestartWithDefinitionsAsync`)
 
 Important implementations:
@@ -419,12 +421,11 @@ only once the policy gives up, which a lookup sees (it waits for the retries, an
 `RestartPolicy.Default` (five restarts in a row, the wait doubling from 1 s up to 10 s) a permanent error is given up on
 after about 25 seconds and six attempts. An engine factory or restart factory that returns null fails the creation in
 the same way, with an `InvalidOperationException` that names the engine. A host that needs a failed load to fault for
-good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine: a generation switch that
-waits until the next generation is ready keeps the previous generation (and the engine handed over) until the retries
-have ended. Other coordinator calls do not queue behind the switch. A lookup (`GetEngineAsync`) for an engine the
-switch rebuilds from scratch, and a context operation or task reset also for one it hands over, waits for the next
-generation to start and is answered there. One that reaches the next generation only after a failed switch shut it
-down is answered by the coordinator it was asked of.
+good at once sets `RestartPolicy = null`. The retries also delay what waits for the engine, such as `EnsureReadyAsync`
+on the coordinator a generation switch returns. Other coordinator calls do not queue behind the switch. A lookup
+(`GetEngineAsync`) for an engine the switch rebuilds from scratch, and a context operation or task reset also for one it
+hands over, waits for the next generation to start and is answered there. One that reaches the next generation only
+after a failed switch shut it down is answered by the coordinator it was asked of.
 
 Every other lookup made through the host's coordinator during a switch sees the previous generation until the switch
 hands over. This matters for an engine of the next generation that, from its own load, looks up another engine through

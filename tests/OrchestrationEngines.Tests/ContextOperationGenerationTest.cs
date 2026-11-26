@@ -12,10 +12,10 @@ using Xunit;
 namespace OrchestrationEngines.Tests;
 
 /// <summary>
-/// Contains tests for context refreshes on a coordinator that a generation switch
-/// replaced, which hand off to the newer generation (#86, item 1), or during a switch that rebuilds the engine from
-/// scratch (#123) or hands it over to its restart factory (#145), before it hands over, which wait for the next
-/// generation and act there.
+/// Contains tests for context operations on a coordinator that a generation switch replaced, which hand off to the
+/// newer generation (#86, item 1), and for a task reset during a switch, before it hands over, which waits for the next
+/// generation and acts there (#123, #145). A refresh in that window is not tested: it can reach the next generation
+/// before that generation has created the engine (a known defect, see RefreshEngineContextAsync).
 /// </summary>
 public class ContextOperationGenerationTest
 {

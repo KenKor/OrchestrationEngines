@@ -88,12 +88,11 @@ public class DataPatchTest
   }
 
   /// <summary>
-  /// Verifies that a generation switch that does not wait until ready (as a host may do) still offers each restart
-  /// factory its previous engine with nothing changed, although the previous generation is stopped straight away,
-  /// and that the new generation becomes ready.
+  /// Verifies that a generation switch offers each restart factory its previous engine with nothing changed, although
+  /// the previous generation is stopped straight away, and that the new generation becomes ready.
   /// </summary>
   [Fact]
-  public async Task EngineCoordinator_RestartWithDefinitions_WithoutWaiting_StillOffersPreviousEngine()
+  public async Task EngineCoordinator_RestartWithDefinitions_StillOffersPreviousEngine()
   {
     var ct = TestContext.Current.CancellationToken;
     var coordinator = CreateCoordinator();

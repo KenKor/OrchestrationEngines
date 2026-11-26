@@ -1022,7 +1022,8 @@ public partial class EngineCoordinator : IDisposable
   /// <see cref="Current"/>), the context goes to the newer generation's engine, as with
   /// <see cref="ResetTasksForEngineAsync"/>. A call that arrives during a switch that has the engine (rebuilt from
   /// scratch, or handed over to its restart factory), before it hands over, waits until the switch has started the next
-  /// generation and goes there too.
+  /// generation and goes there too. It can arrive before that generation has created the engine, and then throws an
+  /// <see cref="ArgumentException"/> or is replaced by the context the creation computes (a known defect).
   /// </remarks>
   /// <exception cref="ArgumentNullException"><paramref name="context"/> is null.</exception>
   /// <exception cref="ArgumentException">No engine is registered under <paramref name="name"/> (on the newer

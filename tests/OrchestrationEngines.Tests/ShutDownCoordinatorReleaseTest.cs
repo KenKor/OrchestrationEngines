@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
-using OrchestrationEngines.Engine;
 using Xunit;
 using static OrchestrationEngines.Tests.SwitchTestEngines;
 
@@ -89,8 +88,7 @@ public class ShutDownCoordinatorReleaseTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var candidates = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions())
     {
-      new EngineDescriptor("Planned", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
-        .AddDependsOn("NotRegistered"),
+      Unstartable(),
     };
 
     var thrown = await Record.ExceptionAsync(() =>

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using AwesomeAssertions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
 using OrchestrationEngines.Engine;
@@ -21,9 +20,9 @@ public class SwitchFailureCleanUpTest
   /// <summary>
   /// A coordinator whose next generation the test can see: the switch hands it over only when it succeeds.
   /// </summary>
-  private static EngineCoordinator CreateCoordinator(List<EngineCoordinator> nextGenerations, ILogger logger = null)
+  private static EngineCoordinator CreateCoordinator(List<EngineCoordinator> nextGenerations)
   {
-    var coordinator = new EngineCoordinator(nameof(SwitchFailureCleanUpTest), logger ?? NullLogger.Instance);
+    var coordinator = new EngineCoordinator(nameof(SwitchFailureCleanUpTest), NullLogger.Instance);
     coordinator.NextGenerationCreated = nextGenerations.Add;
     return coordinator;
   }
@@ -68,8 +67,7 @@ public class SwitchFailureCleanUpTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
     var candidates = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions())
     {
-      new EngineDescriptor("Planned", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
-        .AddDependsOn("NotRegistered"),
+      Unstartable(),
     };
 
     var thrown = await Record.ExceptionAsync(() =>
