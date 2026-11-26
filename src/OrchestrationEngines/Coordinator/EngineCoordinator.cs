@@ -360,8 +360,10 @@ public partial class EngineCoordinator : IDisposable
   /// </list>
   /// </para>
   /// <para>
-  /// After the new coordinator is launched and optionally ready, all previous-generation engines
-  /// are stopped to avoid duplicate runtime activity and token coupling to the old coordinator.
+  /// The switch returns once the new coordinator has started, without waiting until it is ready: then all
+  /// previous-generation engines are stopped to avoid duplicate runtime activity and token coupling to the old
+  /// coordinator. A caller that needs the new engines ready calls <see cref="EnsureReadyAsync"/> on the coordinator
+  /// returned; <see cref="GetEngineIfCreated"/> gives an engine without waiting.
   /// </para>
   /// <para>
   /// The engines rebuilt from scratch are stopped dependents first, as a shutdown stops them (see
@@ -379,7 +381,7 @@ public partial class EngineCoordinator : IDisposable
   /// </para>
   /// <para>
   /// A switch that fails before the new coordinator takes over (a failed stop of the engines rebuilt from scratch, a
-  /// failed start of the new coordinator, or a ready-wait that fails or is cancelled) cleans the new coordinator up: it
+  /// failed start of the new coordinator) cleans the new coordinator up: it
   /// is shut down if it was started, its engines stopping, and disposed otherwise. The switch then throws
   /// its own failure; a failure of the clean-up is logged as a warning. This coordinator stays current, and its engines
   /// keep running, except those rebuilt from scratch that were stopped already.
@@ -391,8 +393,7 @@ public partial class EngineCoordinator : IDisposable
   /// this one.
   /// </para>
   /// </remarks>
-  public async Task<EngineCoordinator> RestartWithDefinitionsAsync(IEnumerable<EngineDescriptor> candidateDescriptors,
-    bool waitUntilReady = true, CancellationToken token = default)
+  public async Task<EngineCoordinator> RestartWithDefinitionsAsync(IEnumerable<EngineDescriptor> candidateDescriptors)
   {
     ArgumentNullException.ThrowIfNull(candidateDescriptors);
     var candidateList = candidateDescriptors.Where(d => d != null).ToArray();
@@ -405,10 +406,9 @@ public partial class EngineCoordinator : IDisposable
     {
       try
       {
-        next = await RestartWithDefinitionsAsyncInt(candidateList, candidateByName, waitUntilReady, token)
-          .ConfigureAwait(false);
+        next = await RestartWithDefinitionsAsyncInt(candidateList, candidateByName).ConfigureAwait(false);
       }
-      catch (OperationCanceledException) when (!token.IsCancellationRequested && Successor != null)
+      catch (OperationCanceledException) when (Successor != null)
       {
         // Another switch replaced this coordinator meanwhile: its shutdown cancelled this switch.
       }
@@ -416,13 +416,12 @@ public partial class EngineCoordinator : IDisposable
 
     // Replaced, cancelled by the switch that replaced it, or its switch lost the hand-over (null): the current
     // generation switches.
-    return next ?? await Current.RestartWithDefinitionsAsync(candidateList, waitUntilReady, token)
-      .ConfigureAwait(false);
+    return next ?? await Current.RestartWithDefinitionsAsync(candidateList).ConfigureAwait(false);
   }
 
   /// <returns>The next coordinator, or null when another switch on this coordinator handed over first.</returns>
   private async Task<EngineCoordinator> RestartWithDefinitionsAsyncInt(EngineDescriptor[] candidateList,
-    Dictionary<string, EngineDescriptor> candidateByName, bool waitUntilReady, CancellationToken token)
+    Dictionary<string, EngineDescriptor> candidateByName)
   {
     Dictionary<string, EngineDescriptor> currentDescriptorByName;
     Dictionary<string, IEngine> currentEngineByName;
@@ -503,8 +502,8 @@ public partial class EngineCoordinator : IDisposable
     {
       foreach (var runtimeDescriptor in runtimeDescriptors)
         nextCoordinator.RegisterEngineDescriptor(runtimeDescriptor);
-      await StartNextGenerationAsync(nextCoordinator, mechanic, pending, rebuiltFromScratch, handovers, waitUntilReady,
-        token).ConfigureAwait(false);
+      await StartNextGenerationAsync(nextCoordinator, mechanic, pending, rebuiltFromScratch, handovers)
+        .ConfigureAwait(false);
     }
     catch (Exception ex)
     {
@@ -543,11 +542,10 @@ public partial class EngineCoordinator : IDisposable
 
   /// <summary>
   /// The part of a generation switch that starts the next generation, until it hands over: stops the engines rebuilt
-  /// from scratch, starts the next coordinator, and waits until it is ready if asked to.
+  /// from scratch and starts the next coordinator.
   /// </summary>
   private async Task StartNextGenerationAsync(EngineCoordinator nextCoordinator, MechanicEngine mechanic,
-    SwitchBeforeHandover pending, List<string> rebuiltFromScratch, List<(string Name, Handover Handover)> handovers,
-    bool waitUntilReady, CancellationToken token)
+    SwitchBeforeHandover pending, List<string> rebuiltFromScratch, List<(string Name, Handover Handover)> handovers)
   {
     // Fix (#145): mark every switch, not only one that rebuilds engines, so that a context operation on an engine
     // handed over to its restart factory also waits for the next generation and goes there (see ForEngineAsync). On
@@ -577,11 +575,8 @@ public partial class EngineCoordinator : IDisposable
       // The next generation did not start: the waiting calls give null, and this generation answers them.
       pending.Next.TrySetResult(null);
     }
-    // Not awaited: it ends when the next generation's engines have started or given up, long after a switch that does not
-    // wait until they are ready.
+    // Not awaited: it ends when the next generation's engines have started or given up, long after the switch.
     _ = nextCoordinator.ReleaseHandoversWhenSettledAsync(handovers);
-    if (waitUntilReady)
-      await nextCoordinator.EnsureReadyAsync(token).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -1103,19 +1098,16 @@ public partial class EngineCoordinator : IDisposable
   /// <list type="bullet">
   /// <item><description>
   /// An engine the switch hands over (it has a restart factory): the previous generation's engine, which the
-  /// hand-over then stops. In a switch that does not wait until ready the lookup races the hand-over, and gets either
-  /// that engine or the next generation's.
+  /// hand-over then stops. The lookup races the hand-over, and gets either that engine or the next generation's.
   /// </description></item>
   /// <item><description>
-  /// An engine the switch adds: in a switch that waits until ready, the previous generation does not know it (null,
-  /// or an exception from a lookup that throws for an unknown name). In one that does not wait, the lookup races the
-  /// hand-over, and gets either null (or the exception) or the added engine.
+  /// An engine the switch adds: the lookup races the hand-over, and gets either null (or an exception from a lookup
+  /// that throws for an unknown name), as the previous generation does not know it, or the added engine.
   /// </description></item>
   /// <item><description>
-  /// A switch on a coordinator that was never started: in a switch that waits until ready, the lookup starts the
-  /// previous generation after all (its engine factories run), and usually gets its engine, which the hand-over
-  /// stops. In one that does not wait, the lookup races the hand-over in the same way, and can get the next
-  /// generation's engine.
+  /// A switch on a coordinator that was never started: the lookup can start the previous generation after all (its
+  /// engine factories run) and get its engine, which the hand-over stops, or get the next generation's engine: it
+  /// races the hand-over.
   /// </description></item>
   /// </list>
   /// </para>

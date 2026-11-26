@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrchestrationEngines.Coordinator;
+using OrchestrationEngines.Engine;
 using Xunit;
 using static OrchestrationEngines.Tests.SwitchTestEngines;
 
@@ -43,8 +45,8 @@ public class ShutDownCoordinatorReleaseTest
     var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, applicationToken);
     coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    var current = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
-      waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    var current = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
+      .WaitAsync(MustComplete, ct);
     return (current, TokenSourceOf(coordinator));
   }
 
@@ -72,9 +74,9 @@ public class ShutDownCoordinatorReleaseTest
   }
 
   /// <summary>
-  /// Starts a coordinator on <paramref name="applicationToken"/> and a switch whose ready-wait is cancelled after the
-  /// next generation started; returns the current coordinator and a weak reference to the token source of the next
-  /// one, which the switch abandoned. Not inlined, so that no local of the test keeps the next one.
+  /// Starts a coordinator on <paramref name="applicationToken"/> and a switch whose next generation fails to start (an
+  /// engine depends on one that is not registered); returns the current coordinator and a weak reference to the token
+  /// source of the next one, which the switch abandoned. Not inlined, so that no local of the test keeps the next one.
   /// </summary>
   [MethodImpl(MethodImplOptions.NoInlining)]
   private static async Task<(EngineCoordinator Current, WeakReference Next)> FailOneSwitchAsync(
@@ -83,17 +85,17 @@ public class ShutDownCoordinatorReleaseTest
     var coordinator = new EngineCoordinator(CoordinatorName, NullLogger.Instance, applicationToken);
     WeakReference nextGeneration = null;
     coordinator.NextGenerationCreated = next => nextGeneration = TokenSourceOf(next);
-    var next = Hanging();
-    coordinator.RegisterEngineDescriptor(Descriptor(Quick(), () => next));
+    coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    var candidates = new List<EngineDescriptor>(coordinator.GetRegisteredDefinitions())
+    {
+      new EngineDescriptor("Planned", _ => Task.FromResult<IEngine>(Quick()), requiredForRunning: true, 1)
+        .AddDependsOn("NotRegistered"),
+    };
 
-    var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
-      cancel.Token);
-    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
-    cancel.Cancel();
-    var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
-    thrown.Should().BeAssignableTo<OperationCanceledException>();
+    var thrown = await Record.ExceptionAsync(() =>
+      coordinator.RestartWithDefinitionsAsync(candidates).WaitAsync(MustComplete, ct));
+    thrown.Should().BeOfType<KeyNotFoundException>();
     coordinator.NextGenerationCreated = null;
     return (coordinator, nextGeneration);
   }
@@ -135,8 +137,8 @@ public class ShutDownCoordinatorReleaseTest
     coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var current = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
-      waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    var current = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
+      .WaitAsync(MustComplete, ct);
     try
     {
       coordinator.State.Should().Be(EngineCoordinatorState.Stopped);
@@ -164,8 +166,8 @@ public class ShutDownCoordinatorReleaseTest
       application.Token);
     coordinator.RegisterEngineDescriptor(Descriptor(Quick(), Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var current = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(),
-      waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    using var current = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
+      .WaitAsync(MustComplete, ct);
 
     application.Cancel();
 

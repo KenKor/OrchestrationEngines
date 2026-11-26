@@ -66,8 +66,8 @@ public class EngineGenerationSwitchTest
     var log = new RestartLog();
     var coordinator = await StartedCoordinatorAsync(log);
 
-    var restart = () => coordinator.RestartWithDefinitionsAsync([Descriptor("A", log), Descriptor("a", log)],
-      waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    var restart = () => coordinator.SwitchUntilReadyAsync([Descriptor("A", log), Descriptor("a", log)], ct)
+      .WaitAsync(MustComplete, ct);
 
     (await restart.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("candidateDescriptors");
     coordinator.Successor.Should().BeNull();
@@ -87,7 +87,7 @@ public class EngineGenerationSwitchTest
     var previousA = coordinator.Engines["A"];
     var previousB = coordinator.Engines["B"];
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     log.Inputs["A"].NothingChanged.Should().BeTrue();
@@ -111,7 +111,7 @@ public class EngineGenerationSwitchTest
     var coordinator = await StartedCoordinatorAsync(log);
     var candidates = new[] { Descriptor("A", log, version: 2), Descriptor("B", log, dependsOn: "A") };
 
-    await coordinator.RestartWithDefinitionsAsync(candidates, waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    await coordinator.SwitchUntilReadyAsync(candidates, ct).WaitAsync(MustComplete, ct);
 
     log.Inputs["A"].DefinitionChanged.Should().BeTrue();
     log.Inputs["A"].NothingChanged.Should().BeFalse();
@@ -132,7 +132,7 @@ public class EngineGenerationSwitchTest
     var previousB = coordinator.Engines["B"];
     var candidates = new[] { Descriptor("A", log) };
 
-    var next = await coordinator.RestartWithDefinitionsAsync(candidates, waitUntilReady: true, ct).WaitAsync(MustComplete, ct);
+    var next = await coordinator.SwitchUntilReadyAsync(candidates, ct).WaitAsync(MustComplete, ct);
 
     next.Engines.ContainsKey("B").Should().BeFalse();
     ((BaseEngine)previousB).IsCancellationRequested.Should().BeTrue("the released engine is stopped");

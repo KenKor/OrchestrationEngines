@@ -431,14 +431,12 @@ hands over. This matters for an engine of the next generation that, from its own
 the host's coordinator; it should not do that during a switch. What it gets:
 
 - for an engine the switch hands over (one with a restart factory): the previous generation's engine, which the
-  hand-over then stops. With `waitUntilReady: false` the lookup races the hand-over, and gets either that engine or the
-  next generation's;
-- for an engine the switch adds: null with `waitUntilReady: true`, as the previous generation does not know it (an
-  exception with `throwErrorIfNotFound`). With `waitUntilReady: false` the lookup races the hand-over, and gets either
-  null (the exception) or the added engine;
-- on a coordinator that was never started: with `waitUntilReady: true` the lookup starts the previous generation after
-  all (its engine factories run a second time) and usually returns its engine, which the hand-over stops; this is a
-  race. With `waitUntilReady: false` it races the hand-over in the same way, and can get the next generation's engine.
+  hand-over then stops. The lookup races the hand-over, and gets either that engine or the next generation's;
+- for an engine the switch adds: the lookup races the hand-over, and gets either null (an exception with
+  `throwErrorIfNotFound`), as the previous generation does not know it, or the added engine;
+- on a coordinator that was never started: the lookup can start the previous generation after all (its engine
+  factories run a second time) and get its engine, which the hand-over stops, or get the next generation's engine: it
+  races the hand-over.
 
 One failure is not retried by the task that throws it, whatever its recovery: an `EngineTaskException` (derive from it
 for a condition another attempt cannot change) thrown by a task's work ends that task `Cancelled`, with "Cancelled by
@@ -537,13 +535,14 @@ coordinator (a generation) with the new descriptors and shuts the current one do
   They run side by side, and the one that comes second cleans up its next coordinator and switches the current one.
   Overlapping `RestartWithDefinitionsAsync` calls on one coordinator are not queued: each builds a whole generation, and
   one wins. A host that can overlap them should serialise the calls itself.
-- With `waitUntilReady: false` the switch returns once the next generation has started; the previous engines are then
-  usually stopped before their replacements start, so a restart factory must be able to take over a stopped engine's
-  state.
-- A switch that fails before it hands over (a rebuilt engine fails to stop, the next coordinator fails to start, or the
-  ready-wait fails or is cancelled) shuts the next coordinator down, or disposes it if it did not start, and throws its
-  own failure. The current coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and
-  a lookup of one of them gives null.
+- The switch returns once the next generation has started, without waiting until it is ready; the previous engines are
+  then usually stopped before their replacements start, so a restart factory must be able to take over a stopped
+  engine's state. To wait for the next generation, call `EnsureReadyAsync` on the coordinator the switch returns;
+  `GetEngineIfCreated` gives an engine without waiting.
+- A switch that fails before it hands over (a rebuilt engine fails to stop, or the next coordinator fails to start)
+  shuts the next coordinator down, or disposes it if it did not start, and throws its own failure. The current
+  coordinator stays current; of its engines, only those rebuilt from scratch were stopped, and a lookup of one of them
+  gives null.
 
 ##### Rebuilding one engine with a new context
 
@@ -560,7 +559,7 @@ foreach (var dependency in current.DependsOn)
   rebuilt.AddDependsOn(dependency);
 // Set the restart policy, recovery helper and restart factory again, as the engine had them.
 coordinator = await coordinator.RestartWithDefinitionsAsync(
-  definitions.Where(d => d != current).Append(rebuilt), token: token);
+  definitions.Where(d => d != current).Append(rebuilt));
 ```
 
 - **Pass the factory the engine was registered with** as `engineFactory`, not `current.EngineFactory`: after an

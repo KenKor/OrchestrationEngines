@@ -72,7 +72,7 @@ public class GenerationSwitchShutdownTest
     _ = coordinator.StartAsync();
     await Wait.UntilAsync(() => failing.State == EngineState.Faulted, MustComplete, "the first load must fail");
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
       .WaitAsync(MustComplete, ct);
 
     failing.IsCancellationRequested.Should().BeTrue("the switch stops every engine of the replaced generation");
@@ -101,7 +101,7 @@ public class GenerationSwitchShutdownTest
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     next.Should().NotBeNull().And.BeSameAs(coordinator.Successor);
@@ -125,7 +125,7 @@ public class GenerationSwitchShutdownTest
     coordinator.RegisterEngineDescriptor(Descriptor(Name, () => replaced));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     next.Should().NotBeNull().And.BeSameAs(coordinator.Successor);
@@ -146,7 +146,7 @@ public class GenerationSwitchShutdownTest
     var lookup = coordinator.GetEngineAsync(Name, ct);
     await Wait.UntilAsync(() => loading.Loads == 1, MustComplete, "the first generation must be loading");
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: false, ct)
+    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions())
       .WaitAsync(MustComplete, ct);
     var engine = await lookup.WaitAsync(TimeSpan.FromSeconds(3), ct);
 
@@ -167,7 +167,7 @@ public class GenerationSwitchShutdownTest
     coordinator.RegisterEngineDescriptor(Descriptor(Name, Quick));
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     coordinator.Successor.Should().BeSameAs(next);
@@ -196,7 +196,7 @@ public class GenerationSwitchShutdownTest
         currentWhileStopping = coordinator.Current;
     };
 
-    var next = await coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+    var next = await coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
       .WaitAsync(MustComplete, ct);
 
     currentWhileStopping.Should().BeSameAs(next, "the switch hands over before it stops the replaced generation");
@@ -219,7 +219,7 @@ public class GenerationSwitchShutdownTest
     await Wait.UntilAsync(() => loading.Loads == 1, MustComplete, "the first generation must be loading");
 
     var remaining = coordinator.GetRegisteredDefinitions().Where(d => d.Name != Name);
-    await coordinator.RestartWithDefinitionsAsync(remaining, waitUntilReady: false, ct).WaitAsync(MustComplete, ct);
+    await coordinator.RestartWithDefinitionsAsync(remaining).WaitAsync(MustComplete, ct);
 
     (await lookup.WaitAsync(TimeSpan.FromSeconds(3), ct)).Should().BeNull();
   }
@@ -268,6 +268,6 @@ public class GenerationSwitchShutdownTest
   /// </summary>
   [MethodImpl(MethodImplOptions.NoInlining)]
   private static EngineCoordinator Switch(EngineCoordinator coordinator) =>
-    coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, TestContext.Current.CancellationToken)
+    coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), TestContext.Current.CancellationToken)
       .WaitAsync(MustComplete, TestContext.Current.CancellationToken).GetAwaiter().GetResult();
 }

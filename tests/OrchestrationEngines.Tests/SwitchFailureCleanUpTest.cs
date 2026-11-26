@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
@@ -44,7 +43,7 @@ public class SwitchFailureCleanUpTest
     await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
 
     var thrown = await Record.ExceptionAsync(() =>
-      coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true, ct)
+      coordinator.SwitchUntilReadyAsync(coordinator.GetRegisteredDefinitions(), ct)
         .WaitAsync(MustComplete, ct));
 
     thrown.Should().BeSameAs(failure);
@@ -74,7 +73,7 @@ public class SwitchFailureCleanUpTest
     };
 
     var thrown = await Record.ExceptionAsync(() =>
-      coordinator.RestartWithDefinitionsAsync(candidates, waitUntilReady: true, ct).WaitAsync(MustComplete, ct));
+      coordinator.SwitchUntilReadyAsync(candidates, ct).WaitAsync(MustComplete, ct));
 
     thrown.Should().BeOfType<KeyNotFoundException>("the next generation's task graph names an engine that is not registered");
     nextGenerations.Should().ContainSingle();
@@ -84,96 +83,4 @@ public class SwitchFailureCleanUpTest
     (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeSameAs(current);
   }
 
-  /// <summary>
-  /// Verifies that a switch that waits until the next generation is ready, and whose wait is cancelled, throws the
-  /// cancellation and shuts the next generation down: its engines stop, and the current generation's engines keep
-  /// their state and are still the ones its lookups give.
-  /// </summary>
-  [Fact]
-  public async Task Switch_ReadyWaitCancelled_ShutsTheNextGenerationDownAndKeepsTheCurrentOne()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var current = Quick();
-    var next = Hanging();
-    var nextGenerations = new List<EngineCoordinator>();
-    using var coordinator = CreateCoordinator(nextGenerations);
-    coordinator.RegisterEngineDescriptor(Descriptor(current, () => next));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-    var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
-      cancel.Token);
-    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
-    cancel.Cancel();
-    var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
-
-    thrown.Should().BeAssignableTo<OperationCanceledException>();
-    nextGenerations.Should().ContainSingle();
-    nextGenerations[0].State.Should().Be(EngineCoordinatorState.Stopped);
-    next.IsCancellationRequested.Should().BeTrue("the next generation's engines are stopped");
-    coordinator.Successor.Should().BeNull("the switch did not hand over");
-    current.State.Should().Be(EngineState.Ready);
-    current.IsCancellationRequested.Should().BeFalse("the clean-up stops none of the current generation's engines");
-    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should().BeSameAs(current);
-  }
-
-  /// <summary>
-  /// Verifies that once a switch that rebuilds an engine from scratch fails in its ready-wait, a lookup of that engine
-  /// on the current coordinator gives null, as it does when the next generation does not start, and is not answered
-  /// by the next generation the switch shut down.
-  /// </summary>
-  [Fact]
-  public async Task Switch_RebuildingReadyWaitCancelled_LookupOfTheRebuiltEngineGivesNull()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var next = Hanging();
-    var created = 0;
-    var nextGenerations = new List<EngineCoordinator>();
-    using var coordinator = CreateCoordinator(nextGenerations);
-    coordinator.RegisterEngineDescriptor(new EngineDescriptor(Name,
-        _ => Task.FromResult<IEngine>(Interlocked.Increment(ref created) == 1 ? Quick() : next), requiredForRunning: true, 1)
-      .SetContextFactory(_ => Task.FromResult<IEngineContext>(new NoContext()))
-      .WithoutRestarts());
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-    var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
-      cancel.Token);
-    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts the rebuilt engine");
-    cancel.Cancel();
-    (await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct))).Should().BeAssignableTo<OperationCanceledException>();
-
-    nextGenerations[0].State.Should().Be(EngineCoordinatorState.Stopped);
-    (await coordinator.GetEngineAsync(Name, ct).WaitAsync(MustComplete, ct)).Should()
-      .BeNull("the switch stopped the engine to rebuild it, and its next generation did not take over");
-  }
-
-  /// <summary>
-  /// Verifies that a clean-up of the next generation that throws is logged, and that the switch still throws its own
-  /// failure.
-  /// </summary>
-  [Fact]
-  public async Task Switch_CleanUpThrows_LogsItAndThrowsTheSwitchFailure()
-  {
-    var ct = TestContext.Current.CancellationToken;
-    var next = new StopFailingEngine(new InvalidOperationException("The next engine's stop failed."),
-      token => Task.Delay(Timeout.Infinite, token));
-    var logged = 0;
-    var logger = new OnMessageLogger("Cleaning up the next generation", () => Interlocked.Increment(ref logged));
-    var nextGenerations = new List<EngineCoordinator>();
-    var coordinator = CreateCoordinator(nextGenerations, logger);
-    coordinator.RegisterEngineDescriptor(Descriptor(Quick(), () => next));
-    await coordinator.EnsureReadyAsync(ct).WaitAsync(MustComplete, ct);
-    using var cancel = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-    var switching = coordinator.RestartWithDefinitionsAsync(coordinator.GetRegisteredDefinitions(), waitUntilReady: true,
-      cancel.Token);
-    await Wait.UntilAsync(() => next.Loads == 1, MustComplete, "the next generation starts its engine");
-    cancel.Cancel();
-    var thrown = await Record.ExceptionAsync(() => switching.WaitAsync(MustComplete, ct));
-
-    thrown.Should().BeAssignableTo<OperationCanceledException>("the switch's own failure, not the clean-up's");
-    Volatile.Read(ref logged).Should().Be(1);
-    nextGenerations[0].State.Should().Be(EngineCoordinatorState.Stopped);
-  }
 }
